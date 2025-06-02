@@ -41,6 +41,10 @@ class _ReviewPostScreenState extends State<ReviewPostScreen> {
   }
 
   Future<void> _editCaption() async {
+    // Get service reference before async operations
+    final firestoreService =
+        Provider.of<FirestoreService>(context, listen: false);
+
     final result = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
@@ -70,8 +74,8 @@ class _ReviewPostScreenState extends State<ReviewPostScreen> {
     if (result != null) {
       // Update the action with the new caption
       final updatedAction = SocialAction(
-        action_id: _action.action_id,
-        created_at: _action.created_at,
+        actionId: _action.actionId,
+        createdAt: _action.createdAt,
         platforms: _action.platforms,
         content: Content(
           text: result,
@@ -81,25 +85,30 @@ class _ReviewPostScreenState extends State<ReviewPostScreen> {
           media: _action.content.media,
         ),
         options: _action.options,
-        platform_data: _action.platform_data,
+        platformData: _action.platformData,
         internal: _action.internal,
       );
 
       // Save the updated action to Firestore
-      final firestoreService = Provider.of<FirestoreService>(context, listen: false);
       await firestoreService.updateAction(
-        updatedAction.action_id,
+        updatedAction.actionId,
         updatedAction.toJson(),
       );
 
-      setState(() {
-        _action = updatedAction;
-        _captionController.text = result;
-      });
+      if (mounted) {
+        setState(() {
+          _action = updatedAction;
+          _captionController.text = result;
+        });
+      }
     }
   }
 
   Future<void> _editSchedule() async {
+    // Get service reference before async operations
+    final firestoreService =
+        Provider.of<FirestoreService>(context, listen: false);
+
     final now = DateTime.now();
     final initialDate = _action.options.schedule == 'now'
         ? now
@@ -112,7 +121,7 @@ class _ReviewPostScreenState extends State<ReviewPostScreen> {
       lastDate: now.add(const Duration(days: 365)),
     );
 
-    if (pickedDate != null) {
+    if (pickedDate != null && mounted) {
       final pickedTime = await showTimePicker(
         context: context,
         initialTime: TimeOfDay.fromDateTime(initialDate),
@@ -129,8 +138,8 @@ class _ReviewPostScreenState extends State<ReviewPostScreen> {
 
         // Update the action with the new schedule
         final updatedAction = SocialAction(
-          action_id: _action.action_id,
-          created_at: _action.created_at,
+          actionId: _action.actionId,
+          createdAt: _action.createdAt,
           platforms: _action.platforms,
           content: _action.content,
           options: Options(
@@ -139,105 +148,121 @@ class _ReviewPostScreenState extends State<ReviewPostScreen> {
             visibility: _action.options.visibility,
             replyToPostId: _action.options.replyToPostId,
           ),
-          platform_data: _action.platform_data,
+          platformData: _action.platformData,
           internal: _action.internal,
         );
 
         // Save the updated action to Firestore
-        final firestoreService = Provider.of<FirestoreService>(context, listen: false);
         await firestoreService.updateAction(
-          updatedAction.action_id,
+          updatedAction.actionId,
           updatedAction.toJson(),
         );
 
-        setState(() {
-          _action = updatedAction;
-        });
+        if (mounted) {
+          setState(() {
+            _action = updatedAction;
+          });
+        }
       }
     }
   }
 
   Future<void> _confirmAndPost() async {
+    // Get service reference before async operations
+    final socialPostService =
+        Provider.of<SocialPostService>(context, listen: false);
+
     setState(() {
       _isPosting = true;
       _postResults = {};
     });
 
     try {
-      final socialPostService = Provider.of<SocialPostService>(context, listen: false);
       final results = await socialPostService.postToAllPlatforms(_action);
-      
+
       setState(() {
         _postResults = results;
         _isPosting = false;
       });
 
       // Show results dialog
-      await showDialog(
-        context: context,
-        barrierDismissible: false,
-        builder: (context) => AlertDialog(
-          title: const Text('Posting Results'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              for (final platform in _postResults.keys)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 8.0),
-                  child: Row(
-                    children: [
-                      Icon(
-                        _postResults[platform]! ? Icons.check_circle : Icons.error,
-                        color: _postResults[platform]!
-                            ? Colors.green
-                            : Theme.of(context).colorScheme.error,
-                      ),
-                      const SizedBox(width: 8),
-                      Text(
-                        platform.substring(0, 1).toUpperCase() + platform.substring(1),
-                        style: const TextStyle(fontWeight: FontWeight.bold),
-                      ),
-                      const SizedBox(width: 8),
-                      Text(
-                        _postResults[platform]! ? 'Posted' : 'Failed',
-                      ),
-                    ],
+      if (mounted) {
+        await showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (context) => AlertDialog(
+            title: const Text('Posting Results'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                for (final platform in _postResults.keys)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 8.0),
+                    child: Row(
+                      children: [
+                        Icon(
+                          _postResults[platform]!
+                              ? Icons.check_circle
+                              : Icons.error,
+                          color: _postResults[platform]!
+                              ? Colors.green
+                              : Theme.of(context).colorScheme.error,
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          platform.substring(0, 1).toUpperCase() +
+                              platform.substring(1),
+                          style: const TextStyle(fontWeight: FontWeight.bold),
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          _postResults[platform]! ? 'Posted' : 'Failed',
+                        ),
+                      ],
+                    ),
                   ),
-                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () {
+                  Navigator.pop(context);
+                  if (_postResults.values.every((success) => success)) {
+                    // All posts succeeded, navigate to history screen
+                    Navigator.pushAndRemoveUntil(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => const HistoryScreen(),
+                      ),
+                      (route) => route.isFirst,
+                    );
+                  }
+                },
+                child: const Text('OK'),
+              ),
             ],
           ),
-          actions: [
-            TextButton(
-              onPressed: () {
-                Navigator.pop(context);
-                if (_postResults.values.every((success) => success)) {
-                  // All posts succeeded, navigate to history screen
-                  Navigator.pushAndRemoveUntil(
-                    context,
-                    MaterialPageRoute(
-                      builder: (context) => const HistoryScreen(),
-                    ),
-                    (route) => route.isFirst,
-                  );
-                }
-              },
-              child: const Text('OK'),
-            ),
-          ],
-        ),
-      );
+        );
+      }
     } catch (e) {
       setState(() {
         _isPosting = false;
       });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Posting failed: $e')),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Posting failed: $e')),
+        );
+      }
     }
   }
 
   Future<void> _cancelPost() async {
+    // Get service and Navigator references before async operations
+    final firestoreService =
+        Provider.of<FirestoreService>(context, listen: false);
+    final navigator = Navigator.of(context);
+
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -258,12 +283,11 @@ class _ReviewPostScreenState extends State<ReviewPostScreen> {
 
     if (confirmed == true) {
       // Delete the action from Firestore
-      final firestoreService = Provider.of<FirestoreService>(context, listen: false);
-      await firestoreService.deleteAction(_action.action_id);
-      
+      await firestoreService.deleteAction(_action.actionId);
+
       // Pop back to the command screen
       if (mounted) {
-        Navigator.pop(context);
+        navigator.pop();
       }
     }
   }
@@ -284,20 +308,19 @@ class _ReviewPostScreenState extends State<ReviewPostScreen> {
                   // Platform list
                   _buildPlatformList(),
                   const SizedBox(height: 24),
-                  
+
                   // Caption
                   _buildCaptionSection(),
                   const SizedBox(height: 24),
-                  
+
                   // Media preview
-                  if (_action.content.media.isNotEmpty)
-                    _buildMediaPreview(),
+                  if (_action.content.media.isNotEmpty) _buildMediaPreview(),
                   const SizedBox(height: 24),
-                  
+
                   // Schedule
                   _buildScheduleSection(),
                   const SizedBox(height: 32),
-                  
+
                   // Action buttons
                   _buildActionButtons(),
                 ],
@@ -350,15 +373,18 @@ class _ReviewPostScreenState extends State<ReviewPostScreen> {
                   future: authService.isPlatformConnected(platform),
                   builder: (context, snapshot) {
                     final isConnected = snapshot.data ?? false;
-                    
+
                     return Chip(
                       avatar: _getPlatformIcon(platform),
                       label: Text(
-                        platform.substring(0, 1).toUpperCase() + platform.substring(1),
+                        platform.substring(0, 1).toUpperCase() +
+                            platform.substring(1),
                       ),
                       backgroundColor: isConnected
-                          ? _getPlatformColor(platform).withOpacity(0.2)
-                          : Theme.of(context).colorScheme.surfaceVariant,
+                          ? _getPlatformColor(platform).withValues(alpha: 0.2)
+                          : Theme.of(context)
+                              .colorScheme
+                              .surfaceContainerHighest,
                       side: BorderSide(
                         color: isConnected
                             ? _getPlatformColor(platform)
@@ -373,27 +399,39 @@ class _ReviewPostScreenState extends State<ReviewPostScreen> {
                               // Show connect dialog
                               ScaffoldMessenger.of(context).showSnackBar(
                                 SnackBar(
-                                  content: Text('Please connect to $platform first'),
+                                  content:
+                                      Text('Please connect to $platform first'),
                                   action: SnackBarAction(
                                     label: 'CONNECT',
                                     onPressed: () async {
+                                      // Get messenger reference before async operations
+                                      final scaffoldMessenger =
+                                          ScaffoldMessenger.of(context);
+
                                       try {
                                         switch (platform) {
                                           case 'facebook':
-                                            await authService.signInWithFacebook();
+                                            await authService
+                                                .signInWithFacebook();
                                             break;
                                           case 'twitter':
-                                            await authService.signInWithTwitter();
+                                            await authService
+                                                .signInWithTwitter();
                                             break;
                                           case 'tiktok':
-                                            await authService.signInWithTikTok();
+                                            await authService
+                                                .signInWithTikTok();
                                             break;
                                         }
                                         // Refresh the UI
-                                        setState(() {});
+                                        if (mounted) {
+                                          setState(() {});
+                                        }
                                       } catch (e) {
-                                        ScaffoldMessenger.of(context).showSnackBar(
-                                          SnackBar(content: Text('Failed to connect: $e')),
+                                        scaffoldMessenger.showSnackBar(
+                                          SnackBar(
+                                              content: Text(
+                                                  'Failed to connect: $e')),
                                         );
                                       }
                                     },
@@ -415,7 +453,7 @@ class _ReviewPostScreenState extends State<ReviewPostScreen> {
   Widget _buildCaptionSection() {
     final caption = _action.content.text;
     final hashtags = _action.content.hashtags;
-    
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -442,7 +480,8 @@ class _ReviewPostScreenState extends State<ReviewPostScreen> {
             color: Theme.of(context).colorScheme.surface,
             borderRadius: BorderRadius.circular(8),
             border: Border.all(
-              color: Theme.of(context).colorScheme.outline.withOpacity(0.5),
+              color:
+                  Theme.of(context).colorScheme.outline.withValues(alpha: 0.5),
             ),
           ),
           child: Column(
@@ -462,7 +501,10 @@ class _ReviewPostScreenState extends State<ReviewPostScreen> {
                           color: Theme.of(context).colorScheme.primary,
                         ),
                       ),
-                      backgroundColor: Theme.of(context).colorScheme.primary.withOpacity(0.1),
+                      backgroundColor: Theme.of(context)
+                          .colorScheme
+                          .primary
+                          .withValues(alpha: 0.1),
                       padding: EdgeInsets.zero,
                       materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                     );
@@ -479,7 +521,7 @@ class _ReviewPostScreenState extends State<ReviewPostScreen> {
   Widget _buildMediaPreview() {
     final mediaItem = _action.content.media.first;
     final isVideo = mediaItem.mimeType.startsWith('video/');
-    
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -504,7 +546,10 @@ class _ReviewPostScreenState extends State<ReviewPostScreen> {
         Container(
           padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
-            color: Theme.of(context).colorScheme.surfaceVariant.withOpacity(0.5),
+            color: Theme.of(context)
+                .colorScheme
+                .surfaceContainerHighest
+                .withValues(alpha: 0.5),
             borderRadius: BorderRadius.circular(8),
           ),
           child: Column(
@@ -514,7 +559,7 @@ class _ReviewPostScreenState extends State<ReviewPostScreen> {
                 Icons.calendar_today,
                 'Created: ${_formatDate(mediaItem.deviceMetadata.creationTime)}',
               ),
-              if (mediaItem.deviceMetadata.latitude != null && 
+              if (mediaItem.deviceMetadata.latitude != null &&
                   mediaItem.deviceMetadata.longitude != null)
                 _buildMetadataRow(
                   Icons.location_on,
@@ -541,7 +586,7 @@ class _ReviewPostScreenState extends State<ReviewPostScreen> {
     final scheduleText = isNow
         ? 'Posting immediately'
         : 'Scheduled for ${_formatDateTime(DateTime.parse(_action.options.schedule))}';
-    
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -660,7 +705,7 @@ class _ReviewPostScreenState extends State<ReviewPostScreen> {
       default:
         icon = Icons.public;
     }
-    
+
     return Icon(
       icon,
       size: 16,

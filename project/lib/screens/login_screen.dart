@@ -51,11 +51,14 @@ class _LoginScreenState extends State<LoginScreen> {
                   Text(
                     'Voice-driven social media posting',
                     style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                          color: Theme.of(context).colorScheme.onPrimary.withOpacity(0.8),
+                          color: Theme.of(context)
+                              .colorScheme
+                              .onPrimary
+                              .withValues(alpha: 0.8),
                         ),
                   ),
                   const SizedBox(height: 48),
-                  
+
                   // Sign in with Google button
                   _buildSignInButton(
                     context,
@@ -63,15 +66,18 @@ class _LoginScreenState extends State<LoginScreen> {
                     Icons.g_mobiledata,
                     _signInWithGoogle,
                   ),
-                  
+
                   const SizedBox(height: 16),
-                  
+
                   // Terms and Privacy
                   Text(
                     'By signing in, you agree to our Terms of Service and Privacy Policy',
                     textAlign: TextAlign.center,
                     style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: Theme.of(context).colorScheme.onPrimary.withOpacity(0.6),
+                          color: Theme.of(context)
+                              .colorScheme
+                              .onPrimary
+                              .withValues(alpha: 0.6),
                         ),
                   ),
                 ],
@@ -123,12 +129,16 @@ class _LoginScreenState extends State<LoginScreen> {
     });
 
     try {
-      await context.read<AuthService>().signInWithGoogle();
+      // Get service reference before async operations
+      final authService = context.read<AuthService>();
+      await authService.signInWithGoogle();
       // Navigation is handled by the Consumer in main.dart
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Sign in failed: ${e.toString()}')),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Sign in failed: ${e.toString()}')),
+        );
+      }
     } finally {
       if (mounted) {
         setState(() {

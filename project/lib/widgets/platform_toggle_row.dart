@@ -66,7 +66,7 @@ class PlatformToggleRow extends StatelessWidget {
       future: authService.isPlatformConnected(platform),
       builder: (context, snapshot) {
         final isConnected = snapshot.data ?? false;
-        
+
         return Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -86,16 +86,21 @@ class PlatformToggleRow extends StatelessWidget {
                         await authService.signInWithTikTok();
                         break;
                     }
-                    
+
                     // After successful connection, add to selected platforms
                     if (!selectedPlatforms.contains(platform)) {
-                      final newPlatforms = List<String>.from(selectedPlatforms)..add(platform);
+                      final newPlatforms = List<String>.from(selectedPlatforms)
+                        ..add(platform);
                       onPlatformsChanged(newPlatforms);
                     }
                   } catch (e) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('Failed to connect to $label: ${e.toString()}')),
-                    );
+                    if (context.mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                            content: Text(
+                                'Failed to connect to $label: ${e.toString()}')),
+                      );
+                    }
                   }
                 } else {
                   // If already connected, toggle selection
@@ -114,7 +119,7 @@ class PlatformToggleRow extends StatelessWidget {
                 decoration: BoxDecoration(
                   color: isSelected
                       ? color
-                      : Theme.of(context).colorScheme.surfaceVariant,
+                      : Theme.of(context).colorScheme.surfaceContainerHighest,
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(
                     color: isSelected
@@ -127,7 +132,7 @@ class PlatformToggleRow extends StatelessWidget {
                   icon,
                   color: isSelected
                       ? Colors.white
-                      : Theme.of(context).colorScheme.onSurfaceVariant,
+                      : Theme.of(context).colorScheme.onSurface,
                   size: 28,
                 ),
               ),
@@ -140,10 +145,11 @@ class PlatformToggleRow extends StatelessWidget {
                   label,
                   style: TextStyle(
                     fontSize: 12,
-                    fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                    fontWeight:
+                        isSelected ? FontWeight.bold : FontWeight.normal,
                     color: isSelected
                         ? color
-                        : Theme.of(context).colorScheme.onBackground,
+                        : Theme.of(context).colorScheme.onSurface,
                   ),
                 ),
                 if (!isConnected)

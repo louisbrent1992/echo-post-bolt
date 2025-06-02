@@ -5,24 +5,27 @@ part 'social_action.g.dart';
 
 @JsonSerializable(explicitToJson: true)
 class SocialAction {
-  final String action_id;
-  final String created_at;
+  @JsonKey(name: 'action_id')
+  final String actionId;
+  @JsonKey(name: 'created_at')
+  final String createdAt;
   final List<String> platforms;
   final Content content;
   final Options options;
-  final PlatformData platform_data;
+  @JsonKey(name: 'platform_data')
+  final PlatformData platformData;
   final Internal internal;
 
   SocialAction({
-    String? action_id,
-    String? created_at,
+    String? actionId,
+    String? createdAt,
     required this.platforms,
     required this.content,
     required this.options,
-    required this.platform_data,
+    required this.platformData,
     required this.internal,
-  })  : action_id = action_id ?? const Uuid().v4(),
-        created_at = created_at ?? DateTime.now().toIso8601String();
+  })  : actionId = actionId ?? const Uuid().v4(),
+        createdAt = createdAt ?? DateTime.now().toIso8601String();
 
   factory SocialAction.fromJson(Map<String, dynamic> json) =>
       _$SocialActionFromJson(json);
@@ -40,10 +43,10 @@ class Content {
 
   Content({
     required this.text,
-    required this.hashtags,
-    required this.mentions,
+    this.hashtags = const [],
+    this.mentions = const [],
     this.link,
-    required this.media,
+    this.media = const [],
   });
 
   factory Content.fromJson(Map<String, dynamic> json) =>
@@ -57,13 +60,14 @@ class Link {
   final String url;
   final String? title;
   final String? description;
-  final String? thumbnail_url;
+  @JsonKey(name: 'thumbnail_url')
+  final String? thumbnailUrl;
 
   Link({
     required this.url,
     this.title,
     this.description,
-    this.thumbnail_url,
+    this.thumbnailUrl,
   });
 
   factory Link.fromJson(Map<String, dynamic> json) => _$LinkFromJson(json);
@@ -73,10 +77,15 @@ class Link {
 
 @JsonSerializable(explicitToJson: true)
 class MediaItem {
+  @JsonKey(name: 'file_uri')
   final String fileUri;
+  @JsonKey(name: 'mime_type')
   final String mimeType;
+  @JsonKey(name: 'device_metadata')
   final DeviceMetadata deviceMetadata;
+  @JsonKey(name: 'upload_url')
   final String? uploadUrl;
+  @JsonKey(name: 'cdn_key')
   final String? cdnKey;
   final String? caption;
 
@@ -97,22 +106,24 @@ class MediaItem {
 
 @JsonSerializable()
 class DeviceMetadata {
+  @JsonKey(name: 'creation_time')
   final String creationTime;
   final double? latitude;
   final double? longitude;
   final int orientation;
   final int width;
   final int height;
+  @JsonKey(name: 'file_size_bytes')
   final int fileSizeBytes;
 
   DeviceMetadata({
     required this.creationTime,
     this.latitude,
     this.longitude,
-    required this.orientation,
-    required this.width,
-    required this.height,
-    required this.fileSizeBytes,
+    this.orientation = 1,
+    this.width = 0,
+    this.height = 0,
+    this.fileSizeBytes = 0,
   });
 
   factory DeviceMetadata.fromJson(Map<String, dynamic> json) =>
@@ -124,12 +135,14 @@ class DeviceMetadata {
 @JsonSerializable(explicitToJson: true)
 class Options {
   final String schedule;
+  @JsonKey(name: 'location_tag')
   final LocationTag? locationTag;
   final Map<String, String?>? visibility;
+  @JsonKey(name: 'reply_to_post_id')
   final Map<String, String?>? replyToPostId;
 
   Options({
-    required this.schedule,
+    this.schedule = 'now',
     this.locationTag,
     this.visibility,
     this.replyToPostId,
@@ -181,13 +194,16 @@ class PlatformData {
 
 @JsonSerializable()
 class FacebookData {
+  @JsonKey(name: 'post_as_page')
   final bool postAsPage;
+  @JsonKey(name: 'page_id')
   final String pageId;
+  @JsonKey(name: 'additional_fields')
   final Map<String, dynamic>? additionalFields;
 
   FacebookData({
-    required this.postAsPage,
-    required this.pageId,
+    this.postAsPage = false,
+    this.pageId = '',
     this.additionalFields,
   });
 
@@ -199,14 +215,16 @@ class FacebookData {
 
 @JsonSerializable(explicitToJson: true)
 class InstagramData {
+  @JsonKey(name: 'post_type')
   final String postType;
   final Carousel? carousel;
+  @JsonKey(name: 'ig_user_id')
   final String igUserId;
 
   InstagramData({
-    required this.postType,
+    this.postType = 'feed',
     this.carousel,
-    required this.igUserId,
+    this.igUserId = '',
   });
 
   factory InstagramData.fromJson(Map<String, dynamic> json) =>
@@ -221,7 +239,7 @@ class Carousel {
   final List<int>? order;
 
   Carousel({
-    required this.enabled,
+    this.enabled = false,
     this.order,
   });
 
@@ -233,12 +251,14 @@ class Carousel {
 
 @JsonSerializable()
 class TwitterData {
+  @JsonKey(name: 'alt_texts')
   final List<String> altTexts;
+  @JsonKey(name: 'tweet_mode')
   final String tweetMode;
 
   TwitterData({
-    required this.altTexts,
-    required this.tweetMode,
+    this.altTexts = const [],
+    this.tweetMode = 'extended',
   });
 
   factory TwitterData.fromJson(Map<String, dynamic> json) =>
@@ -253,7 +273,7 @@ class TikTokData {
   final Sound sound;
 
   TikTokData({
-    required this.privacy,
+    this.privacy = 'public',
     required this.sound,
   });
 
@@ -265,11 +285,13 @@ class TikTokData {
 
 @JsonSerializable()
 class Sound {
+  @JsonKey(name: 'use_original_sound')
   final bool useOriginalSound;
+  @JsonKey(name: 'music_id')
   final String? musicId;
 
   Sound({
-    required this.useOriginalSound,
+    this.useOriginalSound = true,
     this.musicId,
   });
 
@@ -280,13 +302,17 @@ class Sound {
 
 @JsonSerializable(explicitToJson: true)
 class Internal {
+  @JsonKey(name: 'retry_count')
   final int retryCount;
+  @JsonKey(name: 'user_preferences')
   final UserPreferences userPreferences;
+  @JsonKey(name: 'media_index_id')
   final String? mediaIndexId;
+  @JsonKey(name: 'ui_flags')
   final UiFlags uiFlags;
 
   Internal({
-    required this.retryCount,
+    this.retryCount = 0,
     required this.userPreferences,
     this.mediaIndexId,
     required this.uiFlags,
@@ -300,12 +326,14 @@ class Internal {
 
 @JsonSerializable()
 class UserPreferences {
+  @JsonKey(name: 'default_platforms')
   final List<String> defaultPlatforms;
+  @JsonKey(name: 'default_hashtags')
   final List<String> defaultHashtags;
 
   UserPreferences({
-    required this.defaultPlatforms,
-    required this.defaultHashtags,
+    this.defaultPlatforms = const [],
+    this.defaultHashtags = const [],
   });
 
   factory UserPreferences.fromJson(Map<String, dynamic> json) =>
@@ -316,12 +344,14 @@ class UserPreferences {
 
 @JsonSerializable()
 class UiFlags {
+  @JsonKey(name: 'is_editing_caption')
   final bool isEditingCaption;
+  @JsonKey(name: 'is_media_preview_open')
   final bool isMediaPreviewOpen;
 
   UiFlags({
-    required this.isEditingCaption,
-    required this.isMediaPreviewOpen,
+    this.isEditingCaption = false,
+    this.isMediaPreviewOpen = false,
   });
 
   factory UiFlags.fromJson(Map<String, dynamic> json) =>

@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:exif/exif.dart';
+import 'package:flutter/foundation.dart';
 
 class ExifReader {
   // Read EXIF data from a file
@@ -10,7 +11,9 @@ class ExifReader {
 
       return _extractMetadata(exifData);
     } catch (e) {
-      print('Error reading EXIF data: $e');
+      if (kDebugMode) {
+        print('Error reading EXIF data: $e');
+      }
       return {};
     }
   }
@@ -39,7 +42,9 @@ class ExifReader {
 
         metadata['creation_time'] = dateTime.toIso8601String();
       } catch (e) {
-        print('Error parsing EXIF date: $e');
+        if (kDebugMode) {
+          print('Error parsing EXIF date: $e');
+        }
       }
     }
 
@@ -64,7 +69,9 @@ class ExifReader {
               _convertDMSToDecimal(degrees, minutes, seconds, latRef == 'S');
         }
       } catch (e) {
-        print('Error parsing latitude: $e');
+        if (kDebugMode) {
+          print('Error parsing latitude: $e');
+        }
       }
     }
 
@@ -85,7 +92,9 @@ class ExifReader {
               _convertDMSToDecimal(degrees, minutes, seconds, lngRef == 'W');
         }
       } catch (e) {
-        print('Error parsing longitude: $e');
+        if (kDebugMode) {
+          print('Error parsing longitude: $e');
+        }
       }
     }
 

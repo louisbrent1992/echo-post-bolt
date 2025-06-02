@@ -30,7 +30,7 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
   // Filter state
   DateTimeRange? _dateRange;
   media_service.MediaType? _mediaType;
-  double _locationRadius = 10.0; // km
+  // final double _locationRadius = 10.0; // km
 
   @override
   void initState() {
@@ -113,9 +113,11 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
       setState(() {
         _isLoading = false;
       });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to load media: $e')),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to load media: $e')),
+        );
+      }
     }
   }
 
@@ -170,9 +172,11 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
       setState(() {
         _isLoading = false;
       });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to apply filters: $e')),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to apply filters: $e')),
+        );
+      }
     }
   }
 
@@ -207,8 +211,8 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
 
       // Update the action with the new media item
       final updatedAction = SocialAction(
-        action_id: widget.action.action_id,
-        created_at: widget.action.created_at,
+        actionId: widget.action.actionId,
+        createdAt: widget.action.createdAt,
         platforms: widget.action.platforms,
         content: Content(
           text: widget.action.content.text,
@@ -218,7 +222,7 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
           media: [mediaItem],
         ),
         options: widget.action.options,
-        platform_data: widget.action.platform_data,
+        platformData: widget.action.platformData,
         internal: widget.action.internal,
       );
 
@@ -226,7 +230,7 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
       final firestoreService =
           Provider.of<FirestoreService>(context, listen: false);
       await firestoreService.updateAction(
-        updatedAction.action_id,
+        updatedAction.actionId,
         updatedAction.toJson(),
       );
 
@@ -239,14 +243,18 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
       }
 
       // Return the updated action to the previous screen
-      Navigator.pop(context, updatedAction);
+      if (mounted) {
+        Navigator.pop(context, updatedAction);
+      }
     } catch (e) {
       setState(() {
         _isLoading = false;
       });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to confirm selection: $e')),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to confirm selection: $e')),
+        );
+      }
     }
   }
 
@@ -278,7 +286,9 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
                     child: Container(
                       padding: const EdgeInsets.all(12),
                       decoration: BoxDecoration(
-                        color: Theme.of(context).colorScheme.surfaceVariant,
+                        color: Theme.of(context)
+                            .colorScheme
+                            .surfaceContainerHighest,
                         borderRadius: BorderRadius.circular(8),
                       ),
                       child: Row(
@@ -296,7 +306,7 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
                                 fontWeight: FontWeight.bold,
                                 color: Theme.of(context)
                                     .colorScheme
-                                    .onSurfaceVariant,
+                                    .surfaceContainerHighest,
                               ),
                             ),
                           ),
@@ -348,7 +358,7 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
         color: Theme.of(context).colorScheme.surface,
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.05),
+            color: Colors.black.withValues(alpha: 0.05),
             blurRadius: 4,
             offset: const Offset(0, 2),
           ),
@@ -581,7 +591,9 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
                   builder: (context, snapshot) {
                     if (snapshot.connectionState == ConnectionState.waiting) {
                       return Container(
-                        color: Theme.of(context).colorScheme.surfaceVariant,
+                        color: Theme.of(context)
+                            .colorScheme
+                            .surfaceContainerHighest,
                         child: const Center(
                           child: SizedBox(
                             width: 20,
@@ -594,7 +606,9 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
 
                     if (snapshot.hasError || !snapshot.hasData) {
                       return Container(
-                        color: Theme.of(context).colorScheme.surfaceVariant,
+                        color: Theme.of(context)
+                            .colorScheme
+                            .surfaceContainerHighest,
                         child: const Icon(Icons.broken_image),
                       );
                     }
@@ -606,7 +620,9 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
                       builder: (context, thumbnailSnapshot) {
                         if (!thumbnailSnapshot.hasData) {
                           return Container(
-                            color: Theme.of(context).colorScheme.surfaceVariant,
+                            color: Theme.of(context)
+                                .colorScheme
+                                .surfaceContainerHighest,
                             child: const Center(
                               child: SizedBox(
                                 width: 20,
@@ -636,7 +652,7 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
                   child: Container(
                     padding: const EdgeInsets.all(4),
                     decoration: BoxDecoration(
-                      color: Colors.black.withOpacity(0.6),
+                      color: Colors.black.withValues(alpha: 0.6),
                       borderRadius: BorderRadius.circular(4),
                     ),
                     child: const Icon(
@@ -659,7 +675,7 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
                       begin: Alignment.bottomCenter,
                       end: Alignment.topCenter,
                       colors: [
-                        Colors.black.withOpacity(0.7),
+                        Colors.black.withValues(alpha: 0.7),
                         Colors.transparent,
                       ],
                     ),

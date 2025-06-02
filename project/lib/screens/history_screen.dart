@@ -122,7 +122,7 @@ class HistoryScreen extends StatelessWidget {
                       vertical: 4,
                     ),
                     decoration: BoxDecoration(
-                      color: statusColor.withOpacity(0.1),
+                      color: statusColor.withValues(alpha: 0.1),
                       borderRadius: BorderRadius.circular(16),
                     ),
                     child: Row(
@@ -279,7 +279,7 @@ class HistoryScreen extends StatelessWidget {
                         color: Theme.of(context)
                             .colorScheme
                             .outline
-                            .withOpacity(0.5),
+                            .withValues(alpha: 0.5),
                         borderRadius: BorderRadius.circular(2),
                       ),
                     ),
@@ -304,8 +304,8 @@ class HistoryScreen extends StatelessWidget {
                           vertical: 6,
                         ),
                         decoration: BoxDecoration(
-                          color:
-                              _getStatusColor(context, status).withOpacity(0.1),
+                          color: _getStatusColor(context, status)
+                              .withValues(alpha: 0.1),
                           borderRadius: BorderRadius.circular(16),
                         ),
                         child: Row(
@@ -381,7 +381,7 @@ class HistoryScreen extends StatelessWidget {
                         color: Theme.of(context)
                             .colorScheme
                             .outline
-                            .withOpacity(0.5),
+                            .withValues(alpha: 0.5),
                       ),
                     ),
                     child: Column(
@@ -405,7 +405,7 @@ class HistoryScreen extends StatelessWidget {
                                 backgroundColor: Theme.of(context)
                                     .colorScheme
                                     .primary
-                                    .withOpacity(0.1),
+                                    .withValues(alpha: 0.1),
                                 padding: EdgeInsets.zero,
                                 materialTapTargetSize:
                                     MaterialTapTargetSize.shrinkWrap,
@@ -441,7 +441,7 @@ class HistoryScreen extends StatelessWidget {
                               platform.substring(1),
                         ),
                         backgroundColor:
-                            _getPlatformColor(platform).withOpacity(0.1),
+                            _getPlatformColor(platform).withValues(alpha: 0.1),
                       );
                     }).toList(),
                   ),
@@ -485,7 +485,7 @@ class HistoryScreen extends StatelessWidget {
                                       color: Theme.of(context)
                                           .colorScheme
                                           .onErrorContainer
-                                          .withOpacity(0.7),
+                                          .withValues(alpha: 0.7),
                                     ),
                                   ),
                                 if (message != null)
@@ -565,16 +565,17 @@ class HistoryScreen extends StatelessWidget {
 
     final socialPostService =
         Provider.of<SocialPostService>(context, listen: false);
+    final scaffoldMessenger = ScaffoldMessenger.of(context);
 
     try {
-      ScaffoldMessenger.of(context).showSnackBar(
+      scaffoldMessenger.showSnackBar(
         const SnackBar(content: Text('Retrying post...')),
       );
 
       final results = await socialPostService.postToAllPlatforms(action);
 
       final allSucceeded = results.values.every((success) => success);
-      ScaffoldMessenger.of(context).showSnackBar(
+      scaffoldMessenger.showSnackBar(
         SnackBar(
           content: Text(
             allSucceeded
@@ -584,7 +585,7 @@ class HistoryScreen extends StatelessWidget {
         ),
       );
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
+      scaffoldMessenger.showSnackBar(
         SnackBar(content: Text('Retry failed: $e')),
       );
     }
@@ -592,7 +593,13 @@ class HistoryScreen extends StatelessWidget {
 
   Future<void> _reschedulePost(
       BuildContext context, SocialAction action) async {
-    Navigator.pop(context); // Close the bottom sheet
+    // Get references before async operations
+    final navigator = Navigator.of(context);
+    final firestoreService =
+        Provider.of<FirestoreService>(context, listen: false);
+    final scaffoldMessenger = ScaffoldMessenger.of(context);
+
+    navigator.pop(); // Close the bottom sheet
 
     // Show date picker
     final now = DateTime.now();
@@ -607,7 +614,7 @@ class HistoryScreen extends StatelessWidget {
       lastDate: now.add(const Duration(days: 365)),
     );
 
-    if (pickedDate != null) {
+    if (pickedDate != null && context.mounted) {
       final pickedTime = await showTimePicker(
         context: context,
         initialTime: TimeOfDay.fromDateTime(initialDate),
@@ -624,8 +631,8 @@ class HistoryScreen extends StatelessWidget {
 
         // Update the action with the new schedule
         final updatedAction = SocialAction(
-          action_id: action.action_id,
-          created_at: action.created_at,
+          actionId: action.actionId,
+          createdAt: action.createdAt,
           platforms: action.platforms,
           content: action.content,
           options: Options(
@@ -634,19 +641,17 @@ class HistoryScreen extends StatelessWidget {
             visibility: action.options.visibility,
             replyToPostId: action.options.replyToPostId,
           ),
-          platform_data: action.platform_data,
+          platformData: action.platformData,
           internal: action.internal,
         );
 
         // Save the updated action to Firestore
-        final firestoreService =
-            Provider.of<FirestoreService>(context, listen: false);
         await firestoreService.updateAction(
-          updatedAction.action_id,
+          updatedAction.actionId,
           updatedAction.toJson(),
         );
 
-        ScaffoldMessenger.of(context).showSnackBar(
+        scaffoldMessenger.showSnackBar(
           SnackBar(
             content: Text(
               'Post rescheduled for ${DateFormat('MMM d, yyyy \'at\' h:mm a').format(scheduledDateTime)}',
@@ -658,6 +663,12 @@ class HistoryScreen extends StatelessWidget {
   }
 
   Future<void> _deletePost(BuildContext context, SocialAction action) async {
+    // Get references before async operations
+    final navigator = Navigator.of(context);
+    final firestoreService =
+        Provider.of<FirestoreService>(context, listen: false);
+    final scaffoldMessenger = ScaffoldMessenger.of(context);
+
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -677,14 +688,12 @@ class HistoryScreen extends StatelessWidget {
     );
 
     if (confirmed == true) {
-      Navigator.pop(context); // Close the bottom sheet
+      navigator.pop(); // Close the bottom sheet
 
       // Delete the action from Firestore
-      final firestoreService =
-          Provider.of<FirestoreService>(context, listen: false);
-      await firestoreService.deleteAction(action.action_id);
+      await firestoreService.deleteAction(action.actionId);
 
-      ScaffoldMessenger.of(context).showSnackBar(
+      scaffoldMessenger.showSnackBar(
         const SnackBar(content: Text('Post deleted')),
       );
     }

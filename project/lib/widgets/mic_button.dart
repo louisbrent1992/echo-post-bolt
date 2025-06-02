@@ -24,11 +24,12 @@ class MicButton extends StatefulWidget {
   State<MicButton> createState() => _MicButtonState();
 }
 
-class _MicButtonState extends State<MicButton> with SingleTickerProviderStateMixin {
+class _MicButtonState extends State<MicButton>
+    with SingleTickerProviderStateMixin {
   late AnimationController _animationController;
   late Animation<double> _scaleAnimation;
   late Animation<double> _pulseAnimation;
-  
+
   Timer? _recordingTimer;
   int _recordingDuration = 0;
   final int _maxRecordingDuration = 10; // 10 seconds max
@@ -36,19 +37,19 @@ class _MicButtonState extends State<MicButton> with SingleTickerProviderStateMix
   @override
   void initState() {
     super.initState();
-    
+
     _animationController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 1500),
     )..repeat(reverse: true);
-    
+
     _scaleAnimation = Tween<double>(begin: 1.0, end: 1.1).animate(
       CurvedAnimation(
         parent: _animationController,
         curve: Curves.easeInOut,
       ),
     );
-    
+
     _pulseAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
       CurvedAnimation(
         parent: _animationController,
@@ -70,7 +71,7 @@ class _MicButtonState extends State<MicButton> with SingleTickerProviderStateMix
       setState(() {
         _recordingDuration++;
       });
-      
+
       if (_recordingDuration >= _maxRecordingDuration) {
         _stopRecording();
       }
@@ -117,10 +118,11 @@ class _MicButtonState extends State<MicButton> with SingleTickerProviderStateMix
               ),
             ),
           ),
-        
+
         // Mic button with animations
         GestureDetector(
-          onTap: widget.state == RecordingState.processing || widget.state == RecordingState.ready
+          onTap: widget.state == RecordingState.processing ||
+                  widget.state == RecordingState.ready
               ? null
               : _toggleRecording,
           child: AnimatedBuilder(
@@ -138,11 +140,14 @@ class _MicButtonState extends State<MicButton> with SingleTickerProviderStateMix
                         height: 100 + (20 * _pulseAnimation.value),
                         decoration: BoxDecoration(
                           shape: BoxShape.circle,
-                          color: Theme.of(context).colorScheme.error.withOpacity(0.3),
+                          color: Theme.of(context)
+                              .colorScheme
+                              .error
+                              .withValues(alpha: 0.3),
                         ),
                       ),
                     ),
-                  
+
                   // Main button
                   Transform.scale(
                     scale: widget.state == RecordingState.recording
@@ -156,7 +161,7 @@ class _MicButtonState extends State<MicButton> with SingleTickerProviderStateMix
                         color: _getButtonColor(),
                         boxShadow: [
                           BoxShadow(
-                            color: _getButtonColor().withOpacity(0.3),
+                            color: _getButtonColor().withValues(alpha: 0.3),
                             blurRadius: 10,
                             spreadRadius: 2,
                           ),
@@ -170,13 +175,13 @@ class _MicButtonState extends State<MicButton> with SingleTickerProviderStateMix
             },
           ),
         ),
-        
+
         // Status text
         const SizedBox(height: 16),
         Text(
           _getStatusText(),
           style: TextStyle(
-            color: Theme.of(context).colorScheme.onBackground,
+            color: Theme.of(context).colorScheme.onSurface,
             fontWeight: FontWeight.w500,
           ),
         ),

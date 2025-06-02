@@ -1,4 +1,5 @@
 import 'package:firebase_core/firebase_core.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:provider/provider.dart';
@@ -19,10 +20,14 @@ Future<void> main() async {
   // Try to initialize Firebase - if it fails, continue without it
   try {
     await Firebase.initializeApp();
-    print('Firebase initialized successfully');
+    if (kDebugMode) {
+      print('Firebase initialized successfully');
+    }
   } catch (e) {
-    print('Firebase initialization failed: $e');
-    print('Continuing without Firebase...');
+    if (kDebugMode) {
+      print('Firebase initialization failed: $e');
+      print('Continuing without Firebase...');
+    }
   }
 
   runApp(const EchoPostApp());

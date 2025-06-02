@@ -1,9 +1,13 @@
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:record/record.dart';
 import 'package:http/http.dart' as http;
 import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:uuid/uuid.dart';
+import 'package:flutter/foundation.dart';
 
 import '../models/social_action.dart';
 import '../services/auth_service.dart';
@@ -42,193 +46,266 @@ class _CommandScreenState extends State<CommandScreen> {
   }
 
   Future<void> _loadUserPreferences() async {
-    final firestoreService =
-        Provider.of<FirestoreService>(context, listen: false);
-    final prefs = await firestoreService.getUserPreferences();
+    try {
+      final firestoreService =
+          Provider.of<FirestoreService>(context, listen: false);
+      final prefs = await firestoreService.getUserPreferences();
 
-    setState(() {
-      _selectedPlatforms = List<String>.from(prefs['default_platforms'] ?? []);
-    });
+      if (mounted) {
+        setState(() {
+          _selectedPlatforms = List<String>.from(
+              prefs['default_platforms'] ?? ['instagram', 'twitter']);
+        });
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        print('Error loading user preferences: $e');
+      }
+      // Set default platforms if loading fails
+      if (mounted) {
+        setState(() {
+          _selectedPlatforms = ['instagram', 'twitter'];
+        });
+      }
+    }
   }
 
   Future<void> _startRecording() async {
     try {
-      if (await _record.hasPermission()) {
-        await _record.start(const RecordConfig(), path: '/tmp/recording.m4a');
+      // Check permissions first
+      if (!(await _record.hasPermission())) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                  'Microphone permission denied. Please grant permission in settings.'),
+              duration: Duration(seconds: 4),
+            ),
+          );
+        }
+        return;
+      }
+
+      // Get proper temp directory for the platform
+      final tempDir = await getTemporaryDirectory();
+      final recordingPath =
+          '${tempDir.path}/recording_${DateTime.now().millisecondsSinceEpoch}.m4a';
+
+      if (kDebugMode) {
+        print('Starting recording to path: $recordingPath');
+      }
+
+      // Start recording with proper configuration
+      await _record.start(
+          const RecordConfig(
+            encoder: AudioEncoder.aacLc,
+            bitRate: 64000,
+            sampleRate: 16000,
+            numChannels: 1,
+          ),
+          path: recordingPath);
+
+      if (mounted) {
         setState(() {
           _recordingState = RecordingState.recording;
           _transcription = '';
           _currentAction = null;
         });
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Microphone permission denied')),
-        );
       }
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to start recording: $e')),
-      );
+      if (kDebugMode) {
+        print('Error starting recording: $e');
+      }
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to start recording: ${e.toString()}')),
+        );
+      }
     }
   }
 
   Future<void> _stopRecording() async {
     try {
       final path = await _record.stop();
-      if (path == null) {
+      if (path == null || path.isEmpty) {
         throw Exception('Recording failed: no file path returned');
       }
 
-      setState(() {
-        _recordingState = RecordingState.processing;
-      });
+      // Verify file exists
+      final file = File(path);
+      if (!await file.exists()) {
+        throw Exception('Recording file does not exist at path: $path');
+      }
+
+      if (kDebugMode) {
+        print('Recording stopped, file saved to: $path');
+        print('File size: ${await file.length()} bytes');
+      }
+
+      if (mounted) {
+        setState(() {
+          _recordingState = RecordingState.processing;
+        });
+      }
+
+      // Process the recording
+      await _processRecording(path);
+    } catch (e) {
+      if (kDebugMode) {
+        print('Error stopping recording: $e');
+      }
+      if (mounted) {
+        setState(() {
+          _recordingState = RecordingState.idle;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Recording failed: ${e.toString()}')),
+        );
+      }
+    }
+  }
+
+  Future<void> _processRecording(String audioPath) async {
+    try {
+      // Get service reference before async operations
+      final firestoreService =
+          Provider.of<FirestoreService>(context, listen: false);
 
       // 1. Transcribe with Whisper
-      final transcription = await _transcribeWithWhisper(path);
-      setState(() {
-        _transcription = transcription;
-      });
+      final transcription = await _transcribeWithWhisper(audioPath);
 
-      // 2. Generate JSON with ChatGPT
-      final actionJson = await _getSocialActionJson(transcription);
+      if (mounted) {
+        setState(() {
+          _transcription = transcription;
+        });
+      }
+
+      if (transcription.trim().isEmpty) {
+        throw Exception('No speech detected in recording');
+      }
+
+      // 2. Generate simplified action JSON
+      final actionJson = await _generateSimpleAction(transcription);
 
       // 3. Parse JSON into SocialAction
       final action = SocialAction.fromJson(actionJson);
 
       // 4. Save to Firestore
-      final firestoreService =
-          Provider.of<FirestoreService>(context, listen: false);
       await firestoreService.saveAction(actionJson);
 
-      setState(() {
-        _currentAction = action;
-        _recordingState = RecordingState.ready;
-      });
+      if (mounted) {
+        setState(() {
+          _currentAction = action;
+          _recordingState = RecordingState.ready;
+        });
+      }
+
+      // Clean up the audio file
+      try {
+        await File(audioPath).delete();
+      } catch (e) {
+        if (kDebugMode) {
+          print('Warning: Could not delete audio file: $e');
+        }
+      }
     } catch (e) {
-      setState(() {
-        _recordingState = RecordingState.idle;
-      });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Processing failed: $e')),
-      );
+      if (kDebugMode) {
+        print('Error processing recording: $e');
+      }
+      if (mounted) {
+        setState(() {
+          _recordingState = RecordingState.idle;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Processing failed: ${e.toString()}'),
+            duration: const Duration(seconds: 5),
+          ),
+        );
+      }
     }
   }
 
   Future<String> _transcribeWithWhisper(String audioPath) async {
-    final url = Uri.parse('https://api.openai.com/v1/audio/transcriptions');
     final apiKey = dotenv.env['OPENAI_API_KEY'];
-
-    if (apiKey == null) {
-      throw Exception('OPENAI_API_KEY not found in .env file');
+    if (apiKey == null || apiKey.isEmpty) {
+      throw Exception(
+          'OPENAI_API_KEY not found in .env.local file. Please add your OpenAI API key.');
     }
-
-    final request = http.MultipartRequest('POST', url)
-      ..headers.addAll({
-        'Authorization': 'Bearer $apiKey',
-      })
-      ..fields['model'] = 'whisper-1'
-      ..files.add(await http.MultipartFile.fromPath('file', audioPath));
-
-    final response = await request.send();
-    final responseBody = await response.stream.bytesToString();
-
-    if (response.statusCode != 200) {
-      throw Exception('Whisper API error: $responseBody');
-    }
-
-    final data = jsonDecode(responseBody);
-    return data['text'] as String;
-  }
-
-  Future<Map<String, dynamic>> _getSocialActionJson(
-      String transcription) async {
-    final url = Uri.parse('https://api.openai.com/v1/chat/completions');
-    final apiKey = dotenv.env['OPENAI_API_KEY'];
-
-    if (apiKey == null) {
-      throw Exception('OPENAI_API_KEY not found in .env file');
-    }
-
-    final systemPrompt = '''
-You are EchoPost AI. 
-Input: Plain text transcription from Whisper. 
-Output: A valid JSON object with keys:
-  "action_id": UUID v4 string
-  "created_at": ISO timestamp string
-  "platforms": ${jsonEncode(_selectedPlatforms)}
-  "content": {
-    "text": string,
-    "hashtags": [string],
-    "mentions": [string],
-    "link": { url: string, title?: string, description?: string, thumbnail_url?: string } | null,
-    "media": [
-      {
-        "file_uri": "device URI (content://… or file://…)",
-        "mime_type": "image/jpeg" | "video/mp4" | …,
-        "device_metadata": {
-          "creation_time": ISO timestamp,
-          "latitude": number | null,
-          "longitude": number | null,
-          "orientation": int,
-          "width": int,
-          "height": int,
-          "file_size_bytes": int
-        },
-        "upload_url": null,
-        "cdn_key": null,
-        "caption": string | null
-      }
-    ]
-  },
-  "options": {
-    "schedule": "now" | ISO timestamp,
-    "location_tag": { name: string, latitude: number, longitude: number } | null,
-    "visibility": { facebook?: string, instagram?: string, twitter?: string, tiktok?: string },
-    "reply_to_post_id": { facebook?: string | null, instagram?: string | null, twitter?: string | null, tiktok?: string | null }
-  },
-  "platform_data": {
-    "facebook": { post_as_page: bool, page_id: string, additional_fields: map } | null,
-    "instagram": { post_type: "feed"|"story", carousel: { enabled: bool, order?: [int] }, ig_user_id: string } | null,
-    "twitter": { alt_texts: [string], tweet_mode: "extended" } | null,
-    "tiktok": { privacy: "public"|"private"|"friends", sound: { use_original_sound: bool, music_id?: string } } | null
-  },
-  "internal": {
-    "retry_count": int,
-    "user_preferences": { default_platforms: [string], default_hashtags: [string] },
-    "media_index_id": string,
-    "ui_flags": { is_editing_caption: bool, is_media_preview_open: bool }
-  }
-''';
-
-    final response = await http.post(
-      url,
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer $apiKey',
-      },
-      body: jsonEncode({
-        'model': 'gpt-4o-mini',
-        'messages': [
-          {'role': 'system', 'content': systemPrompt},
-          {'role': 'user', 'content': transcription},
-        ],
-        'temperature': 0.2,
-        'max_tokens': 512,
-      }),
-    );
-
-    if (response.statusCode != 200) {
-      throw Exception('ChatGPT API error: ${response.body}');
-    }
-
-    final data = jsonDecode(response.body);
-    final content = data['choices'][0]['message']['content'] as String;
 
     try {
-      return jsonDecode(content) as Map<String, dynamic>;
+      final url = Uri.parse('https://api.openai.com/v1/audio/transcriptions');
+      final request = http.MultipartRequest('POST', url)
+        ..headers.addAll({
+          'Authorization': 'Bearer $apiKey',
+        })
+        ..fields['model'] = 'whisper-1'
+        ..fields['language'] = 'en'
+        ..files.add(await http.MultipartFile.fromPath('file', audioPath));
+
+      final response = await request.send();
+      final responseBody = await response.stream.bytesToString();
+
+      if (response.statusCode != 200) {
+        throw Exception(
+            'Whisper API error (${response.statusCode}): $responseBody');
+      }
+
+      final data = jsonDecode(responseBody);
+      final text = data['text'] as String? ?? '';
+
+      if (kDebugMode) {
+        print('Transcription successful: "$text"');
+      }
+      return text.trim();
     } catch (e) {
-      throw Exception('Failed to parse JSON from ChatGPT response: $e');
+      throw Exception('Transcription failed: $e');
     }
+  }
+
+  // Simplified action generation to avoid complex JSON parsing issues
+  Future<Map<String, dynamic>> _generateSimpleAction(
+      String transcription) async {
+    const uuid = Uuid();
+    final now = DateTime.now();
+
+    // Create a simple, reliable action structure
+    return {
+      'action_id': uuid.v4(),
+      'created_at': now.toIso8601String(),
+      'platforms': _selectedPlatforms,
+      'content': {
+        'text': transcription,
+        'hashtags': <String>[],
+        'mentions': <String>[],
+        'link': null,
+        'media': <Map<String, dynamic>>[],
+      },
+      'options': {
+        'schedule': 'now',
+        'location_tag': null,
+        'visibility': <String, String?>{},
+        'reply_to_post_id': <String, String?>{},
+      },
+      'platform_data': {
+        'facebook': null,
+        'instagram': null,
+        'twitter': null,
+        'tiktok': null,
+      },
+      'internal': {
+        'retry_count': 0,
+        'user_preferences': {
+          'default_platforms': _selectedPlatforms,
+          'default_hashtags': <String>[],
+        },
+        'media_index_id': null,
+        'ui_flags': {
+          'is_editing_caption': false,
+          'is_media_preview_open': false,
+        },
+      },
+    };
   }
 
   void _navigateToMediaSelection() {
@@ -240,7 +317,7 @@ Output: A valid JSON object with keys:
         builder: (context) => MediaSelectionScreen(action: _currentAction!),
       ),
     ).then((updatedAction) {
-      if (updatedAction != null) {
+      if (updatedAction != null && mounted) {
         setState(() {
           _currentAction = updatedAction as SocialAction;
         });

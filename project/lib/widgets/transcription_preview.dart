@@ -30,7 +30,7 @@ class TranscriptionPreview extends StatelessWidget {
         borderRadius: BorderRadius.circular(12),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.1),
+            color: Colors.black.withValues(alpha: 0.1),
             blurRadius: 8,
             offset: const Offset(0, 2),
           ),
@@ -58,13 +58,13 @@ class TranscriptionPreview extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 8),
-          
+
           // Transcription text
           Text(
             transcription,
             style: Theme.of(context).textTheme.bodyLarge,
           ),
-          
+
           // JSON Ready badge and buttons
           if (isJsonReady) ...[
             const SizedBox(height: 16),
@@ -102,7 +102,7 @@ class TranscriptionPreview extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 16),
-            
+
             // Action buttons
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceEvenly,
@@ -119,7 +119,7 @@ class TranscriptionPreview extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(width: 8),
-                
+
                 // Post Now button
                 Expanded(
                   child: ElevatedButton.icon(
