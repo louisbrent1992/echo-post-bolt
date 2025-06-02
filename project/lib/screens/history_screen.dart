@@ -1,4 +1,4 @@
-import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -14,7 +14,7 @@ class HistoryScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final firestoreService = Provider.of<FirestoreService>(context);
-    
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('Post History'),
@@ -25,13 +25,13 @@ class HistoryScreen extends StatelessWidget {
           if (snapshot.connectionState == ConnectionState.waiting) {
             return const Center(child: CircularProgressIndicator());
           }
-          
+
           if (snapshot.hasError) {
             return Center(
               child: Text('Error: ${snapshot.error}'),
             );
           }
-          
+
           if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
             return Center(
               child: Column(
@@ -58,7 +58,7 @@ class HistoryScreen extends StatelessWidget {
               ),
             );
           }
-          
+
           return ListView.builder(
             itemCount: snapshot.data!.docs.length,
             itemBuilder: (context, index) {
@@ -67,7 +67,7 @@ class HistoryScreen extends StatelessWidget {
               final actionJson = data['action_json'] as Map<String, dynamic>;
               final status = data['status'] as String;
               final createdAt = data['created_at'] as Timestamp?;
-              
+
               try {
                 final action = SocialAction.fromJson(actionJson);
                 return _buildHistoryItem(
@@ -102,7 +102,7 @@ class HistoryScreen extends StatelessWidget {
     final formattedDate = createdAt != null
         ? DateFormat('MMM d, yyyy \'at\' h:mm a').format(createdAt)
         : 'Unknown date';
-    
+
     return Card(
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       child: InkWell(
@@ -135,7 +135,8 @@ class HistoryScreen extends StatelessWidget {
                         ),
                         const SizedBox(width: 4),
                         Text(
-                          status.substring(0, 1).toUpperCase() + status.substring(1),
+                          status.substring(0, 1).toUpperCase() +
+                              status.substring(1),
                           style: TextStyle(
                             color: statusColor,
                             fontSize: 12,
@@ -155,7 +156,7 @@ class HistoryScreen extends StatelessWidget {
                 ],
               ),
               const SizedBox(height: 12),
-              
+
               // Content preview
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -171,7 +172,7 @@ class HistoryScreen extends StatelessWidget {
                       ),
                     ),
                   const SizedBox(width: 12),
-                  
+
                   // Text content
                   Expanded(
                     child: Column(
@@ -184,7 +185,7 @@ class HistoryScreen extends StatelessWidget {
                           style: Theme.of(context).textTheme.bodyMedium,
                         ),
                         const SizedBox(height: 8),
-                        
+
                         // Platform icons
                         Wrap(
                           spacing: 8,
@@ -201,7 +202,7 @@ class HistoryScreen extends StatelessWidget {
                   ),
                 ],
               ),
-              
+
               // Error indicator
               if (status == 'failed' && errorLog != null && errorLog.isNotEmpty)
                 Padding(
@@ -275,13 +276,16 @@ class HistoryScreen extends StatelessWidget {
                       width: 40,
                       height: 4,
                       decoration: BoxDecoration(
-                        color: Theme.of(context).colorScheme.outline.withOpacity(0.5),
+                        color: Theme.of(context)
+                            .colorScheme
+                            .outline
+                            .withOpacity(0.5),
                         borderRadius: BorderRadius.circular(2),
                       ),
                     ),
                   ),
                   const SizedBox(height: 16),
-                  
+
                   // Title
                   Text(
                     'Post Details',
@@ -290,7 +294,7 @@ class HistoryScreen extends StatelessWidget {
                         ),
                   ),
                   const SizedBox(height: 16),
-                  
+
                   // Status
                   Row(
                     children: [
@@ -300,7 +304,8 @@ class HistoryScreen extends StatelessWidget {
                           vertical: 6,
                         ),
                         decoration: BoxDecoration(
-                          color: _getStatusColor(context, status).withOpacity(0.1),
+                          color:
+                              _getStatusColor(context, status).withOpacity(0.1),
                           borderRadius: BorderRadius.circular(16),
                         ),
                         child: Row(
@@ -313,7 +318,8 @@ class HistoryScreen extends StatelessWidget {
                             ),
                             const SizedBox(width: 8),
                             Text(
-                              status.substring(0, 1).toUpperCase() + status.substring(1),
+                              status.substring(0, 1).toUpperCase() +
+                                  status.substring(1),
                               style: TextStyle(
                                 color: _getStatusColor(context, status),
                                 fontWeight: FontWeight.bold,
@@ -325,7 +331,7 @@ class HistoryScreen extends StatelessWidget {
                     ],
                   ),
                   const SizedBox(height: 16),
-                  
+
                   // Media preview
                   if (action.content.media.isNotEmpty) ...[
                     Text(
@@ -338,7 +344,8 @@ class HistoryScreen extends StatelessWidget {
                     ClipRRect(
                       borderRadius: BorderRadius.circular(12),
                       child: Image.file(
-                        File(Uri.parse(action.content.media.first.fileUri).path),
+                        File(
+                            Uri.parse(action.content.media.first.fileUri).path),
                         fit: BoxFit.cover,
                         width: double.infinity,
                         height: 200,
@@ -356,7 +363,7 @@ class HistoryScreen extends StatelessWidget {
                     ),
                     const SizedBox(height: 16),
                   ],
-                  
+
                   // Caption
                   Text(
                     'Caption',
@@ -371,7 +378,10 @@ class HistoryScreen extends StatelessWidget {
                       color: Theme.of(context).colorScheme.surface,
                       borderRadius: BorderRadius.circular(8),
                       border: Border.all(
-                        color: Theme.of(context).colorScheme.outline.withOpacity(0.5),
+                        color: Theme.of(context)
+                            .colorScheme
+                            .outline
+                            .withOpacity(0.5),
                       ),
                     ),
                     child: Column(
@@ -388,12 +398,17 @@ class HistoryScreen extends StatelessWidget {
                                   '#$tag',
                                   style: TextStyle(
                                     fontSize: 12,
-                                    color: Theme.of(context).colorScheme.primary,
+                                    color:
+                                        Theme.of(context).colorScheme.primary,
                                   ),
                                 ),
-                                backgroundColor: Theme.of(context).colorScheme.primary.withOpacity(0.1),
+                                backgroundColor: Theme.of(context)
+                                    .colorScheme
+                                    .primary
+                                    .withOpacity(0.1),
                                 padding: EdgeInsets.zero,
-                                materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                materialTapTargetSize:
+                                    MaterialTapTargetSize.shrinkWrap,
                               );
                             }).toList(),
                           ),
@@ -402,7 +417,7 @@ class HistoryScreen extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(height: 16),
-                  
+
                   // Platforms
                   Text(
                     'Platforms',
@@ -422,16 +437,20 @@ class HistoryScreen extends StatelessWidget {
                           color: _getPlatformColor(platform),
                         ),
                         label: Text(
-                          platform.substring(0, 1).toUpperCase() + platform.substring(1),
+                          platform.substring(0, 1).toUpperCase() +
+                              platform.substring(1),
                         ),
-                        backgroundColor: _getPlatformColor(platform).withOpacity(0.1),
+                        backgroundColor:
+                            _getPlatformColor(platform).withOpacity(0.1),
                       );
                     }).toList(),
                   ),
                   const SizedBox(height: 16),
-                  
+
                   // Error log
-                  if (status == 'failed' && errorLog != null && errorLog.isNotEmpty) ...[
+                  if (status == 'failed' &&
+                      errorLog != null &&
+                      errorLog.isNotEmpty) ...[
                     Text(
                       'Error Log',
                       style: Theme.of(context).textTheme.titleMedium?.copyWith(
@@ -451,7 +470,7 @@ class HistoryScreen extends StatelessWidget {
                         children: errorLog.map((error) {
                           final timestamp = error['timestamp'] as Timestamp?;
                           final message = error['message'] as String?;
-                          
+
                           return Padding(
                             padding: const EdgeInsets.only(bottom: 8.0),
                             child: Column(
@@ -459,17 +478,23 @@ class HistoryScreen extends StatelessWidget {
                               children: [
                                 if (timestamp != null)
                                   Text(
-                                    DateFormat('MMM d, yyyy \'at\' h:mm a').format(timestamp.toDate()),
+                                    DateFormat('MMM d, yyyy \'at\' h:mm a')
+                                        .format(timestamp.toDate()),
                                     style: TextStyle(
                                       fontSize: 12,
-                                      color: Theme.of(context).colorScheme.onErrorContainer.withOpacity(0.7),
+                                      color: Theme.of(context)
+                                          .colorScheme
+                                          .onErrorContainer
+                                          .withOpacity(0.7),
                                     ),
                                   ),
                                 if (message != null)
                                   Text(
                                     message,
                                     style: TextStyle(
-                                      color: Theme.of(context).colorScheme.onErrorContainer,
+                                      color: Theme.of(context)
+                                          .colorScheme
+                                          .onErrorContainer,
                                     ),
                                   ),
                               ],
@@ -480,7 +505,7 @@ class HistoryScreen extends StatelessWidget {
                     ),
                     const SizedBox(height: 16),
                   ],
-                  
+
                   // Action buttons
                   if (status == 'failed') ...[
                     SizedBox(
@@ -490,8 +515,10 @@ class HistoryScreen extends StatelessWidget {
                         label: const Text('Retry Post'),
                         onPressed: () => _retryPost(context, action),
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: Theme.of(context).colorScheme.primary,
-                          foregroundColor: Theme.of(context).colorScheme.onPrimary,
+                          backgroundColor:
+                              Theme.of(context).colorScheme.primary,
+                          foregroundColor:
+                              Theme.of(context).colorScheme.onPrimary,
                         ),
                       ),
                     ),
@@ -504,8 +531,10 @@ class HistoryScreen extends StatelessWidget {
                         label: const Text('Reschedule'),
                         onPressed: () => _reschedulePost(context, action),
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: Theme.of(context).colorScheme.primary,
-                          foregroundColor: Theme.of(context).colorScheme.onPrimary,
+                          backgroundColor:
+                              Theme.of(context).colorScheme.primary,
+                          foregroundColor:
+                              Theme.of(context).colorScheme.onPrimary,
                         ),
                       ),
                     ),
@@ -533,16 +562,17 @@ class HistoryScreen extends StatelessWidget {
 
   Future<void> _retryPost(BuildContext context, SocialAction action) async {
     Navigator.pop(context); // Close the bottom sheet
-    
-    final socialPostService = Provider.of<SocialPostService>(context, listen: false);
-    
+
+    final socialPostService =
+        Provider.of<SocialPostService>(context, listen: false);
+
     try {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Retrying post...')),
       );
-      
+
       final results = await socialPostService.postToAllPlatforms(action);
-      
+
       final allSucceeded = results.values.every((success) => success);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -560,9 +590,10 @@ class HistoryScreen extends StatelessWidget {
     }
   }
 
-  Future<void> _reschedulePost(BuildContext context, SocialAction action) async {
+  Future<void> _reschedulePost(
+      BuildContext context, SocialAction action) async {
     Navigator.pop(context); // Close the bottom sheet
-    
+
     // Show date picker
     final now = DateTime.now();
     final initialDate = action.options.schedule == 'now'
@@ -608,7 +639,8 @@ class HistoryScreen extends StatelessWidget {
         );
 
         // Save the updated action to Firestore
-        final firestoreService = Provider.of<FirestoreService>(context, listen: false);
+        final firestoreService =
+            Provider.of<FirestoreService>(context, listen: false);
         await firestoreService.updateAction(
           updatedAction.action_id,
           updatedAction.toJson(),
@@ -646,11 +678,12 @@ class HistoryScreen extends StatelessWidget {
 
     if (confirmed == true) {
       Navigator.pop(context); // Close the bottom sheet
-      
+
       // Delete the action from Firestore
-      final firestoreService = Provider.of<FirestoreService>(context, listen: false);
+      final firestoreService =
+          Provider.of<FirestoreService>(context, listen: false);
       await firestoreService.deleteAction(action.action_id);
-      
+
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Post deleted')),
       );

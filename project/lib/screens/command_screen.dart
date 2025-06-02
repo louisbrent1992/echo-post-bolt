@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:record/record.dart';
@@ -24,7 +23,7 @@ class CommandScreen extends StatefulWidget {
 }
 
 class _CommandScreenState extends State<CommandScreen> {
-  final _record = Record();
+  final _record = AudioRecorder();
   RecordingState _recordingState = RecordingState.idle;
   String _transcription = '';
   SocialAction? _currentAction;
@@ -43,9 +42,10 @@ class _CommandScreenState extends State<CommandScreen> {
   }
 
   Future<void> _loadUserPreferences() async {
-    final firestoreService = Provider.of<FirestoreService>(context, listen: false);
+    final firestoreService =
+        Provider.of<FirestoreService>(context, listen: false);
     final prefs = await firestoreService.getUserPreferences();
-    
+
     setState(() {
       _selectedPlatforms = List<String>.from(prefs['default_platforms'] ?? []);
     });
@@ -54,7 +54,7 @@ class _CommandScreenState extends State<CommandScreen> {
   Future<void> _startRecording() async {
     try {
       if (await _record.hasPermission()) {
-        await _record.start();
+        await _record.start(const RecordConfig(), path: '/tmp/recording.m4a');
         setState(() {
           _recordingState = RecordingState.recording;
           _transcription = '';
@@ -91,14 +91,15 @@ class _CommandScreenState extends State<CommandScreen> {
 
       // 2. Generate JSON with ChatGPT
       final actionJson = await _getSocialActionJson(transcription);
-      
+
       // 3. Parse JSON into SocialAction
       final action = SocialAction.fromJson(actionJson);
-      
+
       // 4. Save to Firestore
-      final firestoreService = Provider.of<FirestoreService>(context, listen: false);
+      final firestoreService =
+          Provider.of<FirestoreService>(context, listen: false);
       await firestoreService.saveAction(actionJson);
-      
+
       setState(() {
         _currentAction = action;
         _recordingState = RecordingState.ready;
@@ -116,7 +117,7 @@ class _CommandScreenState extends State<CommandScreen> {
   Future<String> _transcribeWithWhisper(String audioPath) async {
     final url = Uri.parse('https://api.openai.com/v1/audio/transcriptions');
     final apiKey = dotenv.env['OPENAI_API_KEY'];
-    
+
     if (apiKey == null) {
       throw Exception('OPENAI_API_KEY not found in .env file');
     }
@@ -130,19 +131,20 @@ class _CommandScreenState extends State<CommandScreen> {
 
     final response = await request.send();
     final responseBody = await response.stream.bytesToString();
-    
+
     if (response.statusCode != 200) {
       throw Exception('Whisper API error: $responseBody');
     }
-    
+
     final data = jsonDecode(responseBody);
     return data['text'] as String;
   }
 
-  Future<Map<String, dynamic>> _getSocialActionJson(String transcription) async {
+  Future<Map<String, dynamic>> _getSocialActionJson(
+      String transcription) async {
     final url = Uri.parse('https://api.openai.com/v1/chat/completions');
     final apiKey = dotenv.env['OPENAI_API_KEY'];
-    
+
     if (apiKey == null) {
       throw Exception('OPENAI_API_KEY not found in .env file');
     }
@@ -221,7 +223,7 @@ Output: A valid JSON object with keys:
 
     final data = jsonDecode(response.body);
     final content = data['choices'][0]['message']['content'] as String;
-    
+
     try {
       return jsonDecode(content) as Map<String, dynamic>;
     } catch (e) {
@@ -231,7 +233,7 @@ Output: A valid JSON object with keys:
 
   void _navigateToMediaSelection() {
     if (_currentAction == null) return;
-    
+
     Navigator.push(
       context,
       MaterialPageRoute(
@@ -248,7 +250,7 @@ Output: A valid JSON object with keys:
 
   void _navigateToReviewPost() {
     if (_currentAction == null) return;
-    
+
     Navigator.push(
       context,
       MaterialPageRoute(
@@ -313,7 +315,7 @@ Output: A valid JSON object with keys:
               });
             },
           ),
-          
+
           // Transcription preview
           Expanded(
             child: SingleChildScrollView(
@@ -331,7 +333,7 @@ Output: A valid JSON object with keys:
               ),
             ),
           ),
-          
+
           // Mic button
           Padding(
             padding: const EdgeInsets.only(bottom: 32.0),

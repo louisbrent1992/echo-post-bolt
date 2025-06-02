@@ -3,7 +3,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_facebook_auth/flutter_facebook_auth.dart';
 import 'package:google_sign_in/google_sign_in.dart';
-import 'package:twitter_login/twitter_login.dart';
+// import 'package:twitter_login/twitter_login.dart';  // Temporarily disabled
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:tiktok_sdk_v2/tiktok_sdk_v2.dart';
 import 'package:http/http.dart' as http;
@@ -52,7 +52,12 @@ class AuthService extends ChangeNotifier {
   Future<void> signInWithFacebook() async {
     try {
       final LoginResult result = await FacebookAuth.instance.login(
-        permissions: ['email', 'public_profile', 'instagram_basic', 'pages_show_list'],
+        permissions: [
+          'email',
+          'public_profile',
+          'instagram_basic',
+          'pages_show_list'
+        ],
       );
 
       if (result.status == LoginStatus.success) {
@@ -81,8 +86,12 @@ class AuthService extends ChangeNotifier {
     }
   }
 
-  // Sign in with Twitter
+  // Sign in with Twitter - TEMPORARILY DISABLED
   Future<void> signInWithTwitter() async {
+    throw UnimplementedError(
+        'Twitter authentication temporarily disabled due to namespace issues');
+
+    /* COMMENTED OUT UNTIL TWITTER_LOGIN PLUGIN IS FIXED
     try {
       final twitterLogin = TwitterLogin(
         apiKey: dotenv.env['TWITTER_API_KEY']!,
@@ -112,12 +121,17 @@ class AuthService extends ChangeNotifier {
       print('Error signing in with Twitter: $e');
       rethrow;
     }
+    */
   }
 
   // Sign in with TikTok
   Future<void> signInWithTikTok() async {
     try {
-      final tiktokSdk = TiktokSdkV2(
+      // TODO: Fix TikTok SDK integration - class name or API may have changed
+      throw UnimplementedError('TikTok authentication not yet implemented');
+
+      /* 
+      final tiktokSdk = TikTokSDK(  // Changed from TiktokSdkV2
         clientKey: dotenv.env['TIKTOK_CLIENT_KEY']!,
         redirectUri: 'echopost://',
         scope: ['user.info.basic', 'video.upload', 'video.publish'],
@@ -160,6 +174,7 @@ class AuthService extends ChangeNotifier {
       } else {
         throw Exception('TikTok login failed');
       }
+      */
     } catch (e) {
       print('Error signing in with TikTok: $e');
       rethrow;

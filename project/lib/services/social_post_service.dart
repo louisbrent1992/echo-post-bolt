@@ -5,6 +5,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
+import 'package:http_parser/http_parser.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:crypto/crypto.dart';
@@ -81,8 +82,7 @@ class SocialPostService {
     final File file = File(Uri.parse(mediaItem.fileUri).path);
 
     // 2. Build multipart request to /{pageId}/photos with 'source'
-    final uri =
-        Uri.https('graph.facebook.com', '/v17.0/$pageId/photos');
+    final uri = Uri.https('graph.facebook.com', '/v17.0/$pageId/photos');
     final request = http.MultipartRequest('POST', uri)
       ..headers['Authorization'] = 'Bearer $fbToken'
       ..fields['caption'] =
@@ -235,8 +235,7 @@ class SocialPostService {
     final uri = Uri.parse(mediaItem.fileUri);
     final File file = File(uri.path);
 
-    final uploadUri =
-        Uri.https('upload.twitter.com', '/1.1/media/upload.json');
+    final uploadUri = Uri.https('upload.twitter.com', '/1.1/media/upload.json');
     final oauthHeaders = _buildTwitterOAuth1Header(
       url: uploadUri.toString(),
       method: 'POST',
@@ -281,8 +280,8 @@ class SocialPostService {
     required String accessTokenSecret,
   }) {
     final nonce = DateTime.now().millisecondsSinceEpoch.toString();
-    final timestamp = (DateTime.now().millisecondsSinceEpoch ~/ 1000)
-        .toString();
+    final timestamp =
+        (DateTime.now().millisecondsSinceEpoch ~/ 1000).toString();
 
     final oauthParams = {
       'oauth_consumer_key': consumerKey,
@@ -307,11 +306,12 @@ class SocialPostService {
 
     final signingKey =
         '${Uri.encodeComponent(consumerSecret)}&${Uri.encodeComponent(accessTokenSecret)}';
-    
+
     final hmacSha1 = Hmac(sha1, utf8.encode(signingKey));
     final signatureBytes = hmacSha1.convert(utf8.encode(baseString)).bytes;
-    final signature =
-        base64Encode(signatureBytes).replaceAll('+', '%2B').replaceAll('/', '%2F');
+    final signature = base64Encode(signatureBytes)
+        .replaceAll('+', '%2B')
+        .replaceAll('/', '%2F');
 
     final authHeader = 'OAuth ' +
         oauthParams.entries
@@ -404,8 +404,7 @@ class SocialPostService {
     });
   }
 
-  Future<void> _markActionFailed(
-      String actionId, String errorMessage) async {
+  Future<void> _markActionFailed(String actionId, String errorMessage) async {
     final uid = _auth.currentUser!.uid;
     final ref = _firestore
         .collection('users')
@@ -424,15 +423,4 @@ class SocialPostService {
       ]),
     });
   }
-}
-
-// Helper class for HTTP content type
-class MediaType {
-  final String type;
-  final String subtype;
-
-  MediaType(this.type, this.subtype);
-
-  @override
-  String toString() => '$type/$subtype';
 }

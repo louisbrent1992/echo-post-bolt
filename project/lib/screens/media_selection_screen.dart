@@ -1,10 +1,11 @@
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:photo_manager/photo_manager.dart';
 
 import '../models/social_action.dart';
-import '../services/media_search_service.dart';
+import '../services/media_search_service.dart' as media_service;
 import '../services/firestore_service.dart';
 
 class MediaSelectionScreen extends StatefulWidget {
@@ -28,7 +29,7 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
 
   // Filter state
   DateTimeRange? _dateRange;
-  MediaType? _mediaType;
+  media_service.MediaType? _mediaType;
   double _locationRadius = 10.0; // km
 
   @override
@@ -44,10 +45,11 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
     });
 
     try {
-      final mediaSearchService = Provider.of<MediaSearchService>(context, listen: false);
-      
+      final mediaSearchService =
+          Provider.of<media_service.MediaSearchService>(context, listen: false);
+
       // Check if we have an explicit file URI
-      if (widget.action.content.media.isNotEmpty && 
+      if (widget.action.content.media.isNotEmpty &&
           widget.action.content.media.first.fileUri.isNotEmpty) {
         // Show the single media item
         final mediaItem = widget.action.content.media.first;
@@ -70,31 +72,38 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
       // Otherwise search for media based on the query
       if (_mediaQuery != null && _mediaQuery!.isNotEmpty) {
         // Check if we have a cached selection for this query
-        final firestoreService = Provider.of<FirestoreService>(context, listen: false);
-        final cachedAssetId = await firestoreService.getCachedMediaAsset(_mediaQuery!);
-        
+        final firestoreService =
+            Provider.of<FirestoreService>(context, listen: false);
+        final cachedAssetId =
+            await firestoreService.getCachedMediaAsset(_mediaQuery!);
+
         // Find media candidates
-        final candidates = await mediaSearchService.findCandidates(_mediaQuery!);
+        final candidates =
+            await mediaSearchService.findCandidates(_mediaQuery!);
         final candidateMaps = mediaSearchService.getCandidateMaps(candidates);
-        
+
         setState(() {
           _mediaCandidates = candidateMaps;
-          
+
           // If we have a cached selection, pre-select it
           if (cachedAssetId != null) {
-            _selectedMedia = _mediaCandidates.firstWhere(
-              (media) => media['id'] == cachedAssetId,
-              orElse: () => _mediaCandidates.isNotEmpty ? _mediaCandidates.first : null,
-            );
+            try {
+              _selectedMedia = _mediaCandidates.firstWhere(
+                (media) => media['id'] == cachedAssetId,
+              );
+            } catch (e) {
+              _selectedMedia =
+                  _mediaCandidates.isNotEmpty ? _mediaCandidates.first : null;
+            }
           }
-          
+
           _isLoading = false;
         });
       } else {
         // No query, show recent media
         final candidates = await mediaSearchService.findCandidates('recent');
         final candidateMaps = mediaSearchService.getCandidateMaps(candidates);
-        
+
         setState(() {
           _mediaCandidates = candidateMaps;
           _isLoading = false;
@@ -115,8 +124,8 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
     // This is a simplified implementation - in a real app, you'd have a more
     // sophisticated way to extract the media query from the transcription
     final transcription = widget.action.content.text;
-    if (transcription.contains('photo') || 
-        transcription.contains('picture') || 
+    if (transcription.contains('photo') ||
+        transcription.contains('picture') ||
         transcription.contains('image') ||
         transcription.contains('video')) {
       return transcription;
@@ -130,26 +139,28 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
     });
 
     try {
-      final mediaSearchService = Provider.of<MediaSearchService>(context, listen: false);
-      
+      final mediaSearchService =
+          Provider.of<media_service.MediaSearchService>(context, listen: false);
+
       // Build a query string from the filters
       String query = _mediaQuery ?? '';
-      
-      if (_mediaType == MediaType.photo) {
+
+      if (_mediaType == media_service.MediaType.photo) {
         query += ' photo';
-      } else if (_mediaType == MediaType.video) {
+      } else if (_mediaType == media_service.MediaType.video) {
         query += ' video';
       }
-      
+
       if (_dateRange != null) {
         // Add date range to query
-        query += ' from ${_dateRange!.start.toString().split(' ')[0]} to ${_dateRange!.end.toString().split(' ')[0]}';
+        query +=
+            ' from ${_dateRange!.start.toString().split(' ')[0]} to ${_dateRange!.end.toString().split(' ')[0]}';
       }
-      
+
       // Find media candidates with the updated query
       final candidates = await mediaSearchService.findCandidates(query);
       final candidateMaps = mediaSearchService.getCandidateMaps(candidates);
-      
+
       setState(() {
         _mediaCandidates = candidateMaps;
         _selectedMedia = null;
@@ -212,7 +223,8 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
       );
 
       // Save the updated action to Firestore
-      final firestoreService = Provider.of<FirestoreService>(context, listen: false);
+      final firestoreService =
+          Provider.of<FirestoreService>(context, listen: false);
       await firestoreService.updateAction(
         updatedAction.action_id,
         updatedAction.toJson(),
@@ -245,7 +257,8 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
         title: const Text('Select Media'),
         actions: [
           IconButton(
-            icon: Icon(_showFilters ? Icons.filter_list_off : Icons.filter_list),
+            icon:
+                Icon(_showFilters ? Icons.filter_list_off : Icons.filter_list),
             onPressed: () {
               setState(() {
                 _showFilters = !_showFilters;
@@ -281,7 +294,9 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
                               'Searching for: "$_mediaQuery"',
                               style: TextStyle(
                                 fontWeight: FontWeight.bold,
-                                color: Theme.of(context).colorScheme.onSurfaceVariant,
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .onSurfaceVariant,
                               ),
                             ),
                           ),
@@ -289,18 +304,17 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
                       ),
                     ),
                   ),
-                
+
                 // Filters section (collapsible)
-                if (_showFilters)
-                  _buildFiltersSection(),
-                
+                if (_showFilters) _buildFiltersSection(),
+
                 // Single media preview or grid
                 Expanded(
                   child: _selectedMedia != null && _mediaCandidates.isEmpty
                       ? _buildSingleMediaPreview()
                       : _buildMediaGrid(),
                 ),
-                
+
                 // Confirm button
                 SafeArea(
                   child: Padding(
@@ -308,10 +322,13 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
                     child: SizedBox(
                       width: double.infinity,
                       child: ElevatedButton(
-                        onPressed: _selectedMedia != null ? _confirmSelection : null,
+                        onPressed:
+                            _selectedMedia != null ? _confirmSelection : null,
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: Theme.of(context).colorScheme.primary,
-                          foregroundColor: Theme.of(context).colorScheme.onPrimary,
+                          backgroundColor:
+                              Theme.of(context).colorScheme.primary,
+                          foregroundColor:
+                              Theme.of(context).colorScheme.onPrimary,
                           padding: const EdgeInsets.symmetric(vertical: 16),
                         ),
                         child: const Text('Confirm Selection'),
@@ -347,7 +364,7 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
                 ),
           ),
           const SizedBox(height: 16),
-          
+
           // Date range filter
           Row(
             children: [
@@ -369,14 +386,14 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
                     start: now.subtract(const Duration(days: 7)),
                     end: now,
                   );
-                  
+
                   final pickedRange = await showDateRangePicker(
                     context: context,
                     initialDateRange: _dateRange ?? initialDateRange,
                     firstDate: DateTime(2000),
                     lastDate: now,
                   );
-                  
+
                   if (pickedRange != null) {
                     setState(() {
                       _dateRange = pickedRange;
@@ -400,7 +417,7 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
                 ),
             ],
           ),
-          
+
           // Media type filter
           Row(
             children: [
@@ -417,26 +434,28 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
               const SizedBox(width: 8),
               ChoiceChip(
                 label: const Text('Photos'),
-                selected: _mediaType == MediaType.photo,
+                selected: _mediaType == media_service.MediaType.photo,
                 onSelected: (selected) {
                   setState(() {
-                    _mediaType = selected ? MediaType.photo : null;
+                    _mediaType =
+                        selected ? media_service.MediaType.photo : null;
                   });
                 },
               ),
               const SizedBox(width: 8),
               ChoiceChip(
                 label: const Text('Videos'),
-                selected: _mediaType == MediaType.video,
+                selected: _mediaType == media_service.MediaType.video,
                 onSelected: (selected) {
                   setState(() {
-                    _mediaType = selected ? MediaType.video : null;
+                    _mediaType =
+                        selected ? media_service.MediaType.video : null;
                   });
                 },
               ),
             ],
           ),
-          
+
           // Apply filters button
           const SizedBox(height: 16),
           SizedBox(
@@ -454,7 +473,7 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
   Widget _buildSingleMediaPreview() {
     final media = _selectedMedia!;
     final isVideo = media['mime_type'].toString().startsWith('video/');
-    
+
     return Column(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
@@ -541,10 +560,10 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
       itemCount: _mediaCandidates.length,
       itemBuilder: (context, index) {
         final media = _mediaCandidates[index];
-        final isSelected = _selectedMedia != null && 
-                          _selectedMedia!['id'] == media['id'];
+        final isSelected =
+            _selectedMedia != null && _selectedMedia!['id'] == media['id'];
         final isVideo = media['mime_type'].toString().startsWith('video/');
-        
+
         return GestureDetector(
           onTap: () {
             setState(() {
@@ -572,17 +591,18 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
                         ),
                       );
                     }
-                    
+
                     if (snapshot.hasError || !snapshot.hasData) {
                       return Container(
                         color: Theme.of(context).colorScheme.surfaceVariant,
                         child: const Icon(Icons.broken_image),
                       );
                     }
-                    
+
                     final asset = snapshot.data!;
                     return FutureBuilder<Uint8List?>(
-                      future: asset.thumbnailDataWithSize(const ThumbnailSize(200, 200)),
+                      future: asset
+                          .thumbnailDataWithSize(const ThumbnailSize(200, 200)),
                       builder: (context, thumbnailSnapshot) {
                         if (!thumbnailSnapshot.hasData) {
                           return Container(
@@ -591,12 +611,13 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
                               child: SizedBox(
                                 width: 20,
                                 height: 20,
-                                child: CircularProgressIndicator(strokeWidth: 2),
+                                child:
+                                    CircularProgressIndicator(strokeWidth: 2),
                               ),
                             ),
                           );
                         }
-                        
+
                         return Image.memory(
                           thumbnailSnapshot.data!,
                           fit: BoxFit.cover,
@@ -606,7 +627,7 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
                   },
                 ),
               ),
-              
+
               // Video indicator
               if (isVideo)
                 Positioned(
@@ -625,7 +646,7 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
                     ),
                   ),
                 ),
-              
+
               // Date overlay
               Positioned(
                 bottom: 0,
@@ -655,7 +676,7 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
                   ),
                 ),
               ),
-              
+
               // Selection indicator
               if (isSelected)
                 Container(
@@ -717,10 +738,14 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
   String _formatDate(String isoDate) {
     final date = DateTime.parse(isoDate);
     final now = DateTime.now();
-    
-    if (date.year == now.year && date.month == now.month && date.day == now.day) {
+
+    if (date.year == now.year &&
+        date.month == now.month &&
+        date.day == now.day) {
       return 'Today, ${date.hour}:${date.minute.toString().padLeft(2, '0')}';
-    } else if (date.year == now.year && date.month == now.month && date.day == now.day - 1) {
+    } else if (date.year == now.year &&
+        date.month == now.month &&
+        date.day == now.day - 1) {
       return 'Yesterday, ${date.hour}:${date.minute.toString().padLeft(2, '0')}';
     } else {
       return '${date.day}/${date.month}/${date.year}';

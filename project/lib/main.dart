@@ -12,8 +12,19 @@ import 'screens/command_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await dotenv.load(fileName: '.env');
-  await Firebase.initializeApp();
+
+  // Load environment variables from .env.local
+  await dotenv.load(fileName: ".env.local");
+
+  // Try to initialize Firebase - if it fails, continue without it
+  try {
+    await Firebase.initializeApp();
+    print('Firebase initialized successfully');
+  } catch (e) {
+    print('Firebase initialization failed: $e');
+    print('Continuing without Firebase...');
+  }
+
   runApp(const EchoPostApp());
 }
 

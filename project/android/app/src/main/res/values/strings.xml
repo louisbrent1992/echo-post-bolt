@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">EchoPost</string>
-    <string name="facebook_app_id">YOUR_FACEBOOK_APP_ID</string>
-    <string name="facebook_client_token">YOUR_FACEBOOK_CLIENT_TOKEN</string>
+    <!-- Facebook SDK Configuration -->
+    <!-- Replace these with your actual Facebook App ID and Client Token -->
+    <!-- For now, using dummy numeric values to prevent crashes -->
+    <string name="facebook_app_id">1234567890123456</string>
+    <string name="facebook_client_token">fb1234567890abcdef1234567890abcd</string>
 </resources> 
