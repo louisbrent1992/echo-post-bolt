@@ -4,6 +4,7 @@ import 'package:exif/exif.dart';
 import 'dart:io';
 import 'package:path/path.dart' as path;
 import '../utils/date_parser.dart';
+import 'firestore_service.dart';
 
 class LocalMedia {
   final String id;
@@ -38,12 +39,21 @@ class MediaSearchService {
   List<LocalMedia> _mediaIndex = [];
   bool _isInitialized = false;
   final DateParser _dateParser = DateParser();
+  FirestoreService? _firestoreService;
 
-  // Initialize the media index with error handling
-  Future<void> initialize() async {
+  // Set the FirestoreService instance
+  void setFirestoreService(FirestoreService firestoreService) {
+    _firestoreService = firestoreService;
+  }
+
+  // Initialize the media index with error handling and album selection
+  Future<void> initialize({FirestoreService? firestoreService}) async {
     if (_isInitialized) return;
 
     try {
+      // Use provided service or stored one
+      final service = firestoreService ?? _firestoreService;
+
       // Request permission
       final PermissionState permissionState =
           await PhotoManager.requestPermissionExtend();
@@ -62,30 +72,107 @@ class MediaSearchService {
         return;
       }
 
-      // Get the "All Photos" album
-      final allPhotosAlbum = albums.firstWhere(
-        (album) => album.isAll,
-        orElse: () => albums.first,
-      );
+      // Get user-selected album IDs
+      final selectedAlbumIds = await _getUserSelectedAlbumIds(service, albums);
 
-      // Get all assets with limit to prevent crashes
-      final int assetCount = await allPhotosAlbum.assetCountAsync;
-      final int limitedCount = assetCount > 1000
-          ? 1000
-          : assetCount; // Limit to 1000 for performance
+      // Filter albums to only those selected by user
+      final chosenAlbums =
+          albums.where((album) => selectedAlbumIds.contains(album.id)).toList();
 
-      final List<AssetEntity> assets = await allPhotosAlbum.getAssetListRange(
-        start: 0,
-        end: limitedCount,
-      );
+      // If no albums match (shouldn't happen), fallback to "All Photos"
+      final List<AssetPathEntity> albumsToIndex;
+      if (chosenAlbums.isEmpty) {
+        final allPhotosAlbum = albums.firstWhere(
+          (album) => album.isAll,
+          orElse: () => albums.first,
+        );
+        albumsToIndex = [allPhotosAlbum];
+      } else {
+        albumsToIndex = chosenAlbums;
+      }
+
+      // Collect assets from all chosen albums
+      final List<AssetEntity> allAssets = [];
+      for (final album in albumsToIndex) {
+        try {
+          final int assetCount = await album.assetCountAsync;
+          final int limitedCount = assetCount > 1000 ? 1000 : assetCount;
+
+          if (limitedCount > 0) {
+            final List<AssetEntity> albumAssets = await album.getAssetListRange(
+              start: 0,
+              end: limitedCount,
+            );
+            allAssets.addAll(albumAssets);
+          }
+        } catch (e) {
+          // Continue with other albums if one fails
+          continue;
+        }
+      }
+
+      // Remove duplicates (same asset might be in multiple albums)
+      final uniqueAssets = <String, AssetEntity>{};
+      for (final asset in allAssets) {
+        uniqueAssets[asset.id] = asset;
+      }
 
       // Build the media index
-      _mediaIndex = await _buildMediaIndex(assets);
+      _mediaIndex = await _buildMediaIndex(uniqueAssets.values.toList());
       _isInitialized = true;
     } catch (e) {
       _isInitialized = true; // Mark as initialized to prevent retry loops
       _mediaIndex = []; // Use empty index
     }
+  }
+
+  // Get user-selected album IDs with fallback to "All Photos"
+  Future<List<String>> _getUserSelectedAlbumIds(
+      FirestoreService? service, List<AssetPathEntity> albums) async {
+    try {
+      if (service != null) {
+        final selectedIds = await service.getSelectedMediaAlbums();
+        if (selectedIds.isNotEmpty) {
+          return selectedIds;
+        }
+      }
+    } catch (e) {
+      // Continue to fallback
+    }
+
+    // Fallback to "All Photos" album ID
+    try {
+      final allPhotosAlbum = albums.firstWhere(
+        (album) => album.isAll,
+        orElse: () => albums.first,
+      );
+      return [allPhotosAlbum.id];
+    } catch (e) {
+      return [];
+    }
+  }
+
+  // Get all available albums on the device
+  Future<List<AssetPathEntity>> getAvailableAlbums() async {
+    try {
+      final PermissionState permissionState =
+          await PhotoManager.requestPermissionExtend();
+      if (!permissionState.hasAccess) {
+        return [];
+      }
+
+      return await PhotoManager.getAssetPathList(type: RequestType.common);
+    } catch (e) {
+      return [];
+    }
+  }
+
+  // Re-initialize with new album selection
+  Future<void> reinitializeWithAlbums(
+      List<String> albumIds, FirestoreService firestoreService) async {
+    _isInitialized = false;
+    _mediaIndex = [];
+    await initialize(firestoreService: firestoreService);
   }
 
   // Build the media index from asset entities with error handling
@@ -215,20 +302,33 @@ class MediaSearchService {
   // Convert LocalMedia objects to maps for UI
   List<Map<String, dynamic>> getCandidateMaps(List<LocalMedia> candidates) {
     try {
-      return candidates
-          .map((media) => {
-                'id': media.id,
-                'file_uri': media.fileUri,
-                'mime_type': media.mimeType,
-                'creation_time': media.creationDateTime.toIso8601String(),
-                'latitude': media.latitude,
-                'longitude': media.longitude,
-                'width': media.width,
-                'height': media.height,
-                'is_video': media.isVideo,
-                'duration': media.duration,
-              })
-          .toList();
+      return candidates.map((media) {
+        return {
+          'id': media.id,
+          'file_uri': media.fileUri,
+          'mime_type': media.mimeType,
+          'device_metadata': {
+            'creation_time': media.creationDateTime.toIso8601String(),
+            'latitude': media.latitude,
+            'longitude': media.longitude,
+            'orientation': 1, // or extract from EXIF if needed
+            'width': media.width,
+            'height': media.height,
+            'file_size_bytes': media.fileSizeBytes,
+            'duration': media.duration > 0
+                ? media.duration / 1000.0
+                : null, // Convert ms to seconds for video/audio
+            'bitrate': null, // placeholder for future EXIF extraction
+            'sampling_rate': null, // placeholder for audio metadata
+            'frame_rate': null, // placeholder for video metadata
+          },
+          'upload_url': null, // placeholder for CDN upload URL
+          'cdn_key': null, // placeholder for CDN key
+          'caption': null, // placeholder for user to edit
+          'is_video': media.isVideo,
+          'duration': media.duration, // for UI sorting (in milliseconds)
+        };
+      }).toList();
     } catch (e) {
       return [];
     }

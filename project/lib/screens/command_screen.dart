@@ -1,23 +1,23 @@
-import 'dart:convert';
+import 'dart:async';
 import 'dart:io';
+import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:record/record.dart';
 import 'package:http/http.dart' as http;
 import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:record/record.dart';
 import 'package:path_provider/path_provider.dart';
-import 'package:uuid/uuid.dart';
-import 'package:flutter/foundation.dart';
 
 import '../models/social_action.dart';
-import '../services/auth_service.dart';
-import '../services/firestore_service.dart';
-import '../widgets/platform_toggle_row.dart';
+import '../services/ai_service.dart';
 import '../widgets/mic_button.dart';
-import '../widgets/transcription_preview.dart';
+import '../widgets/social_icon.dart';
+import '../widgets/transcription_dialog.dart';
 import '../screens/media_selection_screen.dart';
 import '../screens/review_post_screen.dart';
 import '../screens/history_screen.dart';
+import '../services/firestore_service.dart';
 
 class CommandScreen extends StatefulWidget {
   const CommandScreen({super.key});
@@ -26,204 +26,140 @@ class CommandScreen extends StatefulWidget {
   State<CommandScreen> createState() => _CommandScreenState();
 }
 
-class _CommandScreenState extends State<CommandScreen> {
-  final _record = AudioRecorder();
+class _CommandScreenState extends State<CommandScreen>
+    with TickerProviderStateMixin {
+  final AudioRecorder _record = AudioRecorder();
+
   RecordingState _recordingState = RecordingState.idle;
   String _transcription = '';
   SocialAction? _currentAction;
-  List<String> _selectedPlatforms = [];
+  String? _currentRecordingPath;
+
+  late AnimationController _backgroundController;
+  late Animation<double> _backgroundAnimation;
+
+  Timer? _recordingTimer;
+  int _recordingDuration = 0;
+  final int _maxRecordingDuration = 30; // 30 seconds max
 
   @override
   void initState() {
     super.initState();
-    _loadUserPreferences();
+    _initializeAnimations();
+  }
+
+  void _initializeAnimations() {
+    _backgroundController = AnimationController(
+      duration: const Duration(seconds: 10),
+      vsync: this,
+    );
+
+    _backgroundAnimation = Tween<double>(
+      begin: 0.0,
+      end: 1.0,
+    ).animate(CurvedAnimation(
+      parent: _backgroundController,
+      curve: Curves.easeInOut,
+    ));
+
+    _backgroundController.repeat(reverse: true);
   }
 
   @override
   void dispose() {
+    _backgroundController.dispose();
+    _recordingTimer?.cancel();
     _record.dispose();
     super.dispose();
   }
 
-  Future<void> _loadUserPreferences() async {
-    try {
-      final firestoreService =
-          Provider.of<FirestoreService>(context, listen: false);
-      final prefs = await firestoreService.getUserPreferences();
-
-      if (mounted) {
-        setState(() {
-          _selectedPlatforms = List<String>.from(
-              prefs['default_platforms'] ?? ['instagram', 'twitter']);
-        });
-      }
-    } catch (e) {
-      if (kDebugMode) {
-        print('Error loading user preferences: $e');
-      }
-      // Set default platforms if loading fails
-      if (mounted) {
-        setState(() {
-          _selectedPlatforms = ['instagram', 'twitter'];
-        });
-      }
-    }
-  }
-
   Future<void> _startRecording() async {
-    try {
-      // Check permissions first
-      if (!(await _record.hasPermission())) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text(
-                  'Microphone permission denied. Please grant permission in settings.'),
-              duration: Duration(seconds: 4),
-            ),
-          );
-        }
-        return;
-      }
-
-      // Get proper temp directory for the platform
-      final tempDir = await getTemporaryDirectory();
-      final recordingPath =
-          '${tempDir.path}/recording_${DateTime.now().millisecondsSinceEpoch}.m4a';
-
-      if (kDebugMode) {
-        print('Starting recording to path: $recordingPath');
-      }
-
-      // Start recording with proper configuration
-      await _record.start(
-          const RecordConfig(
-            encoder: AudioEncoder.aacLc,
-            bitRate: 64000,
-            sampleRate: 16000,
-            numChannels: 1,
-          ),
-          path: recordingPath);
-
-      if (mounted) {
-        setState(() {
-          _recordingState = RecordingState.recording;
-          _transcription = '';
-          _currentAction = null;
-        });
-      }
-    } catch (e) {
-      if (kDebugMode) {
-        print('Error starting recording: $e');
-      }
+    if (!await _record.hasPermission()) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to start recording: ${e.toString()}')),
+          const SnackBar(content: Text('Microphone permission is required')),
+        );
+      }
+      return;
+    }
+
+    try {
+      setState(() {
+        _recordingState = RecordingState.recording;
+      });
+
+      final tempDir = await getTemporaryDirectory();
+      final m4aPath =
+          '${tempDir.path}/recording_${DateTime.now().millisecondsSinceEpoch}.m4a';
+
+      await _record.start(
+        const RecordConfig(
+          encoder: AudioEncoder.aacLc,
+          bitRate: 64000,
+          sampleRate: 16000,
+          numChannels: 1,
+        ),
+        path: m4aPath,
+      );
+
+      _currentRecordingPath = m4aPath;
+      _startRecordingTimer();
+    } catch (e) {
+      setState(() {
+        _recordingState = RecordingState.idle;
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to start recording: $e')),
         );
       }
     }
   }
 
   Future<void> _stopRecording() async {
+    if (_recordingState != RecordingState.recording) return;
+
     try {
-      final path = await _record.stop();
-      if (path == null || path.isEmpty) {
-        throw Exception('Recording failed: no file path returned');
-      }
+      await _record.stop();
+      _stopRecordingTimer();
 
-      // Verify file exists
-      final file = File(path);
-      if (!await file.exists()) {
-        throw Exception('Recording file does not exist at path: $path');
-      }
+      setState(() {
+        _recordingState = RecordingState.processing;
+      });
 
-      if (kDebugMode) {
-        print('Recording stopped, file saved to: $path');
-        print('File size: ${await file.length()} bytes');
+      if (_currentRecordingPath != null) {
+        final transcription =
+            await _transcribeWithWhisper(_currentRecordingPath!);
+        await _processTranscription(transcription);
       }
-
-      if (mounted) {
-        setState(() {
-          _recordingState = RecordingState.processing;
-        });
-      }
-
-      // Process the recording
-      await _processRecording(path);
     } catch (e) {
-      if (kDebugMode) {
-        print('Error stopping recording: $e');
-      }
+      setState(() {
+        _recordingState = RecordingState.idle;
+      });
       if (mounted) {
-        setState(() {
-          _recordingState = RecordingState.idle;
-        });
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Recording failed: ${e.toString()}')),
+          SnackBar(content: Text('Failed to process recording: $e')),
         );
       }
     }
   }
 
-  Future<void> _processRecording(String audioPath) async {
-    try {
-      // Get service reference before async operations
-      final firestoreService =
-          Provider.of<FirestoreService>(context, listen: false);
+  void _startRecordingTimer() {
+    _recordingDuration = 0;
+    _recordingTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      setState(() {
+        _recordingDuration++;
+      });
 
-      // 1. Transcribe with Whisper
-      final transcription = await _transcribeWithWhisper(audioPath);
-
-      if (mounted) {
-        setState(() {
-          _transcription = transcription;
-        });
+      if (_recordingDuration >= _maxRecordingDuration) {
+        _stopRecording();
       }
+    });
+  }
 
-      if (transcription.trim().isEmpty) {
-        throw Exception('No speech detected in recording');
-      }
-
-      // 2. Generate simplified action JSON
-      final actionJson = await _generateSimpleAction(transcription);
-
-      // 3. Parse JSON into SocialAction
-      final action = SocialAction.fromJson(actionJson);
-
-      // 4. Save to Firestore
-      await firestoreService.saveAction(actionJson);
-
-      if (mounted) {
-        setState(() {
-          _currentAction = action;
-          _recordingState = RecordingState.ready;
-        });
-      }
-
-      // Clean up the audio file
-      try {
-        await File(audioPath).delete();
-      } catch (e) {
-        if (kDebugMode) {
-          print('Warning: Could not delete audio file: $e');
-        }
-      }
-    } catch (e) {
-      if (kDebugMode) {
-        print('Error processing recording: $e');
-      }
-      if (mounted) {
-        setState(() {
-          _recordingState = RecordingState.idle;
-        });
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Processing failed: ${e.toString()}'),
-            duration: const Duration(seconds: 5),
-          ),
-        );
-      }
-    }
+  void _stopRecordingTimer() {
+    _recordingTimer?.cancel();
+    _recordingTimer = null;
   }
 
   Future<String> _transcribeWithWhisper(String audioPath) async {
@@ -247,181 +183,305 @@ class _CommandScreenState extends State<CommandScreen> {
       final responseBody = await response.stream.bytesToString();
 
       if (response.statusCode != 200) {
-        throw Exception(
-            'Whisper API error (${response.statusCode}): $responseBody');
+        throw Exception('Whisper API error: $responseBody');
       }
 
-      final data = jsonDecode(responseBody);
-      final text = data['text'] as String? ?? '';
+      // Parse JSON response
+      final jsonResponse = Map<String, dynamic>.from(json.decode(responseBody));
 
-      if (kDebugMode) {
-        print('Transcription successful: "$text"');
+      // Clean up the M4A file
+      try {
+        await File(audioPath).delete();
+      } catch (e) {
+        if (kDebugMode) {
+          print('Warning: Could not delete .m4a recording: $e');
+        }
       }
-      return text.trim();
+
+      return jsonResponse['text'] ?? '';
     } catch (e) {
-      throw Exception('Transcription failed: $e');
+      // Clean up the M4A file even on error
+      try {
+        await File(audioPath).delete();
+      } catch (_) {}
+
+      throw Exception('Failed to transcribe audio: $e');
     }
   }
 
-  // Simplified action generation to avoid complex JSON parsing issues
-  Future<Map<String, dynamic>> _generateSimpleAction(
-      String transcription) async {
-    const uuid = Uuid();
-    final now = DateTime.now();
+  Future<void> _processTranscription(String transcription) async {
+    try {
+      if (!mounted) return;
 
-    // Create a simple, reliable action structure
-    return {
-      'action_id': uuid.v4(),
-      'created_at': now.toIso8601String(),
-      'platforms': _selectedPlatforms,
-      'content': {
-        'text': transcription,
-        'hashtags': <String>[],
-        'mentions': <String>[],
-        'link': null,
-        'media': <Map<String, dynamic>>[],
-      },
-      'options': {
-        'schedule': 'now',
-        'location_tag': null,
-        'visibility': <String, String?>{},
-        'reply_to_post_id': <String, String?>{},
-      },
-      'platform_data': {
-        'facebook': null,
-        'instagram': null,
-        'twitter': null,
-        'tiktok': null,
-      },
-      'internal': {
-        'retry_count': 0,
-        'user_preferences': {
-          'default_platforms': _selectedPlatforms,
-          'default_hashtags': <String>[],
-        },
-        'media_index_id': null,
-        'ui_flags': {
-          'is_editing_caption': false,
-          'is_media_preview_open': false,
-        },
-      },
-    };
+      final aiService = Provider.of<AIService>(context, listen: false);
+      final firestoreService =
+          Provider.of<FirestoreService>(context, listen: false);
+
+      final action = await aiService.processVoiceCommand(transcription);
+
+      // Save the action to Firestore
+      await firestoreService.saveAction(action.toJson());
+
+      if (mounted) {
+        setState(() {
+          _transcription = transcription;
+          _currentAction = action;
+          _recordingState = RecordingState.ready;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _recordingState = RecordingState.idle;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to process transcription: $e')),
+        );
+      }
+    }
   }
 
-  void _navigateToMediaSelection() {
+  void _togglePlatform(String platform) {
     if (_currentAction == null) return;
 
-    Navigator.push(
+    final updatedPlatforms = List<String>.from(_currentAction!.platforms);
+    if (updatedPlatforms.contains(platform)) {
+      updatedPlatforms.remove(platform);
+    } else {
+      updatedPlatforms.add(platform);
+    }
+
+    setState(() {
+      _currentAction = SocialAction(
+        actionId: _currentAction!.actionId,
+        createdAt: _currentAction!.createdAt,
+        platforms: updatedPlatforms,
+        content: _currentAction!.content,
+        options: _currentAction!.options,
+        platformData: _currentAction!.platformData,
+        internal: _currentAction!.internal,
+        mediaQuery: _currentAction!.mediaQuery,
+      );
+    });
+  }
+
+  Future<void> _navigateToMediaSelection() async {
+    if (_currentAction == null) return;
+
+    final updatedAction = await Navigator.push<SocialAction>(
       context,
       MaterialPageRoute(
         builder: (context) => MediaSelectionScreen(action: _currentAction!),
       ),
-    ).then((updatedAction) {
-      if (updatedAction != null && mounted) {
-        setState(() {
-          _currentAction = updatedAction as SocialAction;
-        });
-      }
-    });
+    );
+
+    if (updatedAction != null) {
+      setState(() {
+        _currentAction = updatedAction;
+      });
+    }
   }
 
-  void _navigateToReviewPost() {
+  Future<void> _navigateToReviewPost() async {
     if (_currentAction == null) return;
 
-    Navigator.push(
+    final result = await Navigator.push(
       context,
       MaterialPageRoute(
         builder: (context) => ReviewPostScreen(action: _currentAction!),
       ),
     );
+
+    if (result == true) {
+      // Post was successfully published, reset the state
+      setState(() {
+        _transcription = '';
+        _currentAction = null;
+        _recordingState = RecordingState.idle;
+      });
+    }
   }
+
+  void _navigateToHistory() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => const HistoryScreen(),
+      ),
+    );
+  }
+
+  bool get _hasMedia => _currentAction?.content.media.isNotEmpty ?? false;
+  bool get _isJsonReady =>
+      _currentAction != null && _recordingState == RecordingState.ready;
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('EchoPost'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.history),
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => const HistoryScreen(),
-                ),
-              );
-            },
-          ),
-          IconButton(
-            icon: const Icon(Icons.account_circle),
-            onPressed: () {
-              // Show user profile or sign out dialog
-              showDialog(
-                context: context,
-                builder: (context) => AlertDialog(
-                  title: const Text('Sign Out'),
-                  content: const Text('Are you sure you want to sign out?'),
-                  actions: [
-                    TextButton(
-                      onPressed: () => Navigator.pop(context),
-                      child: const Text('CANCEL'),
-                    ),
-                    TextButton(
-                      onPressed: () {
-                        context.read<AuthService>().signOut();
-                        Navigator.pop(context);
-                      },
-                      child: const Text('SIGN OUT'),
-                    ),
-                  ],
-                ),
-              );
-            },
-          ),
-        ],
-      ),
-      body: Column(
-        children: [
-          // Platform toggle row
-          PlatformToggleRow(
-            selectedPlatforms: _selectedPlatforms,
-            onPlatformsChanged: (platforms) {
-              setState(() {
-                _selectedPlatforms = platforms;
-              });
-            },
-          ),
-
-          // Transcription preview
-          Expanded(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Column(
+      body: AnimatedBuilder(
+        animation: _backgroundAnimation,
+        builder: (context, child) {
+          return Container(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [
+                  Colors.black,
+                  Color.lerp(
+                    const Color(0xFF1A1A1A),
+                    const Color(0xFF2A1A2A),
+                    _backgroundAnimation.value * 0.3,
+                  )!,
+                ],
+              ),
+            ),
+            child: SafeArea(
+              child: Stack(
                 children: [
-                  TranscriptionPreview(
-                    transcription: _transcription,
-                    isJsonReady: _currentAction != null,
-                    hasMedia: _currentAction?.content.media.isNotEmpty ?? false,
-                    onReviewMedia: _navigateToMediaSelection,
-                    onPostNow: _navigateToReviewPost,
+                  // Background floating particles effect
+                  _buildFloatingParticles(),
+
+                  // Main content
+                  _buildMainContent(),
+
+                  // History button (top-right)
+                  Positioned(
+                    top: 16,
+                    right: 16,
+                    child: IconButton(
+                      onPressed: _navigateToHistory,
+                      icon: const Icon(
+                        Icons.history,
+                        color: Colors.white,
+                        size: 28,
+                      ),
+                    ),
                   ),
                 ],
               ),
             ),
-          ),
-
-          // Mic button
-          Padding(
-            padding: const EdgeInsets.only(bottom: 32.0),
-            child: MicButton(
-              state: _recordingState,
-              onRecordStart: _startRecording,
-              onRecordStop: _stopRecording,
-            ),
-          ),
-        ],
+          );
+        },
       ),
     );
   }
+
+  Widget _buildFloatingParticles() {
+    return Positioned.fill(
+      child: AnimatedBuilder(
+        animation: _backgroundAnimation,
+        builder: (context, child) {
+          return CustomPaint(
+            painter: ParticlesPainter(_backgroundAnimation.value),
+            size: Size.infinite,
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildMainContent() {
+    return Column(
+      children: [
+        // Top section - Social Icons
+        Container(
+          height: 120,
+          alignment: Alignment.bottomCenter,
+          padding: const EdgeInsets.symmetric(horizontal: 40),
+          child: SocialIconsRow(
+            selectedPlatforms: _currentAction?.platforms ?? [],
+            onPlatformToggle: _togglePlatform,
+          ),
+        ),
+
+        // Middle section - Dialog
+        Expanded(
+          child: Center(
+            child: TranscriptionDialog(
+              transcription: _transcription,
+              isJsonReady: _isJsonReady,
+              hasMedia: _hasMedia,
+              onReviewMedia: _navigateToMediaSelection,
+              onPostNow: _navigateToReviewPost,
+            ),
+          ),
+        ),
+
+        // Bottom section - Microphone (fixed positioning with safe area)
+        SafeArea(
+          minimum: const EdgeInsets.only(bottom: 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Recording timer
+              if (_recordingState == RecordingState.recording)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 16),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 8,
+                    ),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFF0080).withValues(alpha: 0.2),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(
+                        color: const Color(0xFFFF0080),
+                        width: 1,
+                      ),
+                    ),
+                    child: Text(
+                      '${_maxRecordingDuration - _recordingDuration}s',
+                      style: const TextStyle(
+                        color: Color(0xFFFF0080),
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16,
+                      ),
+                    ),
+                  ),
+                ),
+
+              // Microphone button with fixed center position
+              SizedBox(
+                height: 140, // Fixed height to contain the button and ripple
+                child: Center(
+                  child: MicButton(
+                    state: _recordingState,
+                    onRecordStart: _startRecording,
+                    onRecordStop: _stopRecording,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class ParticlesPainter extends CustomPainter {
+  final double animationValue;
+
+  ParticlesPainter(this.animationValue);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = const Color(0xFFFF0080).withValues(alpha: 0.1);
+
+    final particleCount = 15;
+    for (int i = 0; i < particleCount; i++) {
+      final x = (size.width / particleCount) * i;
+      final y = size.height * 0.3 +
+          (size.height * 0.4 * ((animationValue + i * 0.1) % 1.0));
+
+      final radius = 2.0 + (animationValue * 3.0);
+      canvas.drawCircle(Offset(x, y), radius, paint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => true;
 }

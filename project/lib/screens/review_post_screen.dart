@@ -2,12 +2,90 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
+import 'package:video_player/video_player.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../models/social_action.dart';
 import '../services/auth_service.dart';
 import '../services/firestore_service.dart';
 import '../services/social_post_service.dart';
 import '../screens/history_screen.dart';
+
+class VideoPlayerWidget extends StatefulWidget {
+  final String fileUri;
+  const VideoPlayerWidget({required this.fileUri, Key? key}) : super(key: key);
+
+  @override
+  State<VideoPlayerWidget> createState() => _VideoPlayerWidgetState();
+}
+
+class _VideoPlayerWidgetState extends State<VideoPlayerWidget> {
+  late VideoPlayerController _controller;
+  bool _isInitialized = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _initializeVideo();
+  }
+
+  Future<void> _initializeVideo() async {
+    try {
+      _controller =
+          VideoPlayerController.file(File(Uri.parse(widget.fileUri).path))
+            ..initialize().then((_) {
+              if (mounted) {
+                setState(() {
+                  _isInitialized = true;
+                });
+              }
+            });
+    } catch (e) {
+      print('Error initializing video: $e');
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_isInitialized) {
+      return const Center(
+        child: CircularProgressIndicator(),
+      );
+    }
+
+    return Stack(
+      alignment: Alignment.center,
+      children: [
+        AspectRatio(
+          aspectRatio: _controller.value.aspectRatio,
+          child: VideoPlayer(_controller),
+        ),
+        IconButton(
+          onPressed: () {
+            setState(() {
+              if (_controller.value.isPlaying) {
+                _controller.pause();
+              } else {
+                _controller.play();
+              }
+            });
+          },
+          icon: Icon(
+            _controller.value.isPlaying ? Icons.pause : Icons.play_arrow,
+            color: Colors.white,
+            size: 50,
+          ),
+        ),
+      ],
+    );
+  }
+}
 
 class ReviewPostScreen extends StatefulWidget {
   final SocialAction action;
@@ -41,7 +119,6 @@ class _ReviewPostScreenState extends State<ReviewPostScreen> {
   }
 
   Future<void> _editCaption() async {
-    // Get service reference before async operations
     final firestoreService =
         Provider.of<FirestoreService>(context, listen: false);
 
@@ -72,7 +149,6 @@ class _ReviewPostScreenState extends State<ReviewPostScreen> {
     );
 
     if (result != null) {
-      // Update the action with the new caption
       final updatedAction = SocialAction(
         actionId: _action.actionId,
         createdAt: _action.createdAt,
@@ -89,7 +165,6 @@ class _ReviewPostScreenState extends State<ReviewPostScreen> {
         internal: _action.internal,
       );
 
-      // Save the updated action to Firestore
       await firestoreService.updateAction(
         updatedAction.actionId,
         updatedAction.toJson(),
@@ -105,7 +180,6 @@ class _ReviewPostScreenState extends State<ReviewPostScreen> {
   }
 
   Future<void> _editSchedule() async {
-    // Get service reference before async operations
     final firestoreService =
         Provider.of<FirestoreService>(context, listen: false);
 
@@ -136,7 +210,6 @@ class _ReviewPostScreenState extends State<ReviewPostScreen> {
           pickedTime.minute,
         );
 
-        // Update the action with the new schedule
         final updatedAction = SocialAction(
           actionId: _action.actionId,
           createdAt: _action.createdAt,
@@ -152,7 +225,6 @@ class _ReviewPostScreenState extends State<ReviewPostScreen> {
           internal: _action.internal,
         );
 
-        // Save the updated action to Firestore
         await firestoreService.updateAction(
           updatedAction.actionId,
           updatedAction.toJson(),
@@ -168,7 +240,6 @@ class _ReviewPostScreenState extends State<ReviewPostScreen> {
   }
 
   Future<void> _confirmAndPost() async {
-    // Get service reference before async operations
     final socialPostService =
         Provider.of<SocialPostService>(context, listen: false);
 
@@ -185,7 +256,6 @@ class _ReviewPostScreenState extends State<ReviewPostScreen> {
         _isPosting = false;
       });
 
-      // Show results dialog
       if (mounted) {
         await showDialog(
           context: context,
@@ -229,7 +299,6 @@ class _ReviewPostScreenState extends State<ReviewPostScreen> {
                 onPressed: () {
                   Navigator.pop(context);
                   if (_postResults.values.every((success) => success)) {
-                    // All posts succeeded, navigate to history screen
                     Navigator.pushAndRemoveUntil(
                       context,
                       MaterialPageRoute(
@@ -258,7 +327,6 @@ class _ReviewPostScreenState extends State<ReviewPostScreen> {
   }
 
   Future<void> _cancelPost() async {
-    // Get service and Navigator references before async operations
     final firestoreService =
         Provider.of<FirestoreService>(context, listen: false);
     final navigator = Navigator.of(context);
@@ -282,10 +350,7 @@ class _ReviewPostScreenState extends State<ReviewPostScreen> {
     );
 
     if (confirmed == true) {
-      // Delete the action from Firestore
       await firestoreService.deleteAction(_action.actionId);
-
-      // Pop back to the command screen
       if (mounted) {
         navigator.pop();
       }
@@ -305,23 +370,16 @@ class _ReviewPostScreenState extends State<ReviewPostScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // Platform list
                   _buildPlatformList(),
                   const SizedBox(height: 24),
-
-                  // Caption
                   _buildCaptionSection(),
                   const SizedBox(height: 24),
-
-                  // Media preview
-                  if (_action.content.media.isNotEmpty) _buildMediaPreview(),
+                  if (_action.content.link != null) _buildLinkPreview(),
+                  if (_action.content.link != null) const SizedBox(height: 24),
+                  _buildMediaPreview(),
                   const SizedBox(height: 24),
-
-                  // Schedule
                   _buildScheduleSection(),
                   const SizedBox(height: 32),
-
-                  // Action buttons
                   _buildActionButtons(),
                 ],
               ),
@@ -390,55 +448,6 @@ class _ReviewPostScreenState extends State<ReviewPostScreen> {
                             ? _getPlatformColor(platform)
                             : Theme.of(context).colorScheme.outline,
                       ),
-                      deleteIcon: isConnected
-                          ? null
-                          : const Icon(Icons.link_off, size: 16),
-                      onDeleted: isConnected
-                          ? null
-                          : () {
-                              // Show connect dialog
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(
-                                  content:
-                                      Text('Please connect to $platform first'),
-                                  action: SnackBarAction(
-                                    label: 'CONNECT',
-                                    onPressed: () async {
-                                      // Get messenger reference before async operations
-                                      final scaffoldMessenger =
-                                          ScaffoldMessenger.of(context);
-
-                                      try {
-                                        switch (platform) {
-                                          case 'facebook':
-                                            await authService
-                                                .signInWithFacebook();
-                                            break;
-                                          case 'twitter':
-                                            await authService
-                                                .signInWithTwitter();
-                                            break;
-                                          case 'tiktok':
-                                            await authService
-                                                .signInWithTikTok();
-                                            break;
-                                        }
-                                        // Refresh the UI
-                                        if (mounted) {
-                                          setState(() {});
-                                        }
-                                      } catch (e) {
-                                        scaffoldMessenger.showSnackBar(
-                                          SnackBar(
-                                              content: Text(
-                                                  'Failed to connect: $e')),
-                                        );
-                                      }
-                                    },
-                                  ),
-                                ),
-                              );
-                            },
                     );
                   },
                 );
@@ -453,6 +462,7 @@ class _ReviewPostScreenState extends State<ReviewPostScreen> {
   Widget _buildCaptionSection() {
     final caption = _action.content.text;
     final hashtags = _action.content.hashtags;
+    final mentions = _action.content.mentions;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -511,6 +521,120 @@ class _ReviewPostScreenState extends State<ReviewPostScreen> {
                   }).toList(),
                 ),
               ],
+              if (mentions.isNotEmpty) ...[
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 4,
+                  children: mentions.map((mention) {
+                    return Chip(
+                      label: Text(
+                        '@$mention',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Theme.of(context).colorScheme.secondary,
+                        ),
+                      ),
+                      backgroundColor: Theme.of(context)
+                          .colorScheme
+                          .secondary
+                          .withValues(alpha: 0.1),
+                      padding: EdgeInsets.zero,
+                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    );
+                  }).toList(),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildLinkPreview() {
+    final link = _action.content.link!;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Link Preview',
+          style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.bold,
+              ),
+        ),
+        const SizedBox(height: 8),
+        Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: Theme.of(context)
+                .colorScheme
+                .surfaceContainerHighest
+                .withValues(alpha: 0.5),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(
+              color:
+                  Theme.of(context).colorScheme.outline.withValues(alpha: 0.5),
+            ),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              GestureDetector(
+                onTap: () async {
+                  final uri = Uri.parse(link.url);
+                  if (await canLaunchUrl(uri)) {
+                    await launchUrl(uri);
+                  }
+                },
+                child: Text(
+                  link.url,
+                  style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                        color: Theme.of(context).colorScheme.primary,
+                        decoration: TextDecoration.underline,
+                      ),
+                ),
+              ),
+              if (link.title != null) ...[
+                const SizedBox(height: 8),
+                Text(
+                  link.title!,
+                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
+                ),
+              ],
+              if (link.description != null) ...[
+                const SizedBox(height: 4),
+                Text(
+                  link.description!,
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
+                ),
+              ],
+              if (link.thumbnailUrl != null) ...[
+                const SizedBox(height: 8),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(4),
+                  child: Image.network(
+                    link.thumbnailUrl!,
+                    height: 100,
+                    width: double.infinity,
+                    fit: BoxFit.cover,
+                    errorBuilder: (context, error, stackTrace) {
+                      return Container(
+                        height: 100,
+                        color: Theme.of(context)
+                            .colorScheme
+                            .surfaceContainerHighest,
+                        child: const Center(
+                          child: Icon(Icons.broken_image),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ],
             ],
           ),
         ),
@@ -519,6 +643,10 @@ class _ReviewPostScreenState extends State<ReviewPostScreen> {
   }
 
   Widget _buildMediaPreview() {
+    if (_action.content.media.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
     final mediaItem = _action.content.media.first;
     final isVideo = mediaItem.mimeType.startsWith('video/');
 
@@ -534,15 +662,19 @@ class _ReviewPostScreenState extends State<ReviewPostScreen> {
         const SizedBox(height: 8),
         ClipRRect(
           borderRadius: BorderRadius.circular(12),
-          child: Image.file(
-            File(Uri.parse(mediaItem.fileUri).path),
-            fit: BoxFit.cover,
-            width: double.infinity,
-            height: 300,
-          ),
+          child: isVideo
+              ? AspectRatio(
+                  aspectRatio: 16 / 9,
+                  child: VideoPlayerWidget(fileUri: mediaItem.fileUri),
+                )
+              : Image.file(
+                  File(Uri.parse(mediaItem.fileUri).path),
+                  fit: BoxFit.cover,
+                  width: double.infinity,
+                  height: 300,
+                ),
         ),
         const SizedBox(height: 8),
-        // Media metadata
         Container(
           padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
@@ -572,7 +704,12 @@ class _ReviewPostScreenState extends State<ReviewPostScreen> {
               if (isVideo)
                 _buildMetadataRow(
                   Icons.videocam,
-                  'Video',
+                  'Video (${(mediaItem.deviceMetadata.duration ?? 0).toStringAsFixed(1)}s)',
+                )
+              else
+                _buildMetadataRow(
+                  Icons.image,
+                  'Image',
                 ),
             ],
           ),

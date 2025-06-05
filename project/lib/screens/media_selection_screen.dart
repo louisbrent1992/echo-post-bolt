@@ -10,10 +10,12 @@ import '../services/firestore_service.dart';
 
 class MediaSelectionScreen extends StatefulWidget {
   final SocialAction action;
+  final List<media_service.LocalMedia>? candidates;
 
   const MediaSelectionScreen({
     super.key,
     required this.action,
+    this.candidates,
   });
 
   @override
@@ -64,6 +66,17 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
             'width': mediaItem.deviceMetadata.width,
             'height': mediaItem.deviceMetadata.height,
           };
+          _isLoading = false;
+        });
+        return;
+      }
+
+      // If candidates are provided, use them directly
+      if (widget.candidates != null) {
+        final candidateMaps =
+            mediaSearchService.getCandidateMaps(widget.candidates!);
+        setState(() {
+          _mediaCandidates = candidateMaps;
           _isLoading = false;
         });
         return;
@@ -122,9 +135,13 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
   }
 
   String? _extractMediaQuery() {
-    // Extract media query from the action
-    // This is a simplified implementation - in a real app, you'd have a more
-    // sophisticated way to extract the media query from the transcription
+    // First try to use the mediaQuery field from the action
+    if (widget.action.mediaQuery != null &&
+        widget.action.mediaQuery!.isNotEmpty) {
+      return widget.action.mediaQuery;
+    }
+
+    // Fallback to extracting from the transcription text
     final transcription = widget.action.content.text;
     if (transcription.contains('photo') ||
         transcription.contains('picture') ||
@@ -132,6 +149,7 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
         transcription.contains('video')) {
       return transcription;
     }
+
     return null;
   }
 
@@ -194,17 +212,24 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
       });
 
       // Create a new MediaItem from the selected media
+      final deviceMetadata =
+          _selectedMedia!['device_metadata'] as Map<String, dynamic>? ?? {};
       final mediaItem = MediaItem(
         fileUri: _selectedMedia!['file_uri'],
         mimeType: _selectedMedia!['mime_type'],
         deviceMetadata: DeviceMetadata(
-          creationTime: _selectedMedia!['creation_time'],
-          latitude: _selectedMedia!['latitude'],
-          longitude: _selectedMedia!['longitude'],
-          orientation: 1, // Default orientation
-          width: _selectedMedia!['width'],
-          height: _selectedMedia!['height'],
-          fileSizeBytes: 0, // We'll update this later if needed
+          creationTime: deviceMetadata['creation_time'] ??
+              DateTime.now().toIso8601String(),
+          latitude: deviceMetadata['latitude']?.toDouble(),
+          longitude: deviceMetadata['longitude']?.toDouble(),
+          orientation: deviceMetadata['orientation'] ?? 1,
+          width: deviceMetadata['width'] ?? 0,
+          height: deviceMetadata['height'] ?? 0,
+          fileSizeBytes: deviceMetadata['file_size_bytes'] ?? 0,
+          duration: deviceMetadata['duration']?.toDouble(),
+          bitrate: deviceMetadata['bitrate']?.toInt(),
+          samplingRate: deviceMetadata['sampling_rate']?.toInt(),
+          frameRate: deviceMetadata['frame_rate']?.toDouble(),
         ),
         caption: null,
       );
@@ -224,6 +249,7 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
         options: widget.action.options,
         platformData: widget.action.platformData,
         internal: widget.action.internal,
+        mediaQuery: widget.action.mediaQuery,
       );
 
       // Save the updated action to Firestore
@@ -514,16 +540,17 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
             children: [
               _buildMetadataRow(
                 Icons.calendar_today,
-                'Created: ${_formatDate(media['creation_time'])}',
+                'Created: ${_formatDate(media['device_metadata']?['creation_time'] as String?)}',
               ),
-              if (media['latitude'] != null && media['longitude'] != null)
+              if (media['device_metadata']?['latitude'] != null &&
+                  media['device_metadata']?['longitude'] != null)
                 _buildMetadataRow(
                   Icons.location_on,
-                  'Location: ${media['latitude'].toStringAsFixed(4)}, ${media['longitude'].toStringAsFixed(4)}',
+                  'Location: ${media['device_metadata']!['latitude'].toStringAsFixed(4)}, ${media['device_metadata']!['longitude'].toStringAsFixed(4)}',
                 ),
               _buildMetadataRow(
                 Icons.aspect_ratio,
-                'Dimensions: ${media['width']} × ${media['height']}',
+                'Dimensions: ${media['device_metadata']?['width'] ?? 'Unknown'} × ${media['device_metadata']?['height'] ?? 'Unknown'}',
               ),
             ],
           ),
@@ -572,7 +599,8 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
         final media = _mediaCandidates[index];
         final isSelected =
             _selectedMedia != null && _selectedMedia!['id'] == media['id'];
-        final isVideo = media['mime_type'].toString().startsWith('video/');
+        final isVideo =
+            (media['mime_type']?.toString() ?? '').startsWith('video/');
 
         return GestureDetector(
           onTap: () {
@@ -587,7 +615,9 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
               ClipRRect(
                 borderRadius: BorderRadius.circular(8),
                 child: FutureBuilder<AssetEntity?>(
-                  future: AssetEntity.fromId(media['id']),
+                  future: media['id'] != null
+                      ? AssetEntity.fromId(media['id'])
+                      : Future.value(null),
                   builder: (context, snapshot) {
                     if (snapshot.connectionState == ConnectionState.waiting) {
                       return Container(
@@ -681,7 +711,8 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
                     ),
                   ),
                   child: Text(
-                    _formatDate(media['creation_time']),
+                    _formatDate(
+                        media['device_metadata']?['creation_time'] as String?),
                     style: const TextStyle(
                       color: Colors.white,
                       fontSize: 10,
@@ -751,20 +782,28 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
     );
   }
 
-  String _formatDate(String isoDate) {
-    final date = DateTime.parse(isoDate);
-    final now = DateTime.now();
+  String _formatDate(String? isoDate) {
+    if (isoDate == null) {
+      return 'Unknown date';
+    }
 
-    if (date.year == now.year &&
-        date.month == now.month &&
-        date.day == now.day) {
-      return 'Today, ${date.hour}:${date.minute.toString().padLeft(2, '0')}';
-    } else if (date.year == now.year &&
-        date.month == now.month &&
-        date.day == now.day - 1) {
-      return 'Yesterday, ${date.hour}:${date.minute.toString().padLeft(2, '0')}';
-    } else {
-      return '${date.day}/${date.month}/${date.year}';
+    try {
+      final date = DateTime.parse(isoDate);
+      final now = DateTime.now();
+
+      if (date.year == now.year &&
+          date.month == now.month &&
+          date.day == now.day) {
+        return 'Today, ${date.hour}:${date.minute.toString().padLeft(2, '0')}';
+      } else if (date.year == now.year &&
+          date.month == now.month &&
+          date.day == now.day - 1) {
+        return 'Yesterday, ${date.hour}:${date.minute.toString().padLeft(2, '0')}';
+      } else {
+        return '${date.day}/${date.month}/${date.year}';
+      }
+    } catch (e) {
+      return 'Invalid date';
     }
   }
 }

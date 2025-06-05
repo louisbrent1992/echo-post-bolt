@@ -8,6 +8,7 @@ import 'services/auth_service.dart';
 import 'services/firestore_service.dart';
 import 'services/media_search_service.dart';
 import 'services/social_post_service.dart';
+import 'services/ai_service.dart';
 import 'screens/login_screen.dart';
 import 'screens/command_screen.dart';
 
@@ -44,6 +45,7 @@ class EchoPostApp extends StatelessWidget {
         Provider(create: (_) => FirestoreService()),
         Provider(create: (_) => SocialPostService()),
         Provider(create: (_) => MediaSearchService()),
+        Provider(create: (_) => AIService()),
       ],
       child: MaterialApp(
         title: 'EchoPost',

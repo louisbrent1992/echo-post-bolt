@@ -64,6 +64,31 @@ class FirestoreService {
     }
   }
 
+  // Mark an action as successfully posted to social media platforms
+  Future<void> markActionPosted(String actionId,
+      Map<String, dynamic> updatedJson, Map<String, String> postIds) async {
+    final uid = _currentUserId;
+    if (uid == null) {
+      throw Exception('User not authenticated');
+    }
+
+    try {
+      await _firestore
+          .collection('users')
+          .doc(uid)
+          .collection('actions')
+          .doc(actionId)
+          .update({
+        'status': 'posted',
+        'last_attempt': FieldValue.serverTimestamp(),
+        'action_json': updatedJson,
+        'posted_ids': postIds,
+      });
+    } catch (e) {
+      throw Exception('Failed to mark action posted: $e');
+    }
+  }
+
   // Delete an action
   Future<void> deleteAction(String actionId) async {
     final uid = _currentUserId;
@@ -149,6 +174,7 @@ class FirestoreService {
         'default_hashtags': [],
         'auto_location': true,
         'signature': '',
+        'media_albums': [], // Empty list means use default "All Photos"
       };
     }
 
@@ -161,7 +187,12 @@ class FirestoreService {
           .get();
 
       if (doc.exists) {
-        return doc.data() ?? {};
+        final data = doc.data() ?? {};
+        // Ensure media_albums exists, default to empty list if not
+        if (!data.containsKey('media_albums')) {
+          data['media_albums'] = [];
+        }
+        return data;
       }
     } catch (e) {
       if (kDebugMode) {
@@ -175,7 +206,36 @@ class FirestoreService {
       'default_hashtags': [],
       'auto_location': true,
       'signature': '',
+      'media_albums': [], // Empty list means use default "All Photos"
     };
+  }
+
+  // Get selected media album IDs
+  Future<List<String>> getSelectedMediaAlbums() async {
+    final prefs = await getUserPreferences();
+    final albumIds = prefs['media_albums'] as List<dynamic>? ?? [];
+    return albumIds.map((id) => id.toString()).toList();
+  }
+
+  // Update selected media albums
+  Future<void> updateSelectedMediaAlbums(List<String> albumIds) async {
+    final uid = _currentUserId;
+    if (uid == null) {
+      throw Exception('User not authenticated');
+    }
+
+    try {
+      await _firestore
+          .collection('users')
+          .doc(uid)
+          .collection('user_preferences')
+          .doc('settings')
+          .set({
+        'media_albums': albumIds,
+      }, SetOptions(merge: true));
+    } catch (e) {
+      throw Exception('Failed to update selected media albums: $e');
+    }
   }
 
   // Update user preferences

@@ -31,6 +31,22 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="echopost" />
             </intent-filter>
+            
+            <!-- Twitter OAuth callback -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="echopost" android:host="twitter-callback" />
+            </intent-filter>
+            
+            <!-- TikTok OAuth callback -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="echopost" android:host="tiktok-callback" />
+            </intent-filter>
         </activity>
         
         <!-- Facebook configuration -->
@@ -43,6 +59,10 @@
             android:name="flutterEmbedding"
             android:value="2" />
     </application>
+    <queries>
+        <provider android:authorities="com.facebook.katana.provider.PlatformProvider" /> <!-- allows app to access Facebook app features -->
+        <provider android:authorities="com.facebook.orca.provider.PlatformProvider" /> <!-- allows sharing to Messenger app -->
+    </queries>
     
     <!-- Permissions -->
     <uses-permission android:name="android.permission.INTERNET"/>

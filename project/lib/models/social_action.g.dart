@@ -16,6 +16,7 @@ SocialAction _$SocialActionFromJson(Map<String, dynamic> json) => SocialAction(
       platformData:
           PlatformData.fromJson(json['platform_data'] as Map<String, dynamic>),
       internal: Internal.fromJson(json['internal'] as Map<String, dynamic>),
+      mediaQuery: json['media_query'] as String?,
     );
 
 Map<String, dynamic> _$SocialActionToJson(SocialAction instance) =>
@@ -27,6 +28,7 @@ Map<String, dynamic> _$SocialActionToJson(SocialAction instance) =>
       'options': instance.options.toJson(),
       'platform_data': instance.platformData.toJson(),
       'internal': instance.internal.toJson(),
+      'media_query': instance.mediaQuery,
     };
 
 Content _$ContentFromJson(Map<String, dynamic> json) => Content(
@@ -98,6 +100,10 @@ DeviceMetadata _$DeviceMetadataFromJson(Map<String, dynamic> json) =>
       width: (json['width'] as num?)?.toInt() ?? 0,
       height: (json['height'] as num?)?.toInt() ?? 0,
       fileSizeBytes: (json['file_size_bytes'] as num?)?.toInt() ?? 0,
+      duration: (json['duration'] as num?)?.toDouble(),
+      bitrate: (json['bitrate'] as num?)?.toInt(),
+      samplingRate: (json['sampling_rate'] as num?)?.toInt(),
+      frameRate: (json['frame_rate'] as num?)?.toDouble(),
     );
 
 Map<String, dynamic> _$DeviceMetadataToJson(DeviceMetadata instance) =>
@@ -109,6 +115,10 @@ Map<String, dynamic> _$DeviceMetadataToJson(DeviceMetadata instance) =>
       'width': instance.width,
       'height': instance.height,
       'file_size_bytes': instance.fileSizeBytes,
+      'duration': instance.duration,
+      'bitrate': instance.bitrate,
+      'sampling_rate': instance.samplingRate,
+      'frame_rate': instance.frameRate,
     };
 
 Options _$OptionsFromJson(Map<String, dynamic> json) => Options(
@@ -170,6 +180,12 @@ Map<String, dynamic> _$PlatformDataToJson(PlatformData instance) =>
 FacebookData _$FacebookDataFromJson(Map<String, dynamic> json) => FacebookData(
       postAsPage: json['post_as_page'] as bool? ?? false,
       pageId: json['page_id'] as String? ?? '',
+      postType: json['post_type'] as String?,
+      mediaFileUri: json['media_file_uri'] as String?,
+      videoFileUri: json['video_file_uri'] as String?,
+      audioFileUri: json['audio_file_uri'] as String?,
+      thumbnailUri: json['thumbnail_uri'] as String?,
+      scheduledTime: json['scheduled_time'] as String?,
       additionalFields: json['additional_fields'] as Map<String, dynamic>?,
     );
 
@@ -177,16 +193,28 @@ Map<String, dynamic> _$FacebookDataToJson(FacebookData instance) =>
     <String, dynamic>{
       'post_as_page': instance.postAsPage,
       'page_id': instance.pageId,
+      'post_type': instance.postType,
+      'media_file_uri': instance.mediaFileUri,
+      'video_file_uri': instance.videoFileUri,
+      'audio_file_uri': instance.audioFileUri,
+      'thumbnail_uri': instance.thumbnailUri,
+      'scheduled_time': instance.scheduledTime,
       'additional_fields': instance.additionalFields,
     };
 
 InstagramData _$InstagramDataFromJson(Map<String, dynamic> json) =>
     InstagramData(
-      postType: json['post_type'] as String? ?? 'feed',
+      postType: json['post_type'] as String?,
       carousel: json['carousel'] == null
           ? null
           : Carousel.fromJson(json['carousel'] as Map<String, dynamic>),
       igUserId: json['ig_user_id'] as String? ?? '',
+      mediaType: json['media_type'] as String?,
+      mediaFileUri: json['media_file_uri'] as String?,
+      videoThumbnailUri: json['video_thumbnail_uri'] as String?,
+      videoFileUri: json['video_file_uri'] as String?,
+      audioFileUri: json['audio_file_uri'] as String?,
+      scheduledTime: json['scheduled_time'] as String?,
     );
 
 Map<String, dynamic> _$InstagramDataToJson(InstagramData instance) =>
@@ -194,6 +222,12 @@ Map<String, dynamic> _$InstagramDataToJson(InstagramData instance) =>
       'post_type': instance.postType,
       'carousel': instance.carousel?.toJson(),
       'ig_user_id': instance.igUserId,
+      'media_type': instance.mediaType,
+      'media_file_uri': instance.mediaFileUri,
+      'video_thumbnail_uri': instance.videoThumbnailUri,
+      'video_file_uri': instance.videoFileUri,
+      'audio_file_uri': instance.audioFileUri,
+      'scheduled_time': instance.scheduledTime,
     };
 
 Carousel _$CarouselFromJson(Map<String, dynamic> json) => Carousel(
@@ -214,23 +248,41 @@ TwitterData _$TwitterDataFromJson(Map<String, dynamic> json) => TwitterData(
               .toList() ??
           const [],
       tweetMode: json['tweet_mode'] as String? ?? 'extended',
+      mediaType: json['media_type'] as String?,
+      mediaFileUri: json['media_file_uri'] as String?,
+      mediaDuration: (json['media_duration'] as num?)?.toDouble(),
+      tweetLink: json['tweet_link'] as String?,
+      scheduledTime: json['scheduled_time'] as String?,
     );
 
 Map<String, dynamic> _$TwitterDataToJson(TwitterData instance) =>
     <String, dynamic>{
       'alt_texts': instance.altTexts,
       'tweet_mode': instance.tweetMode,
+      'media_type': instance.mediaType,
+      'media_file_uri': instance.mediaFileUri,
+      'media_duration': instance.mediaDuration,
+      'tweet_link': instance.tweetLink,
+      'scheduled_time': instance.scheduledTime,
     };
 
 TikTokData _$TikTokDataFromJson(Map<String, dynamic> json) => TikTokData(
       privacy: json['privacy'] as String? ?? 'public',
       sound: Sound.fromJson(json['sound'] as Map<String, dynamic>),
+      mediaFileUri: json['media_file_uri'] as String?,
+      videoFileUri: json['video_file_uri'] as String?,
+      audioFileUri: json['audio_file_uri'] as String?,
+      scheduledTime: json['scheduled_time'] as String?,
     );
 
 Map<String, dynamic> _$TikTokDataToJson(TikTokData instance) =>
     <String, dynamic>{
       'privacy': instance.privacy,
       'sound': instance.sound.toJson(),
+      'media_file_uri': instance.mediaFileUri,
+      'video_file_uri': instance.videoFileUri,
+      'audio_file_uri': instance.audioFileUri,
+      'scheduled_time': instance.scheduledTime,
     };
 
 Sound _$SoundFromJson(Map<String, dynamic> json) => Sound(
@@ -249,6 +301,9 @@ Internal _$InternalFromJson(Map<String, dynamic> json) => Internal(
           json['user_preferences'] as Map<String, dynamic>),
       mediaIndexId: json['media_index_id'] as String?,
       uiFlags: UiFlags.fromJson(json['ui_flags'] as Map<String, dynamic>),
+      aiGenerated: json['ai_generated'] as bool? ?? false,
+      originalTranscription: json['original_transcription'] as String? ?? '',
+      fallbackReason: json['fallback_reason'] as String?,
     );
 
 Map<String, dynamic> _$InternalToJson(Internal instance) => <String, dynamic>{
@@ -256,6 +311,9 @@ Map<String, dynamic> _$InternalToJson(Internal instance) => <String, dynamic>{
       'user_preferences': instance.userPreferences.toJson(),
       'media_index_id': instance.mediaIndexId,
       'ui_flags': instance.uiFlags.toJson(),
+      'ai_generated': instance.aiGenerated,
+      'original_transcription': instance.originalTranscription,
+      'fallback_reason': instance.fallbackReason,
     };
 
 UserPreferences _$UserPreferencesFromJson(Map<String, dynamic> json) =>

@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'dart:async';
+import 'ripple_circle.dart';
 
 enum RecordingState {
   idle,
@@ -9,241 +9,216 @@ enum RecordingState {
 }
 
 class MicButton extends StatefulWidget {
-  final Function() onRecordStart;
-  final Function() onRecordStop;
   final RecordingState state;
+  final VoidCallback onRecordStart;
+  final VoidCallback onRecordStop;
 
   const MicButton({
     super.key,
+    required this.state,
     required this.onRecordStart,
     required this.onRecordStop,
-    required this.state,
   });
 
   @override
   State<MicButton> createState() => _MicButtonState();
 }
 
-class _MicButtonState extends State<MicButton>
-    with SingleTickerProviderStateMixin {
-  late AnimationController _animationController;
+class _MicButtonState extends State<MicButton> with TickerProviderStateMixin {
+  late AnimationController _scaleController;
+  late AnimationController _pulseController;
   late Animation<double> _scaleAnimation;
   late Animation<double> _pulseAnimation;
-
-  Timer? _recordingTimer;
-  int _recordingDuration = 0;
-  final int _maxRecordingDuration = 10; // 10 seconds max
 
   @override
   void initState() {
     super.initState();
 
-    _animationController = AnimationController(
+    _scaleController = AnimationController(
+      duration: const Duration(milliseconds: 200),
       vsync: this,
-      duration: const Duration(milliseconds: 1500),
-    )..repeat(reverse: true);
-
-    _scaleAnimation = Tween<double>(begin: 1.0, end: 1.1).animate(
-      CurvedAnimation(
-        parent: _animationController,
-        curve: Curves.easeInOut,
-      ),
     );
 
-    _pulseAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
-      CurvedAnimation(
-        parent: _animationController,
-        curve: Curves.easeInOut,
-      ),
+    _pulseController = AnimationController(
+      duration: const Duration(milliseconds: 800),
+      vsync: this,
     );
+
+    _scaleAnimation = Tween<double>(
+      begin: 1.0,
+      end: 1.1,
+    ).animate(CurvedAnimation(
+      parent: _scaleController,
+      curve: Curves.easeOutQuad,
+    ));
+
+    _pulseAnimation = Tween<double>(
+      begin: 1.0,
+      end: 1.05,
+    ).animate(CurvedAnimation(
+      parent: _pulseController,
+      curve: Curves.easeInOut,
+    ));
+  }
+
+  @override
+  void didUpdateWidget(MicButton oldWidget) {
+    super.didUpdateWidget(oldWidget);
+
+    if (widget.state == RecordingState.recording &&
+        oldWidget.state != RecordingState.recording) {
+      _scaleController.forward();
+      _pulseController.repeat(reverse: true);
+    } else if (widget.state != RecordingState.recording &&
+        oldWidget.state == RecordingState.recording) {
+      _scaleController.reverse();
+      _pulseController.stop();
+      _pulseController.reset();
+    }
   }
 
   @override
   void dispose() {
-    _animationController.dispose();
-    _recordingTimer?.cancel();
+    _scaleController.dispose();
+    _pulseController.dispose();
     super.dispose();
-  }
-
-  void _startRecordingTimer() {
-    _recordingDuration = 0;
-    _recordingTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
-      setState(() {
-        _recordingDuration++;
-      });
-
-      if (_recordingDuration >= _maxRecordingDuration) {
-        _stopRecording();
-      }
-    });
-  }
-
-  void _stopRecordingTimer() {
-    _recordingTimer?.cancel();
-    _recordingTimer = null;
-  }
-
-  void _toggleRecording() {
-    if (widget.state == RecordingState.idle) {
-      _startRecording();
-    } else if (widget.state == RecordingState.recording) {
-      _stopRecording();
-    }
-  }
-
-  void _startRecording() {
-    widget.onRecordStart();
-    _startRecordingTimer();
-  }
-
-  void _stopRecording() {
-    _stopRecordingTimer();
-    widget.onRecordStop();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        // Remaining time indicator (only shown when recording)
-        if (widget.state == RecordingState.recording)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 8.0),
-            child: Text(
-              '${_maxRecordingDuration - _recordingDuration}s',
-              style: TextStyle(
-                color: Theme.of(context).colorScheme.error,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-          ),
-
-        // Mic button with animations
-        GestureDetector(
-          onTap: widget.state == RecordingState.processing ||
-                  widget.state == RecordingState.ready
-              ? null
-              : _toggleRecording,
-          child: AnimatedBuilder(
-            animation: _animationController,
-            builder: (context, child) {
-              return Stack(
-                alignment: Alignment.center,
-                children: [
-                  // Pulse animation (only when recording)
-                  if (widget.state == RecordingState.recording)
-                    Opacity(
-                      opacity: 0.5 * (1 - _pulseAnimation.value),
-                      child: Container(
-                        width: 100 + (20 * _pulseAnimation.value),
-                        height: 100 + (20 * _pulseAnimation.value),
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: Theme.of(context)
-                              .colorScheme
-                              .error
-                              .withValues(alpha: 0.3),
-                        ),
-                      ),
-                    ),
-
-                  // Main button
-                  Transform.scale(
-                    scale: widget.state == RecordingState.recording
-                        ? _scaleAnimation.value
-                        : 1.0,
-                    child: Container(
-                      width: 80,
-                      height: 80,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: _getButtonColor(),
-                        boxShadow: [
-                          BoxShadow(
-                            color: _getButtonColor().withValues(alpha: 0.3),
-                            blurRadius: 10,
-                            spreadRadius: 2,
-                          ),
-                        ],
-                      ),
-                      child: _buildButtonContent(),
-                    ),
-                  ),
-                ],
-              );
-            },
-          ),
-        ),
-
-        // Status text
-        const SizedBox(height: 16),
-        Text(
-          _getStatusText(),
-          style: TextStyle(
-            color: Theme.of(context).colorScheme.onSurface,
-            fontWeight: FontWeight.w500,
-          ),
-        ),
-      ],
-    );
   }
 
   Color _getButtonColor() {
     switch (widget.state) {
       case RecordingState.idle:
-        return Theme.of(context).colorScheme.primary;
+        return const Color(0xFFFF0080);
       case RecordingState.recording:
-        return Theme.of(context).colorScheme.error;
+        return const Color(0xFFFF0080);
       case RecordingState.processing:
-        return Theme.of(context).colorScheme.tertiary;
+        return const Color(0xFFFFD700);
       case RecordingState.ready:
-        return Theme.of(context).colorScheme.secondary;
+        return const Color(0xFFFF0080);
     }
   }
 
-  Widget _buildButtonContent() {
+  IconData _getIcon() {
     switch (widget.state) {
       case RecordingState.idle:
-        return Icon(
-          Icons.mic,
-          color: Theme.of(context).colorScheme.onPrimary,
-          size: 36,
-        );
+        return Icons.mic;
       case RecordingState.recording:
-        return Icon(
-          Icons.stop,
-          color: Theme.of(context).colorScheme.onError,
-          size: 36,
-        );
+        return Icons.mic;
       case RecordingState.processing:
-        return SizedBox(
-          width: 30,
-          height: 30,
-          child: CircularProgressIndicator(
-            color: Theme.of(context).colorScheme.onTertiary,
-            strokeWidth: 3,
+        return Icons.hourglass_empty;
+      case RecordingState.ready:
+        return Icons.check;
+    }
+  }
+
+  List<BoxShadow> _getShadows() {
+    if (widget.state == RecordingState.recording) {
+      return [
+        BoxShadow(
+          color: const Color(0xFFFF0080).withValues(alpha: 0.6),
+          blurRadius: 20,
+          spreadRadius: 4,
+        ),
+        BoxShadow(
+          color: const Color(0xFFFF0080).withValues(alpha: 0.3),
+          blurRadius: 40,
+          spreadRadius: 8,
+        ),
+      ];
+    }
+    return [
+      BoxShadow(
+        color: Colors.black.withValues(alpha: 0.3),
+        blurRadius: 10,
+        offset: const Offset(0, 4),
+      ),
+    ];
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bool isRecording = widget.state == RecordingState.recording;
+    final bool isProcessing = widget.state == RecordingState.processing;
+
+    return SizedBox(
+      width: 140, // Fixed container size to contain ripples
+      height: 140,
+      child: Stack(
+        alignment: Alignment.center,
+        clipBehavior: Clip.none, // Allow ripple to extend but stay contained
+        children: [
+          // Multi-ripple effect when recording (positioned behind)
+          if (isRecording)
+            Positioned.fill(
+              child: MultiRippleCircle(
+                color: const Color(0xFFFF0080),
+                size: 60, // Reduced size to fit within container
+                rippleCount: 3,
+                duration: const Duration(milliseconds: 1500),
+              ),
+            ),
+
+          // Main button (fixed position) with tap detection
+          GestureDetector(
+            onTapDown: widget.state == RecordingState.idle
+                ? (_) => widget.onRecordStart()
+                : null,
+            onTapUp: isRecording ? (_) => widget.onRecordStop() : null,
+            onTapCancel: isRecording ? () => widget.onRecordStop() : null,
+            child: AnimatedBuilder(
+              animation: Listenable.merge([_scaleAnimation, _pulseAnimation]),
+              builder: (context, child) {
+                double scale = _scaleAnimation.value;
+                if (isRecording) {
+                  scale *= _pulseAnimation.value;
+                }
+
+                return Transform.scale(
+                  scale: scale,
+                  child: Container(
+                    width: 80,
+                    height: 80,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: _getButtonColor(),
+                      boxShadow: _getShadows(),
+                    ),
+                    child: isProcessing
+                        ? const Center(
+                            child: SizedBox(
+                              width: 32,
+                              height: 32,
+                              child: CircularProgressIndicator(
+                                color: Colors.white,
+                                strokeWidth: 3,
+                              ),
+                            ),
+                          )
+                        : Icon(
+                            _getIcon(),
+                            color: Colors.white,
+                            size: 36,
+                          ),
+                  ),
+                );
+              },
+            ),
           ),
-        );
-      case RecordingState.ready:
-        return Icon(
-          Icons.check,
-          color: Theme.of(context).colorScheme.onSecondary,
-          size: 36,
-        );
-    }
-  }
 
-  String _getStatusText() {
-    switch (widget.state) {
-      case RecordingState.idle:
-        return 'Tap to record';
-      case RecordingState.recording:
-        return 'Recording... Tap to stop';
-      case RecordingState.processing:
-        return 'Processing...';
-      case RecordingState.ready:
-        return 'Ready to post';
-    }
+          // Outer glow ring for recording state (fixed position)
+          if (isRecording)
+            Container(
+              width: 100,
+              height: 100,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: const Color(0xFFFF0080).withValues(alpha: 0.3),
+                  width: 2,
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
   }
 }
