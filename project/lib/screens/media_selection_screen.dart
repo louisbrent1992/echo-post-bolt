@@ -3,10 +3,14 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:photo_manager/photo_manager.dart';
+import 'package:exif/exif.dart';
+import 'package:path/path.dart' as path;
 
 import '../models/social_action.dart';
 import '../services/media_search_service.dart' as media_service;
 import '../services/firestore_service.dart';
+import '../services/directory_service.dart';
+import '../services/media_metadata_service.dart';
 
 class MediaSelectionScreen extends StatefulWidget {
   final SocialAction action;
@@ -28,6 +32,7 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
   Map<String, dynamic>? _selectedMedia;
   String? _mediaQuery;
   bool _showFilters = false;
+  DirectoryService? _directory_service;
 
   // Filter state
   DateTimeRange? _dateRange;
@@ -47,8 +52,14 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
     });
 
     try {
-      final mediaSearchService =
-          Provider.of<media_service.MediaSearchService>(context, listen: false);
+      // Use DirectoryService and MediaMetadataService from Provider
+      _directory_service =
+          Provider.of<DirectoryService>(context, listen: false);
+      final media_metadata_service =
+          Provider.of<MediaMetadataService>(context, listen: false);
+
+      await _directory_service!.initialize();
+      await media_metadata_service.initialize(_directory_service!);
 
       // Check if we have an explicit file URI
       if (widget.action.content.media.isNotEmpty &&
@@ -71,56 +82,59 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
         return;
       }
 
-      // If candidates are provided, use them directly
-      if (widget.candidates != null) {
-        final candidateMaps =
-            mediaSearchService.getCandidateMaps(widget.candidates!);
-        setState(() {
-          _mediaCandidates = candidateMaps;
-          _isLoading = false;
-        });
-        return;
-      }
+      // Check if custom directories are enabled
+      if (_directory_service!.isCustomDirectoriesEnabled) {
+        // Use metadata service to find relevant media
+        if (_mediaQuery != null && _mediaQuery!.isNotEmpty) {
+          // Search for media based on the query
+          final query = _mediaQuery!.toLowerCase();
+          final List<Map<String, dynamic>> matching_media = [];
 
-      // Otherwise search for media based on the query
-      if (_mediaQuery != null && _mediaQuery!.isNotEmpty) {
-        // Check if we have a cached selection for this query
-        final firestoreService =
-            Provider.of<FirestoreService>(context, listen: false);
-        final cachedAssetId =
-            await firestoreService.getCachedMediaAsset(_mediaQuery!);
-
-        // Find media candidates
-        final candidates =
-            await mediaSearchService.findCandidates(_mediaQuery!);
-        final candidateMaps = mediaSearchService.getCandidateMaps(candidates);
-
-        setState(() {
-          _mediaCandidates = candidateMaps;
-
-          // If we have a cached selection, pre-select it
-          if (cachedAssetId != null) {
-            try {
-              _selectedMedia = _mediaCandidates.firstWhere(
-                (media) => media['id'] == cachedAssetId,
-              );
-            } catch (e) {
-              _selectedMedia =
-                  _mediaCandidates.isNotEmpty ? _mediaCandidates.first : null;
+          // Search in directories
+          for (final directory in _directory_service!.enabledDirectories) {
+            final dir_name = directory.displayName.toLowerCase();
+            if (dir_name.contains(query)) {
+              // Add all media from this directory
+              matching_media.addAll(
+                  media_metadata_service.get_media_by_folder(directory.path));
             }
           }
 
-          _isLoading = false;
-        });
-      } else {
-        // No query, show recent media
-        final candidates = await mediaSearchService.findCandidates('recent');
-        final candidateMaps = mediaSearchService.getCandidateMaps(candidates);
+          // Search by date if query contains temporal references
+          if (query.contains('today') ||
+              query.contains('yesterday') ||
+              query.contains('last night') ||
+              query.contains('this week')) {
+            final recent_dates = _get_recent_dates(query);
+            for (final date in recent_dates) {
+              matching_media
+                  .addAll(media_metadata_service.get_media_by_date(date));
+            }
+          }
 
-        setState(() {
-          _mediaCandidates = candidateMaps;
-          _isLoading = false;
-        });
+          // Search by location if query contains location references
+          if (query.contains('beach') ||
+              query.contains('park') ||
+              query.contains('restaurant') ||
+              query.contains('home')) {
+            // Add location-based search logic here
+            // This would require additional location metadata or reverse geocoding
+          }
+
+          setState(() {
+            _mediaCandidates = matching_media;
+            _isLoading = false;
+          });
+        } else {
+          // No query, show recent media
+          setState(() {
+            _mediaCandidates = media_metadata_service.get_recent_media();
+            _isLoading = false;
+          });
+        }
+      } else {
+        // Use existing album-based search
+        await _searchPhotoAlbums();
       }
     } catch (e) {
       setState(() {
@@ -284,6 +298,303 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
     }
   }
 
+  Future<void> _searchCustomDirectories() async {
+    final enabledDirectories = _directory_service!.enabledDirectories;
+
+    if (enabledDirectories.isEmpty) {
+      setState(() {
+        _mediaCandidates = [];
+        _isLoading = false;
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content: Text(
+                  'No directories enabled. Please configure directories in settings.')),
+        );
+      }
+      return;
+    }
+
+    final List<Map<String, dynamic>> allMedia = [];
+
+    for (final directory in enabledDirectories) {
+      try {
+        final mediaFiles = await _scanDirectoryForMedia(directory.path);
+        allMedia.addAll(mediaFiles);
+      } catch (e) {
+        print('Failed to scan directory ${directory.path}: $e');
+        // Continue with other directories
+      }
+    }
+
+    // Filter and sort media
+    allMedia.sort((a, b) => (b['creation_time'] as DateTime)
+        .compareTo(a['creation_time'] as DateTime));
+
+    setState(() {
+      _mediaCandidates = allMedia;
+      _isLoading = false;
+    });
+  }
+
+  Future<List<Map<String, dynamic>>> _scanDirectoryForMedia(
+      String directoryPath) async {
+    final List<Map<String, dynamic>> mediaFiles = [];
+
+    try {
+      final directory = Directory(directoryPath);
+      if (!await directory.exists()) {
+        return mediaFiles;
+      }
+
+      final List<FileSystemEntity> files = directory.listSync(recursive: false);
+
+      for (final file in files) {
+        if (file is File) {
+          final String extension = path.extension(file.path).toLowerCase();
+
+          // Check if it's a media file
+          if (_isMediaFile(extension)) {
+            try {
+              final mediaData = await _extractMediaMetadata(file);
+              if (mediaData != null) {
+                mediaFiles.add(mediaData);
+              }
+            } catch (e) {
+              // Skip files that can't be processed
+              continue;
+            }
+          }
+        }
+      }
+    } catch (e) {
+      print('Error scanning directory $directoryPath: $e');
+    }
+
+    return mediaFiles;
+  }
+
+  bool _isMediaFile(String extension) {
+    const mediaExtensions = {
+      // Images
+      '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.heic', '.heif',
+      // Videos
+      '.mp4', '.mov', '.avi', '.mkv', '.webm', '.m4v', '.3gp', '.flv'
+    };
+
+    return mediaExtensions.contains(extension);
+  }
+
+  Future<Map<String, dynamic>?> _extractMediaMetadata(File file) async {
+    try {
+      final stats = await file.stat();
+      final String mimeType =
+          _getMimeTypeFromExtension(path.extension(file.path));
+
+      // Basic metadata
+      final mediaData = <String, dynamic>{
+        'id': path.basename(file.path),
+        'file_uri': file.path,
+        'mime_type': mimeType,
+        'creation_time': stats.modified,
+        'file_size_bytes': stats.size,
+        'width': 0,
+        'height': 0,
+        'duration': 0,
+      };
+
+      // Try to extract EXIF data for images
+      if (mimeType.startsWith('image/')) {
+        try {
+          final bytes = await file.readAsBytes();
+          final exifData = await readExifFromBytes(bytes);
+
+          if (exifData.isNotEmpty) {
+            // Extract GPS coordinates
+            final gpsLat = exifData['GPS GPSLatitude'];
+            final gpsLon = exifData['GPS GPSLongitude'];
+            final gpsLatRef = exifData['GPS GPSLatitudeRef'];
+            final gpsLonRef = exifData['GPS GPSLongitudeRef'];
+
+            if (gpsLat != null && gpsLon != null) {
+              mediaData['latitude'] =
+                  _parseGpsCoordinate(gpsLat, gpsLatRef?.toString());
+              mediaData['longitude'] =
+                  _parseGpsCoordinate(gpsLon, gpsLonRef?.toString());
+            }
+
+            // Extract image dimensions
+            final width =
+                exifData['Image ImageWidth'] ?? exifData['EXIF ExifImageWidth'];
+            final height = exifData['Image ImageLength'] ??
+                exifData['EXIF ExifImageLength'];
+
+            if (width != null) {
+              mediaData['width'] = int.tryParse(width.toString()) ?? 0;
+            }
+            if (height != null) {
+              mediaData['height'] = int.tryParse(height.toString()) ?? 0;
+            }
+
+            // Extract creation date from EXIF
+            final dateTime =
+                exifData['Image DateTime'] ?? exifData['EXIF DateTimeOriginal'];
+            if (dateTime != null) {
+              final dateString = dateTime.toString();
+              // Convert EXIF date format "YYYY:MM:DD HH:MM:SS" to ISO format
+              final formattedDate =
+                  dateString.substring(0, 10).replaceAll(':', '-') +
+                      (dateString.length > 10 ? dateString.substring(10) : '');
+              final parsedDate = DateTime.tryParse(formattedDate);
+              if (parsedDate != null) {
+                mediaData['creation_time'] = parsedDate;
+              }
+            }
+          }
+        } catch (e) {
+          // EXIF parsing failed, use file stats
+        }
+      }
+
+      return mediaData;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  String _getMimeTypeFromExtension(String extension) {
+    const mimeTypes = {
+      '.jpg': 'image/jpeg',
+      '.jpeg': 'image/jpeg',
+      '.png': 'image/png',
+      '.gif': 'image/gif',
+      '.bmp': 'image/bmp',
+      '.webp': 'image/webp',
+      '.heic': 'image/heic',
+      '.heif': 'image/heif',
+      '.mp4': 'video/mp4',
+      '.mov': 'video/quicktime',
+      '.avi': 'video/x-msvideo',
+      '.mkv': 'video/x-matroska',
+      '.webm': 'video/webm',
+      '.m4v': 'video/x-m4v',
+      '.3gp': 'video/3gpp',
+      '.flv': 'video/x-flv',
+    };
+
+    return mimeTypes[extension.toLowerCase()] ?? 'application/octet-stream';
+  }
+
+  double? _parseGpsCoordinate(dynamic coordinate, String? reference) {
+    // Implementation for parsing GPS coordinates from EXIF data
+    try {
+      if (coordinate is List && coordinate.length >= 3) {
+        final degrees = (coordinate[0] as num).toDouble();
+        final minutes = (coordinate[1] as num).toDouble();
+        final seconds = (coordinate[2] as num).toDouble();
+
+        double result = degrees + minutes / 60.0 + seconds / 3600.0;
+
+        if (reference == 'S' || reference == 'W') {
+          result = -result;
+        }
+
+        return result;
+      }
+    } catch (e) {
+      // Parsing failed
+    }
+    return null;
+  }
+
+  Future<void> _searchPhotoAlbums() async {
+    // This is the existing album-based search logic
+    final mediaSearchService =
+        Provider.of<media_service.MediaSearchService>(context, listen: false);
+
+    // If candidates are provided, use them directly
+    if (widget.candidates != null) {
+      final candidateMaps =
+          mediaSearchService.getCandidateMaps(widget.candidates!);
+      setState(() {
+        _mediaCandidates = candidateMaps;
+        _isLoading = false;
+      });
+      return;
+    }
+
+    // Otherwise search for media based on the query
+    if (_mediaQuery != null && _mediaQuery!.isNotEmpty) {
+      // Check if we have a cached selection for this query
+      final firestoreService =
+          Provider.of<FirestoreService>(context, listen: false);
+      final cachedAssetId =
+          await firestoreService.getCachedMediaAsset(_mediaQuery!);
+
+      // Find media candidates
+      final candidates = await mediaSearchService.findCandidates(_mediaQuery!);
+      final candidateMaps = mediaSearchService.getCandidateMaps(candidates);
+
+      setState(() {
+        _mediaCandidates = candidateMaps;
+
+        // If we have a cached selection, pre-select it
+        if (cachedAssetId != null) {
+          try {
+            _selectedMedia = _mediaCandidates.firstWhere(
+              (media) => media['id'] == cachedAssetId,
+            );
+          } catch (e) {
+            _selectedMedia =
+                _mediaCandidates.isNotEmpty ? _mediaCandidates.first : null;
+          }
+        }
+
+        _isLoading = false;
+      });
+    } else {
+      // No query, show recent media
+      final candidates = await mediaSearchService.findCandidates('recent');
+      final candidateMaps = mediaSearchService.getCandidateMaps(candidates);
+
+      setState(() {
+        _mediaCandidates = candidateMaps;
+        _isLoading = false;
+      });
+    }
+  }
+
+  Map<String, dynamic>? _find_media_in_cache(
+      String media_id, Map<String, dynamic> cache) {
+    // This is a placeholder - in a real implementation, you would need to store
+    // the full media metadata in the cache and retrieve it here
+    return null;
+  }
+
+  List<String> _get_recent_dates(String query) {
+    final now = DateTime.now();
+    final dates = <String>[];
+
+    if (query.contains('today')) {
+      dates.add(now.toIso8601String().split('T')[0]);
+    }
+
+    if (query.contains('yesterday') || query.contains('last night')) {
+      final yesterday = now.subtract(const Duration(days: 1));
+      dates.add(yesterday.toIso8601String().split('T')[0]);
+    }
+
+    if (query.contains('this week')) {
+      for (int i = 0; i < 7; i++) {
+        final date = now.subtract(Duration(days: i));
+        dates.add(date.toIso8601String().split('T')[0]);
+      }
+    }
+
+    return dates;
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -341,6 +652,9 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
                     ),
                   ),
 
+                // Source indicator
+                _buildSourceIndicator(),
+
                 // Filters section (collapsible)
                 if (_showFilters) _buildFiltersSection(),
 
@@ -374,6 +688,50 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
                 ),
               ],
             ),
+    );
+  }
+
+  Widget _buildSourceIndicator() {
+    if (_directory_service == null) return const SizedBox.shrink();
+
+    final isCustomEnabled = _directory_service!.isCustomDirectoriesEnabled;
+    final enabledCount = _directory_service!.enabledDirectories.length;
+
+    return Container(
+      margin: const EdgeInsets.all(16),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: isCustomEnabled
+            ? const Color(0xFFFF0080).withValues(alpha: 0.1)
+            : Colors.grey.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(
+          color: isCustomEnabled
+              ? const Color(0xFFFF0080).withValues(alpha: 0.3)
+              : Colors.grey.withValues(alpha: 0.3),
+        ),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            isCustomEnabled ? Icons.folder_open : Icons.photo_library,
+            size: 16,
+            color: isCustomEnabled ? const Color(0xFFFF0080) : Colors.grey,
+          ),
+          const SizedBox(width: 8),
+          Text(
+            isCustomEnabled
+                ? 'Searching $enabledCount custom directories'
+                : 'Searching photo albums',
+            style: TextStyle(
+              color: isCustomEnabled ? const Color(0xFFFF0080) : Colors.grey,
+              fontSize: 12,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ],
+      ),
     );
   }
 

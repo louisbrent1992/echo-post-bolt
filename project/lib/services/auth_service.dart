@@ -17,11 +17,13 @@ class AuthService extends ChangeNotifier {
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
-  // Configure Google Sign-In according to Firebase documentation
+  // Configure Google Sign-In with proper serverClientId for Firebase authentication
   final GoogleSignIn _googleSignIn = GoogleSignIn(
-      // Add your web client ID here when you have it
-      // serverClientId: 'your-web-client-id.googleusercontent.com',
-      );
+    // The web client ID (client_type: 3) from google-services.json is required for Firebase Auth
+    // This is NOT a secret and should be hardcoded for reliability
+    serverClientId:
+        '794380832661-62e0bds0d8rq1ne4fuq10jlht0brr7g8.apps.googleusercontent.com',
+  );
 
   User? get currentUser => _auth.currentUser;
   Stream<User?> get authStateChanges => _auth.authStateChanges();
@@ -30,19 +32,51 @@ class AuthService extends ChangeNotifier {
     _auth.authStateChanges().listen((User? user) {
       notifyListeners();
     });
+
+    // Check for existing auth state on startup to handle interrupted flows
+    _checkExistingAuthState();
   }
 
-  // Enhanced Google Sign-In following Firebase documentation pattern
-  Future<UserCredential?> signInWithGoogle() async {
+  // Check for existing authentication state - crucial for handling interruptions
+  Future<void> _checkExistingAuthState() async {
     try {
-      // Check if user is already signed in
       final currentUser = _auth.currentUser;
-      if (currentUser != null) {
-        return null;
+      final googleUser = _googleSignIn.currentUser;
+
+      // If Firebase has a user but Google Sign-In doesn't, sync them
+      if (currentUser != null && googleUser == null) {
+        await _googleSignIn.signInSilently();
       }
 
-      // Trigger the authentication flow
-      final GoogleSignInAccount? googleUser = await _googleSignIn.signIn();
+      // If Google Sign-In has a user but Firebase doesn't, complete the sign-in
+      // This handles cases where verification was completed outside the app
+      if (currentUser == null && googleUser != null) {
+        final googleAuth = await googleUser.authentication;
+        if (googleAuth.idToken != null) {
+          final credential = GoogleAuthProvider.credential(
+            accessToken: googleAuth.accessToken,
+            idToken: googleAuth.idToken,
+          );
+          await _auth.signInWithCredential(credential);
+        }
+      }
+    } catch (e) {
+      // Silent failure for auth state check - don't disrupt user experience
+      if (kDebugMode) {
+        print('Auth state check failed: $e');
+      }
+    }
+  }
+
+  // Enhanced Google Sign-In with better interruption handling
+  Future<UserCredential?> signInWithGoogle() async {
+    try {
+      // First, try to sign in silently to check for existing auth
+      // This handles cases where user completed verification elsewhere
+      GoogleSignInAccount? googleUser = await _googleSignIn.signInSilently();
+
+      // If silent sign-in fails, trigger interactive sign-in
+      googleUser ??= await _googleSignIn.signIn();
 
       // If the user cancels the sign-in flow
       if (googleUser == null) {
@@ -75,6 +109,9 @@ class AuthService extends ChangeNotifier {
         throw Exception('Firebase authentication failed - no user returned');
       }
     } on FirebaseAuthException catch (e) {
+      // Clear any cached Google Sign-In state on Firebase auth errors
+      await _googleSignIn.signOut();
+
       switch (e.code) {
         case 'account-exists-with-different-credential':
           throw Exception(
@@ -87,10 +124,18 @@ class AuthService extends ChangeNotifier {
         case 'user-disabled':
           throw Exception(
               'The user account has been disabled by an administrator.');
+        case 'network-request-failed':
+          throw Exception(
+              'Network error. Please check your internet connection and try again.');
+        case 'web-context-canceled':
+          // User closed the sign-in popup, treat as cancellation
+          return null;
         default:
           throw Exception('Google Sign-In failed: ${e.message}');
       }
     } catch (e) {
+      // Clear any cached Google Sign-In state on general errors
+      await _googleSignIn.signOut();
       throw Exception('Google Sign-In failed: $e');
     }
   }
@@ -98,23 +143,46 @@ class AuthService extends ChangeNotifier {
   // Sign out method following Firebase documentation
   Future<void> signOut() async {
     try {
-      // Sign out from Firebase
+      // Sign out from Firebase first
       await _auth.signOut();
 
-      // Sign out from Google to clear the cached account
+      // Then sign out from Google to clear the cached account
       await _googleSignIn.signOut();
+
+      // Also disconnect to fully clear the Google auth state
+      await _googleSignIn.disconnect();
 
       notifyListeners();
     } catch (e) {
+      if (kDebugMode) {
+        print('Sign out error: $e');
+      }
+      // Even if there's an error, try to clear the state
+      try {
+        await _googleSignIn.signOut();
+        await _googleSignIn.disconnect();
+      } catch (e2) {
+        if (kDebugMode) {
+          print('Failed to clear Google auth state: $e2');
+        }
+      }
       throw Exception('Sign out failed: $e');
     }
   }
 
-  // Check current authentication state
-  Future<void> checkAuthState() async {
-    final user = _auth.currentUser;
-    if (user != null) {
-    } else {}
+  // Force refresh authentication state
+  Future<void> refreshAuthState() async {
+    try {
+      final currentUser = _auth.currentUser;
+      if (currentUser != null) {
+        await currentUser.reload();
+        notifyListeners();
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        print('Failed to refresh auth state: $e');
+      }
+    }
   }
 
   // Sign in with Facebook

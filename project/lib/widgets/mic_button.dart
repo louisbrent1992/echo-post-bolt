@@ -1,23 +1,21 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'ripple_circle.dart';
 
-enum RecordingState {
-  idle,
-  recording,
-  processing,
-  ready,
-}
+enum RecordingState { idle, recording, processing, ready }
 
 class MicButton extends StatefulWidget {
   final RecordingState state;
   final VoidCallback onRecordStart;
   final VoidCallback onRecordStop;
+  final double amplitude; // Voice amplitude for responsive animation
 
   const MicButton({
     super.key,
     required this.state,
     required this.onRecordStart,
     required this.onRecordStop,
+    this.amplitude = 0.0, // Default no voice
   });
 
   @override
@@ -26,9 +24,9 @@ class MicButton extends StatefulWidget {
 
 class _MicButtonState extends State<MicButton> with TickerProviderStateMixin {
   late AnimationController _scaleController;
-  late AnimationController _pulseController;
+  late AnimationController _glowController;
   late Animation<double> _scaleAnimation;
-  late Animation<double> _pulseAnimation;
+  late Animation<double> _glowAnimation;
 
   @override
   void initState() {
@@ -39,48 +37,41 @@ class _MicButtonState extends State<MicButton> with TickerProviderStateMixin {
       vsync: this,
     );
 
-    _pulseController = AnimationController(
+    _glowController = AnimationController(
       duration: const Duration(milliseconds: 800),
       vsync: this,
     );
 
-    _scaleAnimation = Tween<double>(
-      begin: 1.0,
-      end: 1.1,
-    ).animate(CurvedAnimation(
-      parent: _scaleController,
-      curve: Curves.easeOutQuad,
-    ));
+    _scaleAnimation = Tween<double>(begin: 1.0, end: 1.1).animate(
+      CurvedAnimation(parent: _scaleController, curve: Curves.easeOutQuad),
+    );
 
-    _pulseAnimation = Tween<double>(
-      begin: 1.0,
-      end: 1.05,
-    ).animate(CurvedAnimation(
-      parent: _pulseController,
-      curve: Curves.easeInOut,
-    ));
+    _glowAnimation = Tween<double>(begin: 1.0, end: 1.3).animate(
+      CurvedAnimation(parent: _glowController, curve: Curves.easeInOut),
+    );
   }
 
   @override
   void didUpdateWidget(MicButton oldWidget) {
     super.didUpdateWidget(oldWidget);
 
+    // Handle state changes
     if (widget.state == RecordingState.recording &&
         oldWidget.state != RecordingState.recording) {
       _scaleController.forward();
-      _pulseController.repeat(reverse: true);
+      _glowController.repeat(reverse: true);
     } else if (widget.state != RecordingState.recording &&
         oldWidget.state == RecordingState.recording) {
       _scaleController.reverse();
-      _pulseController.stop();
-      _pulseController.reset();
+      _glowController.stop();
+      _glowController.reset();
     }
   }
 
   @override
   void dispose() {
     _scaleController.dispose();
-    _pulseController.dispose();
+    _glowController.dispose();
     super.dispose();
   }
 
@@ -112,16 +103,18 @@ class _MicButtonState extends State<MicButton> with TickerProviderStateMixin {
 
   List<BoxShadow> _getShadows() {
     if (widget.state == RecordingState.recording) {
+      // During recording, glow intensity based on voice amplitude
+      final intensity = (widget.amplitude * 0.8 + 0.2).clamp(0.2, 1.0);
       return [
         BoxShadow(
-          color: const Color(0xFFFF0080).withValues(alpha: 0.6),
-          blurRadius: 20,
-          spreadRadius: 4,
+          color: const Color(0xFFFF0080).withValues(alpha: 0.6 * intensity),
+          blurRadius: 20 * intensity,
+          spreadRadius: 4 * intensity,
         ),
         BoxShadow(
-          color: const Color(0xFFFF0080).withValues(alpha: 0.3),
-          blurRadius: 40,
-          spreadRadius: 8,
+          color: const Color(0xFFFF0080).withValues(alpha: 0.3 * intensity),
+          blurRadius: 40 * intensity,
+          spreadRadius: 8 * intensity,
         ),
       ];
     }
@@ -134,88 +127,100 @@ class _MicButtonState extends State<MicButton> with TickerProviderStateMixin {
     ];
   }
 
+  bool get _shouldShowRipples {
+    // Only show ripples when recording AND user is speaking
+    return widget.state == RecordingState.recording && widget.amplitude > 0.1;
+  }
+
   @override
   Widget build(BuildContext context) {
     final bool isRecording = widget.state == RecordingState.recording;
     final bool isProcessing = widget.state == RecordingState.processing;
 
-    return SizedBox(
-      width: 140, // Fixed container size to contain ripples
-      height: 140,
+    return GestureDetector(
+      onTapDown: widget.state == RecordingState.idle
+          ? (_) {
+              if (kDebugMode) {
+                print('MicButton: onTapDown - starting recording');
+              }
+              widget.onRecordStart();
+            }
+          : null,
+      onTapUp: isRecording
+          ? (_) {
+              if (kDebugMode) {
+                print('MicButton: onTapUp - stopping recording');
+              }
+              widget.onRecordStop();
+            }
+          : null,
+      onTapCancel: isRecording
+          ? () {
+              if (kDebugMode) {
+                print('MicButton: onTapCancel - stopping recording');
+              }
+              widget.onRecordStop();
+            }
+          : null,
       child: Stack(
         alignment: Alignment.center,
-        clipBehavior: Clip.none, // Allow ripple to extend but stay contained
+        clipBehavior: Clip.none,
         children: [
-          // Multi-ripple effect when recording (positioned behind)
-          if (isRecording)
+          // Voice-responsive ripple effect (only when speaking)
+          if (_shouldShowRipples)
             Positioned.fill(
-              child: MultiRippleCircle(
+              child: VoiceResponsiveRipple(
                 color: const Color(0xFFFF0080),
-                size: 60, // Reduced size to fit within container
+                size: 60,
+                amplitude: widget.amplitude,
                 rippleCount: 3,
-                duration: const Duration(milliseconds: 1500),
               ),
             ),
 
-          // Main button (fixed position) with tap detection
-          GestureDetector(
-            onTapDown: widget.state == RecordingState.idle
-                ? (_) => widget.onRecordStart()
-                : null,
-            onTapUp: isRecording ? (_) => widget.onRecordStop() : null,
-            onTapCancel: isRecording ? () => widget.onRecordStop() : null,
-            child: AnimatedBuilder(
-              animation: Listenable.merge([_scaleAnimation, _pulseAnimation]),
-              builder: (context, child) {
-                double scale = _scaleAnimation.value;
-                if (isRecording) {
-                  scale *= _pulseAnimation.value;
-                }
+          // Main button with voice-responsive glow
+          AnimatedBuilder(
+            animation: Listenable.merge([_scaleAnimation, _glowAnimation]),
+            builder: (context, child) {
+              double scale = _scaleAnimation.value;
+              if (isRecording) {
+                // Add subtle pulse based on voice amplitude
+                final voicePulse = 1.0 + (widget.amplitude * 0.1);
+                scale *= _glowAnimation.value * voicePulse;
+              }
 
-                return Transform.scale(
-                  scale: scale,
-                  child: Container(
-                    width: 80,
-                    height: 80,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: _getButtonColor(),
-                      boxShadow: _getShadows(),
-                    ),
-                    child: isProcessing
-                        ? const Center(
-                            child: SizedBox(
-                              width: 32,
-                              height: 32,
-                              child: CircularProgressIndicator(
-                                color: Colors.white,
-                                strokeWidth: 3,
-                              ),
-                            ),
-                          )
-                        : Icon(
-                            _getIcon(),
-                            color: Colors.white,
-                            size: 36,
-                          ),
+              return Transform.scale(
+                scale: scale,
+                child: Container(
+                  width: 80,
+                  height: 80,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: _getButtonColor(),
+                    boxShadow: _getShadows(),
                   ),
-                );
-              },
-            ),
+                  child: isProcessing
+                      ? const Center(
+                          child: SizedBox(
+                            width: 32,
+                            height: 32,
+                            child: CircularProgressIndicator(
+                              color: Colors.white,
+                              strokeWidth: 3,
+                            ),
+                          ),
+                        )
+                      : Icon(_getIcon(), color: Colors.white, size: 36),
+                ),
+              );
+            },
           ),
 
-          // Outer glow ring for recording state (fixed position)
+          // Voice level indicator ring (only when recording)
           if (isRecording)
-            Container(
-              width: 100,
-              height: 100,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                border: Border.all(
-                  color: const Color(0xFFFF0080).withValues(alpha: 0.3),
-                  width: 2,
-                ),
-              ),
+            VoiceLevelRing(
+              amplitude: widget.amplitude,
+              baseSize: 100,
+              color: const Color(0xFFFF0080),
             ),
         ],
       ),

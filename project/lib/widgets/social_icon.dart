@@ -17,12 +17,12 @@ class SocialIcon extends StatefulWidget {
   final double size;
 
   const SocialIcon({
-    Key? key,
+    super.key,
     required this.platform,
     required this.isSelected,
     required this.onTap,
     this.size = 48.0,
-  }) : super(key: key);
+  });
 
   @override
   State<SocialIcon> createState() => _SocialIconState();
@@ -165,10 +165,10 @@ class SocialIconsRow extends StatefulWidget {
   final Function(String) onPlatformToggle;
 
   const SocialIconsRow({
-    Key? key,
+    super.key,
     required this.selectedPlatforms,
     required this.onPlatformToggle,
-  }) : super(key: key);
+  });
 
   @override
   State<SocialIconsRow> createState() => _SocialIconsRowState();

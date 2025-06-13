@@ -9,6 +9,8 @@ import 'services/firestore_service.dart';
 import 'services/media_search_service.dart';
 import 'services/social_post_service.dart';
 import 'services/ai_service.dart';
+import 'services/directory_service.dart';
+import 'services/media_metadata_service.dart';
 import 'screens/login_screen.dart';
 import 'screens/command_screen.dart';
 
@@ -31,21 +33,28 @@ Future<void> main() async {
     }
   }
 
-  runApp(const EchoPostApp());
-}
+  final api_key = dotenv.env['OPENAI_API_KEY'];
+  if (api_key == null || api_key.isEmpty) {
+    throw Exception('OPENAI_API_KEY not found in .env.local file');
+  }
 
-class EchoPostApp extends StatelessWidget {
-  const EchoPostApp({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return MultiProvider(
+  runApp(
+    MultiProvider(
       providers: [
         ChangeNotifierProvider(create: (_) => AuthService()),
-        Provider(create: (_) => FirestoreService()),
+        ChangeNotifierProvider(create: (_) => DirectoryService()),
+        ChangeNotifierProvider(create: (_) => MediaMetadataService()),
+        Provider<AIService>(
+          create: (context) => AIService(
+            api_key,
+            context.read<MediaMetadataService>(),
+          ),
+        ),
+        Provider<FirestoreService>(
+          create: (_) => FirestoreService(),
+        ),
         Provider(create: (_) => SocialPostService()),
         Provider(create: (_) => MediaSearchService()),
-        Provider(create: (_) => AIService()),
       ],
       child: MaterialApp(
         title: 'EchoPost',
@@ -104,6 +113,6 @@ class EchoPostApp extends StatelessWidget {
           },
         ),
       ),
-    );
-  }
+    ),
+  );
 }

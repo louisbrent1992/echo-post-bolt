@@ -3,17 +3,25 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
 import 'package:video_player/video_player.dart';
-import 'package:url_launcher/url_launcher.dart';
+import 'package:record/record.dart';
+import 'package:path_provider/path_provider.dart';
+import 'dart:convert';
+import 'package:http/http.dart' as http;
+import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:flutter/foundation.dart';
 
 import '../models/social_action.dart';
 import '../services/auth_service.dart';
 import '../services/firestore_service.dart';
 import '../services/social_post_service.dart';
+import '../services/ai_service.dart';
 import '../screens/history_screen.dart';
+import '../screens/command_screen.dart';
+import '../widgets/post_content_box.dart';
 
 class VideoPlayerWidget extends StatefulWidget {
   final String fileUri;
-  const VideoPlayerWidget({required this.fileUri, Key? key}) : super(key: key);
+  const VideoPlayerWidget({required this.fileUri, super.key});
 
   @override
   State<VideoPlayerWidget> createState() => _VideoPlayerWidgetState();
@@ -105,6 +113,21 @@ class _ReviewPostScreenState extends State<ReviewPostScreen> {
   Map<String, bool> _postResults = {};
   final TextEditingController _captionController = TextEditingController();
 
+  // Voice recording for interactive editing
+  final AudioRecorder _audioRecorder = AudioRecorder();
+  bool _isRecording = false;
+  bool _isProcessingVoice = false;
+  String? _currentRecordingPath;
+
+  // Grid spacing constants (multiples of 6 for consistency)
+  static const double _gridUnit = 6.0;
+  static const double _spacing1 = _gridUnit; // 6px
+  static const double _spacing2 = _gridUnit * 2; // 12px
+  static const double _spacing3 = _gridUnit * 3; // 18px
+  static const double _spacing4 = _gridUnit * 4; // 24px
+  static const double _spacing5 = _gridUnit * 5; // 30px
+  static const double _spacing6 = _gridUnit * 6; // 36px
+
   @override
   void initState() {
     super.initState();
@@ -115,6 +138,7 @@ class _ReviewPostScreenState extends State<ReviewPostScreen> {
   @override
   void dispose() {
     _captionController.dispose();
+    _audioRecorder.dispose();
     super.dispose();
   }
 
@@ -352,38 +376,634 @@ class _ReviewPostScreenState extends State<ReviewPostScreen> {
     if (confirmed == true) {
       await firestoreService.deleteAction(_action.actionId);
       if (mounted) {
-        navigator.pop();
+        navigator.pushAndRemoveUntil(
+          MaterialPageRoute(
+            builder: (context) => const CommandScreen(),
+          ),
+          (route) => route.isFirst,
+        );
       }
+    }
+  }
+
+  // Voice recording methods for interactive editing
+  Future<void> _startVoiceRecording() async {
+    if (_isRecording || _isProcessingVoice) return;
+
+    try {
+      // Check permissions
+      if (!await _audioRecorder.hasPermission()) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Microphone permission is required'),
+              duration: Duration(seconds: 3),
+            ),
+          );
+        }
+        return;
+      }
+
+      // Get temporary directory for recording
+      final tempDir = await getTemporaryDirectory();
+      final m4aPath =
+          '${tempDir.path}/voice_edit_${DateTime.now().millisecondsSinceEpoch}.m4a';
+
+      _currentRecordingPath = m4aPath;
+
+      // Start recording
+      await _audioRecorder.start(
+        const RecordConfig(
+          encoder: AudioEncoder.aacLc,
+          bitRate: 128000,
+          sampleRate: 16000,
+          numChannels: 1,
+          autoGain: true,
+          echoCancel: true,
+          noiseSuppress: true,
+        ),
+        path: m4aPath,
+      );
+
+      setState(() {
+        _isRecording = true;
+      });
+
+      if (kDebugMode) {
+        print('🎙️ Started voice recording for text editing');
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ Failed to start voice recording: $e');
+      }
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to start recording: $e')),
+        );
+      }
+    }
+  }
+
+  Future<void> _stopVoiceRecording() async {
+    if (!_isRecording) return;
+
+    try {
+      await _audioRecorder.stop();
+      setState(() {
+        _isRecording = false;
+        _isProcessingVoice = true;
+      });
+
+      if (_currentRecordingPath != null) {
+        await _processVoiceEdit(_currentRecordingPath!);
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ Failed to stop voice recording: $e');
+      }
+      setState(() {
+        _isRecording = false;
+        _isProcessingVoice = false;
+      });
+    }
+  }
+
+  Future<void> _processVoiceEdit(String audioPath) async {
+    try {
+      if (kDebugMode) {
+        print('🎵 Processing voice edit from: $audioPath');
+      }
+
+      // Transcribe the audio
+      final transcription = await _transcribeWithWhisper(audioPath);
+
+      if (kDebugMode) {
+        print('📝 Voice edit transcription: "$transcription"');
+      }
+
+      // Use AI to process the voice edit instruction
+      final aiService = Provider.of<AIService>(context, listen: false);
+      final editInstruction = '''
+Current post content: "${_action.content.text}"
+Current hashtags: ${_action.content.hashtags}
+User voice instruction: "$transcription"
+
+Update the post with the user's instruction. If they want to add text, append or replace as appropriate. If they mention hashtags, add them. Return a JSON with updated text and hashtags only:
+{
+  "text": "updated text content",
+  "hashtags": ["updated", "hashtags"]
+}
+''';
+
+      final response = await _sendEditRequest(editInstruction);
+      await _applyTextEdit(response['text'], response['hashtags']);
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ Voice edit processing error: $e');
+      }
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Voice edit failed: $e')),
+        );
+      }
+    } finally {
+      setState(() {
+        _isProcessingVoice = false;
+      });
+    }
+  }
+
+  Future<String> _transcribeWithWhisper(String audioPath) async {
+    final apiKey = dotenv.env['OPENAI_API_KEY'];
+    if (apiKey == null || apiKey.isEmpty) {
+      throw Exception('OPENAI_API_KEY not found');
+    }
+
+    final file = File(audioPath);
+    if (!await file.exists()) {
+      throw Exception('Audio file does not exist');
+    }
+
+    final url = Uri.parse('https://api.openai.com/v1/audio/transcriptions');
+    final request = http.MultipartRequest('POST', url);
+
+    request.headers['Authorization'] = 'Bearer $apiKey';
+    request.fields['model'] = 'whisper-1';
+    request.fields['response_format'] = 'json';
+    request.fields['language'] = 'en';
+    request.fields['temperature'] = '0.0';
+
+    final multipartFile = await http.MultipartFile.fromPath(
+      'file',
+      audioPath,
+      filename: 'audio.m4a',
+    );
+    request.files.add(multipartFile);
+
+    final response = await request.send().timeout(const Duration(seconds: 30));
+    final responseBody = await response.stream.bytesToString();
+
+    if (response.statusCode != 200) {
+      throw Exception('Whisper API error: $responseBody');
+    }
+
+    final jsonResponse = jsonDecode(responseBody) as Map<String, dynamic>;
+    final transcription = jsonResponse['text'] as String? ?? '';
+
+    // Clean up audio file
+    try {
+      await file.delete();
+    } catch (_) {}
+
+    return transcription.trim();
+  }
+
+  Future<Map<String, dynamic>> _sendEditRequest(String instruction) async {
+    final apiKey = dotenv.env['OPENAI_API_KEY'];
+    if (apiKey == null || apiKey.isEmpty) {
+      throw Exception('OPENAI_API_KEY not found');
+    }
+
+    final requestBody = {
+      'model': 'gpt-4o-mini',
+      'messages': [
+        {
+          'role': 'system',
+          'content':
+              'You are a social media post editor. Update posts based on user voice instructions. Return only valid JSON with "text" and "hashtags" fields.',
+        },
+        {
+          'role': 'user',
+          'content': instruction,
+        }
+      ],
+      'max_tokens': 256,
+      'temperature': 0.1,
+      'response_format': {'type': 'json_object'},
+    };
+
+    final response = await http.post(
+      Uri.parse('https://api.openai.com/v1/chat/completions'),
+      headers: {
+        'Authorization': 'Bearer $apiKey',
+        'Content-Type': 'application/json',
+      },
+      body: jsonEncode(requestBody),
+    );
+
+    if (response.statusCode != 200) {
+      throw Exception('ChatGPT API error: ${response.body}');
+    }
+
+    final responseData = jsonDecode(response.body) as Map<String, dynamic>;
+    final choices = responseData['choices'] as List;
+    final content = choices[0]['message']['content'] as String;
+
+    return jsonDecode(content) as Map<String, dynamic>;
+  }
+
+  Future<void> _applyTextEdit(String newText, List<dynamic> newHashtags) async {
+    final firestoreService =
+        Provider.of<FirestoreService>(context, listen: false);
+
+    final updatedAction = SocialAction(
+      actionId: _action.actionId,
+      createdAt: _action.createdAt,
+      platforms: _action.platforms,
+      content: Content(
+        text: newText.trim(),
+        hashtags: newHashtags
+            .map((h) => h.toString().replaceAll('#', '').trim())
+            .toList(),
+        mentions: _action.content.mentions,
+        link: _action.content.link,
+        media: _action.content.media,
+      ),
+      options: _action.options,
+      platformData: _action.platformData,
+      internal: _action.internal,
+    );
+
+    // Update in Firestore
+    await firestoreService.updateAction(
+        _action.actionId, updatedAction.toJson());
+
+    // Update local state
+    setState(() {
+      _action = updatedAction;
+      _captionController.text = newText.trim();
+    });
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Post updated with voice edit! 🎉'),
+          duration: Duration(seconds: 2),
+        ),
+      );
     }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Review Your Post'),
-      ),
       body: _isPosting
           ? _buildLoadingView()
-          : SingleChildScrollView(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _buildPlatformList(),
-                  const SizedBox(height: 24),
-                  _buildCaptionSection(),
-                  const SizedBox(height: 24),
-                  if (_action.content.link != null) _buildLinkPreview(),
-                  if (_action.content.link != null) const SizedBox(height: 24),
-                  _buildMediaPreview(),
-                  const SizedBox(height: 24),
-                  _buildScheduleSection(),
-                  const SizedBox(height: 32),
-                  _buildActionButtons(),
-                ],
+          : Container(
+              decoration: const BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    Colors.black,
+                    Color(0xFF1A1A1A),
+                  ],
+                ),
+              ),
+              child: SafeArea(
+                child: _buildGridLayout(),
               ),
             ),
+    );
+  }
+
+  Widget _buildGridLayout() {
+    return Column(
+      children: [
+        // Header section (60px height)
+        Container(
+          height: 60,
+          padding: EdgeInsets.symmetric(horizontal: _spacing3),
+          child: _buildHeader(),
+        ),
+
+        // Social platforms section (72px height with spacing)
+        Container(
+          height: 72,
+          padding: EdgeInsets.symmetric(horizontal: _spacing4),
+          margin: EdgeInsets.only(top: _spacing2),
+          child: _buildPlatformsRow(),
+        ),
+
+        // Main content area (flexible with controlled spacing)
+        Expanded(
+          child: SingleChildScrollView(
+            physics: const BouncingScrollPhysics(),
+            child: Column(
+              children: [
+                SizedBox(height: _spacing4),
+
+                // Media preview (if available)
+                if (_action.content.media.isNotEmpty) ...[
+                  _buildMediaPreview(),
+                  SizedBox(height: _spacing3),
+                ],
+
+                // Post content box (main text/hashtags)
+                PostContentBox(
+                  action: _action,
+                  isRecording: _isRecording,
+                  isProcessingVoice: _isProcessingVoice,
+                  onEditText: _editCaption,
+                  onVoiceEdit:
+                      _isRecording ? _stopVoiceRecording : _startVoiceRecording,
+                ),
+
+                SizedBox(height: _spacing3),
+
+                // Schedule info
+                _buildScheduleInfo(),
+
+                SizedBox(height: _spacing6),
+              ],
+            ),
+          ),
+        ),
+
+        // Bottom action bar (fixed height: 102px)
+        Container(
+          height: 102,
+          padding: EdgeInsets.all(_spacing3),
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: 0.3),
+            borderRadius: BorderRadius.only(
+              topLeft: Radius.circular(_spacing3),
+              topRight: Radius.circular(_spacing3),
+            ),
+          ),
+          child: _buildActionButtons(),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildHeader() {
+    return Row(
+      children: [
+        IconButton(
+          onPressed: () => Navigator.pop(context),
+          icon: const Icon(
+            Icons.arrow_back,
+            color: Colors.white,
+            size: 24,
+          ),
+          padding: EdgeInsets.zero,
+          constraints: const BoxConstraints(
+            minWidth: 40,
+            minHeight: 40,
+          ),
+        ),
+        Expanded(
+          child: Text(
+            'Review Your Post',
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 18,
+              fontWeight: FontWeight.w600,
+            ),
+            textAlign: TextAlign.center,
+          ),
+        ),
+        SizedBox(width: 40), // Balance the back button
+      ],
+    );
+  }
+
+  Widget _buildPlatformsRow() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(
+              Icons.share,
+              color: Colors.white70,
+              size: 14,
+            ),
+            SizedBox(width: _spacing1),
+            Text(
+              'Posting to:',
+              style: TextStyle(
+                color: Colors.white70,
+                fontSize: 12,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ],
+        ),
+        SizedBox(height: _spacing1),
+        Consumer<AuthService>(
+          builder: (context, authService, _) {
+            return Wrap(
+              spacing: _spacing1,
+              runSpacing: _spacing1,
+              children: _action.platforms.map((platform) {
+                return FutureBuilder<bool>(
+                  future: authService.isPlatformConnected(platform),
+                  builder: (context, snapshot) {
+                    final isConnected = snapshot.data ?? false;
+
+                    return Container(
+                      padding: EdgeInsets.symmetric(
+                        horizontal: _spacing2,
+                        vertical: _spacing1,
+                      ),
+                      decoration: BoxDecoration(
+                        color: isConnected
+                            ? _getPlatformColor(platform).withValues(alpha: 0.2)
+                            : Colors.white.withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(_spacing2),
+                        border: Border.all(
+                          color: isConnected
+                              ? _getPlatformColor(platform)
+                              : Colors.white.withValues(alpha: 0.3),
+                        ),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          _getPlatformIcon(platform),
+                          SizedBox(width: _spacing1),
+                          Text(
+                            platform.substring(0, 1).toUpperCase() +
+                                platform.substring(1),
+                            style: TextStyle(
+                              fontSize: 11,
+                              color:
+                                  isConnected ? Colors.white : Colors.white70,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                );
+              }).toList(),
+            );
+          },
+        ),
+      ],
+    );
+  }
+
+  Widget _buildMediaPreview() {
+    if (_action.content.media.isEmpty) return const SizedBox.shrink();
+
+    final mediaItem = _action.content.media.first;
+    final isVideo = mediaItem.mimeType.startsWith('video/');
+
+    return Container(
+      width: MediaQuery.of(context).size.width * 0.9,
+      height: 200,
+      margin: EdgeInsets.symmetric(horizontal: _spacing3),
+      decoration: BoxDecoration(
+        color: Colors.grey.shade100,
+        borderRadius: BorderRadius.circular(_spacing3),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.1),
+            blurRadius: 20,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(_spacing3),
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            isVideo
+                ? VideoPlayerWidget(fileUri: mediaItem.fileUri)
+                : Image.file(
+                    File(Uri.parse(mediaItem.fileUri).path),
+                    fit: BoxFit.cover,
+                    errorBuilder: (context, error, stackTrace) {
+                      return _buildMediaPlaceholder(isVideo);
+                    },
+                  ),
+
+            // Media info overlay
+            Positioned(
+              bottom: 0,
+              left: 0,
+              right: 0,
+              child: Container(
+                padding: EdgeInsets.all(_spacing2),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.bottomCenter,
+                    end: Alignment.topCenter,
+                    colors: [
+                      Colors.black.withValues(alpha: 0.7),
+                      Colors.transparent,
+                    ],
+                  ),
+                ),
+                child: Text(
+                  '${mediaItem.deviceMetadata.width} × ${mediaItem.deviceMetadata.height}',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMediaPlaceholder(bool isVideo) {
+    return Container(
+      color: Colors.grey.shade200,
+      child: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              isVideo ? Icons.videocam : Icons.image,
+              color: Colors.grey.shade400,
+              size: 40,
+            ),
+            SizedBox(height: _spacing1),
+            Text(
+              isVideo ? 'Video Preview' : 'Image Preview',
+              style: TextStyle(
+                color: Colors.grey.shade600,
+                fontSize: 12,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildScheduleInfo() {
+    final isNow = _action.options.schedule == 'now';
+    final scheduleText = isNow
+        ? 'Posting immediately'
+        : 'Scheduled for ${_formatDateTime(DateTime.parse(_action.options.schedule))}';
+
+    return Container(
+      width: MediaQuery.of(context).size.width * 0.9,
+      margin: EdgeInsets.symmetric(horizontal: _spacing3),
+      padding: EdgeInsets.all(_spacing3),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(_spacing2),
+        border: Border.all(
+          color: Colors.white.withValues(alpha: 0.2),
+        ),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            isNow ? Icons.send : Icons.schedule,
+            color: const Color(0xFFFF0080),
+            size: 18,
+          ),
+          SizedBox(width: _spacing2),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Schedule',
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w500,
+                    color: Colors.white70,
+                  ),
+                ),
+                SizedBox(height: 2),
+                Text(
+                  scheduleText,
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w500,
+                    color: Colors.white,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          TextButton(
+            onPressed: _editSchedule,
+            child: Text(
+              'Change',
+              style: TextStyle(
+                color: const Color(0xFFFF0080),
+                fontWeight: FontWeight.w500,
+                fontSize: 12,
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -410,417 +1030,79 @@ class _ReviewPostScreenState extends State<ReviewPostScreen> {
     );
   }
 
-  Widget _buildPlatformList() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          'Posting to:',
-          style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                fontWeight: FontWeight.bold,
-              ),
-        ),
-        const SizedBox(height: 8),
-        Consumer<AuthService>(
-          builder: (context, authService, _) {
-            return Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: _action.platforms.map((platform) {
-                return FutureBuilder<bool>(
-                  future: authService.isPlatformConnected(platform),
-                  builder: (context, snapshot) {
-                    final isConnected = snapshot.data ?? false;
-
-                    return Chip(
-                      avatar: _getPlatformIcon(platform),
-                      label: Text(
-                        platform.substring(0, 1).toUpperCase() +
-                            platform.substring(1),
-                      ),
-                      backgroundColor: isConnected
-                          ? _getPlatformColor(platform).withValues(alpha: 0.2)
-                          : Theme.of(context)
-                              .colorScheme
-                              .surfaceContainerHighest,
-                      side: BorderSide(
-                        color: isConnected
-                            ? _getPlatformColor(platform)
-                            : Theme.of(context).colorScheme.outline,
-                      ),
-                    );
-                  },
-                );
-              }).toList(),
-            );
-          },
-        ),
-      ],
-    );
-  }
-
-  Widget _buildCaptionSection() {
-    final caption = _action.content.text;
-    final hashtags = _action.content.hashtags;
-    final mentions = _action.content.mentions;
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Text(
-              'Caption',
-              style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.bold,
-                  ),
-            ),
-            IconButton(
-              icon: const Icon(Icons.edit),
-              onPressed: _editCaption,
-              tooltip: 'Edit caption',
-            ),
-          ],
-        ),
-        const SizedBox(height: 8),
-        Container(
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: Theme.of(context).colorScheme.surface,
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(
-              color:
-                  Theme.of(context).colorScheme.outline.withValues(alpha: 0.5),
-            ),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(caption),
-              if (hashtags.isNotEmpty) ...[
-                const SizedBox(height: 8),
-                Wrap(
-                  spacing: 4,
-                  children: hashtags.map((tag) {
-                    return Chip(
-                      label: Text(
-                        '#$tag',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: Theme.of(context).colorScheme.primary,
-                        ),
-                      ),
-                      backgroundColor: Theme.of(context)
-                          .colorScheme
-                          .primary
-                          .withValues(alpha: 0.1),
-                      padding: EdgeInsets.zero,
-                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    );
-                  }).toList(),
-                ),
-              ],
-              if (mentions.isNotEmpty) ...[
-                const SizedBox(height: 8),
-                Wrap(
-                  spacing: 4,
-                  children: mentions.map((mention) {
-                    return Chip(
-                      label: Text(
-                        '@$mention',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: Theme.of(context).colorScheme.secondary,
-                        ),
-                      ),
-                      backgroundColor: Theme.of(context)
-                          .colorScheme
-                          .secondary
-                          .withValues(alpha: 0.1),
-                      padding: EdgeInsets.zero,
-                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    );
-                  }).toList(),
-                ),
-              ],
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildLinkPreview() {
-    final link = _action.content.link!;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          'Link Preview',
-          style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                fontWeight: FontWeight.bold,
-              ),
-        ),
-        const SizedBox(height: 8),
-        Container(
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: Theme.of(context)
-                .colorScheme
-                .surfaceContainerHighest
-                .withValues(alpha: 0.5),
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(
-              color:
-                  Theme.of(context).colorScheme.outline.withValues(alpha: 0.5),
-            ),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              GestureDetector(
-                onTap: () async {
-                  final uri = Uri.parse(link.url);
-                  if (await canLaunchUrl(uri)) {
-                    await launchUrl(uri);
-                  }
-                },
-                child: Text(
-                  link.url,
-                  style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                        color: Theme.of(context).colorScheme.primary,
-                        decoration: TextDecoration.underline,
-                      ),
-                ),
-              ),
-              if (link.title != null) ...[
-                const SizedBox(height: 8),
-                Text(
-                  link.title!,
-                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                        fontWeight: FontWeight.bold,
-                      ),
-                ),
-              ],
-              if (link.description != null) ...[
-                const SizedBox(height: 4),
-                Text(
-                  link.description!,
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        color: Theme.of(context).colorScheme.onSurfaceVariant,
-                      ),
-                ),
-              ],
-              if (link.thumbnailUrl != null) ...[
-                const SizedBox(height: 8),
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(4),
-                  child: Image.network(
-                    link.thumbnailUrl!,
-                    height: 100,
-                    width: double.infinity,
-                    fit: BoxFit.cover,
-                    errorBuilder: (context, error, stackTrace) {
-                      return Container(
-                        height: 100,
-                        color: Theme.of(context)
-                            .colorScheme
-                            .surfaceContainerHighest,
-                        child: const Center(
-                          child: Icon(Icons.broken_image),
-                        ),
-                      );
-                    },
-                  ),
-                ),
-              ],
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildMediaPreview() {
-    if (_action.content.media.isEmpty) {
-      return const SizedBox.shrink();
-    }
-
-    final mediaItem = _action.content.media.first;
-    final isVideo = mediaItem.mimeType.startsWith('video/');
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          'Media',
-          style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                fontWeight: FontWeight.bold,
-              ),
-        ),
-        const SizedBox(height: 8),
-        ClipRRect(
-          borderRadius: BorderRadius.circular(12),
-          child: isVideo
-              ? AspectRatio(
-                  aspectRatio: 16 / 9,
-                  child: VideoPlayerWidget(fileUri: mediaItem.fileUri),
-                )
-              : Image.file(
-                  File(Uri.parse(mediaItem.fileUri).path),
-                  fit: BoxFit.cover,
-                  width: double.infinity,
-                  height: 300,
-                ),
-        ),
-        const SizedBox(height: 8),
-        Container(
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: Theme.of(context)
-                .colorScheme
-                .surfaceContainerHighest
-                .withValues(alpha: 0.5),
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _buildMetadataRow(
-                Icons.calendar_today,
-                'Created: ${_formatDate(mediaItem.deviceMetadata.creationTime)}',
-              ),
-              if (mediaItem.deviceMetadata.latitude != null &&
-                  mediaItem.deviceMetadata.longitude != null)
-                _buildMetadataRow(
-                  Icons.location_on,
-                  'Location: ${mediaItem.deviceMetadata.latitude!.toStringAsFixed(4)}, ${mediaItem.deviceMetadata.longitude!.toStringAsFixed(4)}',
-                ),
-              _buildMetadataRow(
-                Icons.aspect_ratio,
-                'Dimensions: ${mediaItem.deviceMetadata.width} × ${mediaItem.deviceMetadata.height}',
-              ),
-              if (isVideo)
-                _buildMetadataRow(
-                  Icons.videocam,
-                  'Video (${(mediaItem.deviceMetadata.duration ?? 0).toStringAsFixed(1)}s)',
-                )
-              else
-                _buildMetadataRow(
-                  Icons.image,
-                  'Image',
-                ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildScheduleSection() {
-    final isNow = _action.options.schedule == 'now';
-    final scheduleText = isNow
-        ? 'Posting immediately'
-        : 'Scheduled for ${_formatDateTime(DateTime.parse(_action.options.schedule))}';
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          'Schedule',
-          style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                fontWeight: FontWeight.bold,
-              ),
-        ),
-        const SizedBox(height: 8),
-        Row(
-          children: [
-            Icon(
-              isNow ? Icons.send : Icons.schedule,
-              color: Theme.of(context).colorScheme.primary,
-            ),
-            const SizedBox(width: 8),
-            Text(
-              scheduleText,
-              style: Theme.of(context).textTheme.bodyLarge,
-            ),
-            const Spacer(),
-            TextButton(
-              onPressed: _editSchedule,
-              child: const Text('Change'),
-            ),
-          ],
-        ),
-      ],
-    );
-  }
-
   Widget _buildActionButtons() {
     return Column(
+      mainAxisSize: MainAxisSize.min,
       children: [
         SizedBox(
           width: double.infinity,
+          height: 42, // Fixed height for main button
           child: ElevatedButton.icon(
-            icon: const Icon(Icons.send),
-            label: const Text('Confirm & Post'),
+            icon: const Icon(Icons.send, color: Colors.white, size: 18),
+            label: const Text(
+              'Confirm & Post',
+              style: TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.w600,
+                fontSize: 15,
+              ),
+            ),
             onPressed: _confirmAndPost,
             style: ElevatedButton.styleFrom(
-              backgroundColor: Theme.of(context).colorScheme.primary,
-              foregroundColor: Theme.of(context).colorScheme.onPrimary,
-              padding: const EdgeInsets.symmetric(vertical: 16),
+              backgroundColor: const Color(0xFFFF0080),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(_spacing2),
+              ),
+              elevation: 2,
             ),
           ),
         ),
-        const SizedBox(height: 8),
-        SizedBox(
-          width: double.infinity,
-          child: OutlinedButton.icon(
-            icon: const Icon(Icons.photo_library),
-            label: const Text('Edit Media'),
-            onPressed: () => Navigator.pop(context),
-            style: OutlinedButton.styleFrom(
-              padding: const EdgeInsets.symmetric(vertical: 16),
+        SizedBox(height: _spacing2),
+        Row(
+          children: [
+            Expanded(
+              child: SizedBox(
+                height: 36, // Fixed height for secondary buttons
+                child: OutlinedButton.icon(
+                  icon: const Icon(Icons.photo_library, size: 16),
+                  label: const Text(
+                    'Edit Media',
+                    style: TextStyle(fontWeight: FontWeight.w500, fontSize: 13),
+                  ),
+                  onPressed: () => Navigator.pop(context),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.white,
+                    side: const BorderSide(color: Colors.white),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(_spacing2),
+                    ),
+                  ),
+                ),
+              ),
             ),
-          ),
-        ),
-        const SizedBox(height: 8),
-        SizedBox(
-          width: double.infinity,
-          child: TextButton.icon(
-            icon: const Icon(Icons.delete),
-            label: const Text('Cancel Post'),
-            onPressed: _cancelPost,
-            style: TextButton.styleFrom(
-              padding: const EdgeInsets.symmetric(vertical: 16),
+            SizedBox(width: _spacing2),
+            Expanded(
+              child: SizedBox(
+                height: 36, // Fixed height for secondary buttons
+                child: TextButton.icon(
+                  icon: const Icon(Icons.delete, size: 16),
+                  label: const Text(
+                    'Cancel Post',
+                    style: TextStyle(fontWeight: FontWeight.w500, fontSize: 13),
+                  ),
+                  onPressed: _cancelPost,
+                  style: TextButton.styleFrom(
+                    foregroundColor: Colors.white.withValues(alpha: 0.7),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(_spacing2),
+                    ),
+                  ),
+                ),
+              ),
             ),
-          ),
+          ],
         ),
       ],
-    );
-  }
-
-  Widget _buildMetadataRow(IconData icon, String text) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8.0),
-      child: Row(
-        children: [
-          Icon(
-            icon,
-            size: 16,
-            color: Theme.of(context).colorScheme.primary,
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              text,
-              style: Theme.of(context).textTheme.bodyMedium,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-        ],
-      ),
     );
   }
 
@@ -845,7 +1127,7 @@ class _ReviewPostScreenState extends State<ReviewPostScreen> {
 
     return Icon(
       icon,
-      size: 16,
+      size: 14,
       color: _getPlatformColor(platform),
     );
   }
@@ -861,14 +1143,8 @@ class _ReviewPostScreenState extends State<ReviewPostScreen> {
       case 'tiktok':
         return Colors.black87;
       default:
-        return Theme.of(context).colorScheme.primary;
+        return Colors.grey.shade600;
     }
-  }
-
-  String _formatDate(String isoDate) {
-    final date = DateTime.parse(isoDate);
-    final formatter = DateFormat('MMM d, yyyy');
-    return formatter.format(date);
   }
 
   String _formatDateTime(DateTime dateTime) {

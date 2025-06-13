@@ -13,6 +13,23 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _isLoading = false;
 
   @override
+  void initState() {
+    super.initState();
+    // Check for existing auth state when screen loads
+    _checkExistingAuth();
+  }
+
+  Future<void> _checkExistingAuth() async {
+    try {
+      final authService = context.read<AuthService>();
+      await authService.refreshAuthState();
+    } catch (e) {
+      // Silent failure for auth state check
+      debugPrint('Auth state check failed: $e');
+}
+  }
+
+  @override
   Widget build(BuildContext context) {
     return Scaffold(
       body: Container(
@@ -124,6 +141,8 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   Future<void> _signInWithGoogle() async {
+    if (_isLoading) return; // Prevent multiple simultaneous sign-in attempts
+    
     setState(() {
       _isLoading = true;
     });
@@ -131,12 +150,32 @@ class _LoginScreenState extends State<LoginScreen> {
     try {
       // Get service reference before async operations
       final authService = context.read<AuthService>();
-      await authService.signInWithGoogle();
+      
+      // Attempt sign-in with retry logic
+      final result = await authService.signInWithGoogle();
+      
+      if (result == null && mounted) {
+        // User cancelled or sign-in failed silently
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Sign-in was cancelled. Please try again.'),
+            duration: Duration(seconds: 2),
+          ),
+        );
+      }
       // Navigation is handled by the Consumer in main.dart
     } catch (e) {
       if (mounted) {
+        final errorMessage = e.toString().replaceFirst('Exception: ', '');
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Sign in failed: ${e.toString()}')),
+          SnackBar(
+            content: Text('Sign in failed: $errorMessage'),
+            duration: const Duration(seconds: 4),
+            action: SnackBarAction(
+              label: 'Retry',
+              onPressed: _signInWithGoogle,
+            ),
+          ),
         );
       }
     } finally {

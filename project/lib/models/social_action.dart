@@ -437,25 +437,23 @@ class Internal {
   final String? mediaIndexId;
   @JsonKey(name: 'ui_flags')
   final UiFlags uiFlags;
-  // AI metadata fields for tracking AI-generated content
   @JsonKey(name: 'ai_generated')
-  final bool
-      aiGenerated; // Indicates whether ChatGPT successfully generated the JSON
+  final bool aiGenerated;
   @JsonKey(name: 'original_transcription')
-  final String
-      originalTranscription; // Raw transcription string returned by Whisper
+  final String originalTranscription;
   @JsonKey(name: 'fallback_reason')
-  final String? fallbackReason; // Error reason when AI generation fails
+  final String? fallbackReason;
 
   Internal({
     this.retryCount = 0,
-    required this.userPreferences,
+    UserPreferences? userPreferences,
     this.mediaIndexId,
-    required this.uiFlags,
+    UiFlags? uiFlags,
     this.aiGenerated = false,
     this.originalTranscription = '',
     this.fallbackReason,
-  });
+  })  : userPreferences = userPreferences ?? UserPreferences(),
+        uiFlags = uiFlags ?? UiFlags();
 
   factory Internal.fromJson(Map<String, dynamic> json) =>
       _$InternalFromJson(json);

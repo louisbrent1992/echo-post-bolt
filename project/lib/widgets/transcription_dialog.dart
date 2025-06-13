@@ -8,13 +8,13 @@ class TranscriptionDialog extends StatelessWidget {
   final VoidCallback? onPostNow;
 
   const TranscriptionDialog({
-    Key? key,
+    super.key,
     required this.transcription,
     required this.isJsonReady,
     required this.hasMedia,
     this.onReviewMedia,
     this.onPostNow,
-  }) : super(key: key);
+  });
 
   String _getStatusMessage() {
     if (transcription.isEmpty) {
@@ -185,10 +185,10 @@ class PulsingContainer extends StatefulWidget {
   final bool shouldPulse;
 
   const PulsingContainer({
-    Key? key,
+    super.key,
     required this.child,
     this.shouldPulse = false,
-  }) : super(key: key);
+  });
 
   @override
   State<PulsingContainer> createState() => _PulsingContainerState();

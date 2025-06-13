@@ -297,10 +297,14 @@ Map<String, dynamic> _$SoundToJson(Sound instance) => <String, dynamic>{
 
 Internal _$InternalFromJson(Map<String, dynamic> json) => Internal(
       retryCount: (json['retry_count'] as num?)?.toInt() ?? 0,
-      userPreferences: UserPreferences.fromJson(
-          json['user_preferences'] as Map<String, dynamic>),
+      userPreferences: json['user_preferences'] == null
+          ? UserPreferences()
+          : UserPreferences.fromJson(
+              json['user_preferences'] as Map<String, dynamic>),
       mediaIndexId: json['media_index_id'] as String?,
-      uiFlags: UiFlags.fromJson(json['ui_flags'] as Map<String, dynamic>),
+      uiFlags: json['ui_flags'] == null
+          ? UiFlags()
+          : UiFlags.fromJson(json['ui_flags'] as Map<String, dynamic>),
       aiGenerated: json['ai_generated'] as bool? ?? false,
       originalTranscription: json['original_transcription'] as String? ?? '',
       fallbackReason: json['fallback_reason'] as String?,
