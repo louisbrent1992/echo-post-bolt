@@ -3,7 +3,7 @@ import 'package:provider/provider.dart';
 import 'package:photo_manager/photo_manager.dart';
 
 import '../services/firestore_service.dart';
-import '../services/media_search_service.dart';
+import '../services/media_coordinator.dart';
 
 class AlbumSelectionScreen extends StatefulWidget {
   const AlbumSelectionScreen({super.key});
@@ -30,13 +30,13 @@ class _AlbumSelectionScreenState extends State<AlbumSelectionScreen> {
     });
 
     try {
-      final mediaSearchService =
-          Provider.of<MediaSearchService>(context, listen: false);
+      final mediaCoordinator =
+          Provider.of<MediaCoordinator>(context, listen: false);
       final firestoreService =
           Provider.of<FirestoreService>(context, listen: false);
 
-      // Get all available albums
-      final albums = await mediaSearchService.getAvailableAlbums();
+      // Get all available albums through MediaCoordinator
+      final albums = await mediaCoordinator.getAvailableAlbums();
 
       // Get currently selected album IDs
       final selectedIds = await firestoreService.getSelectedMediaAlbums();
@@ -67,7 +67,6 @@ class _AlbumSelectionScreenState extends State<AlbumSelectionScreen> {
       setState(() {
         _isLoading = false;
       });
-
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Failed to load albums: $e')),
@@ -91,15 +90,15 @@ class _AlbumSelectionScreenState extends State<AlbumSelectionScreen> {
     try {
       final firestoreService =
           Provider.of<FirestoreService>(context, listen: false);
-      final mediaSearchService =
-          Provider.of<MediaSearchService>(context, listen: false);
+      final mediaCoordinator =
+          Provider.of<MediaCoordinator>(context, listen: false);
 
       // Save the selected album IDs to Firestore
       await firestoreService
           .updateSelectedMediaAlbums(_selectedAlbumIds.toList());
 
       // Re-initialize the media search service with new albums
-      await mediaSearchService.reinitializeWithAlbums(
+      await mediaCoordinator.reinitializeWithAlbums(
           _selectedAlbumIds.toList(), firestoreService);
 
       if (mounted) {

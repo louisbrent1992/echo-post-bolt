@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
-import '../services/directory_service.dart';
+import '../services/media_coordinator.dart';
+import '../services/directory_service.dart'; // For MediaDirectory class
 import '../screens/directory_selection_screen.dart';
 import 'package:provider/provider.dart';
 
@@ -11,33 +12,34 @@ class DirectorySelector extends StatefulWidget {
 }
 
 class _DirectorySelectorState extends State<DirectorySelector> {
-  DirectoryService? _directory_service;
+  MediaCoordinator? _mediaCoordinator;
   bool _isLoading = true;
-  bool _customDirectoriesEnabled = false;
-  int _enabledDirectoriesCount = 0;
+  bool _isCustomEnabled = false;
+  int _enabledCount = 0;
 
   @override
   void initState() {
     super.initState();
-    _initializeService();
+    _initializeSelector();
   }
 
-  Future<void> _initializeService() async {
+  Future<void> _initializeSelector() async {
     setState(() {
       _isLoading = true;
     });
 
     try {
-      _directory_service =
-          Provider.of<DirectoryService>(context, listen: false);
-      await _directory_service!.initialize();
+      _mediaCoordinator = Provider.of<MediaCoordinator>(context, listen: false);
+
+      // MediaCoordinator should already be initialized by ServiceInitializationWrapper
+      if (!_mediaCoordinator!.isInitialized) {
+        await _mediaCoordinator!.initialize();
+      }
 
       setState(() {
-        _customDirectoriesEnabled =
-            _directory_service!.isCustomDirectoriesEnabled;
-        _enabledDirectoriesCount =
-            _directory_service!.enabledDirectories.length;
         _isLoading = false;
+        _isCustomEnabled = _mediaCoordinator!.isCustomDirectoriesEnabled;
+        _enabledCount = _mediaCoordinator!.enabledDirectories.length;
       });
     } catch (e) {
       setState(() {
@@ -56,7 +58,7 @@ class _DirectorySelectorState extends State<DirectorySelector> {
 
     // Refresh status after returning from directory selection
     if (result != null || mounted) {
-      await _initializeService();
+      await _initializeSelector();
     }
   }
 
@@ -95,9 +97,7 @@ class _DirectorySelectorState extends State<DirectorySelector> {
           mainAxisSize: MainAxisSize.min,
           children: [
             Icon(
-              _customDirectoriesEnabled
-                  ? Icons.folder_open
-                  : Icons.photo_library,
+              _isCustomEnabled ? Icons.folder_open : Icons.photo_library,
               color: const Color(0xFFFF0080),
               size: 16,
             ),
@@ -127,13 +127,13 @@ class _DirectorySelectorState extends State<DirectorySelector> {
   }
 
   String _getStatusText() {
-    if (_customDirectoriesEnabled) {
-      if (_enabledDirectoriesCount == 0) {
+    if (_isCustomEnabled) {
+      if (_enabledCount == 0) {
         return 'No directories selected';
-      } else if (_enabledDirectoriesCount == 1) {
+      } else if (_enabledCount == 1) {
         return '1 directory selected';
       } else {
-        return '$_enabledDirectoriesCount directories selected';
+        return '$_enabledCount directories selected';
       }
     } else {
       return 'Using photo albums';

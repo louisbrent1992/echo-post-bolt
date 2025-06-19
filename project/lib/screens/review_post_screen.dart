@@ -15,6 +15,7 @@ import '../services/auth_service.dart';
 import '../services/firestore_service.dart';
 import '../services/social_post_service.dart';
 import '../services/ai_service.dart';
+import '../services/media_coordinator.dart';
 import '../screens/history_screen.dart';
 import '../screens/command_screen.dart';
 import '../widgets/post_content_box.dart';
@@ -49,7 +50,9 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget> {
               }
             });
     } catch (e) {
-      print('Error initializing video: $e');
+      if (kDebugMode) {
+        print('Error initializing video: $e');
+      }
     }
   }
 
@@ -119,6 +122,9 @@ class _ReviewPostScreenState extends State<ReviewPostScreen> {
   bool _isProcessingVoice = false;
   String? _currentRecordingPath;
 
+  // Media coordinator for validation
+  late final MediaCoordinator _mediaCoordinator;
+
   // Grid spacing constants (multiples of 6 for consistency)
   static const double _gridUnit = 6.0;
   static const double _spacing1 = _gridUnit; // 6px
@@ -133,6 +139,37 @@ class _ReviewPostScreenState extends State<ReviewPostScreen> {
     super.initState();
     _action = widget.action;
     _captionController.text = _action.content.text;
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _mediaCoordinator = Provider.of<MediaCoordinator>(context, listen: false);
+    _validateMediaOnLoad();
+  }
+
+  /// Validates media URIs when the screen loads
+  Future<void> _validateMediaOnLoad() async {
+    if (_action.content.media.isNotEmpty) {
+      try {
+        final recoveredAction =
+            await _mediaCoordinator.recoverMediaState(_action);
+        if (recoveredAction != null && recoveredAction != _action) {
+          setState(() {
+            _action = recoveredAction;
+          });
+
+          if (kDebugMode) {
+            print('📊 Media validation completed on ReviewPostScreen load');
+            print('   Valid media count: ${_action.content.media.length}');
+          }
+        }
+      } catch (e) {
+        if (kDebugMode) {
+          print('⚠️ Media validation failed on load: $e');
+        }
+      }
+    }
   }
 
   @override
@@ -469,6 +506,7 @@ class _ReviewPostScreenState extends State<ReviewPostScreen> {
   }
 
   Future<void> _processVoiceEdit(String audioPath) async {
+    final aiService = Provider.of<AIService>(context, listen: false);
     try {
       if (kDebugMode) {
         print('🎵 Processing voice edit from: $audioPath');
@@ -481,22 +519,17 @@ class _ReviewPostScreenState extends State<ReviewPostScreen> {
         print('📝 Voice edit transcription: "$transcription"');
       }
 
-      // Use AI to process the voice edit instruction
-      final aiService = Provider.of<AIService>(context, listen: false);
       final editInstruction = '''
 Current post content: "${_action.content.text}"
 Current hashtags: ${_action.content.hashtags}
-User voice instruction: "$transcription"
+User voice instruction: "$transcription"''';
 
-Update the post with the user's instruction. If they want to add text, append or replace as appropriate. If they mention hashtags, add them. Return a JSON with updated text and hashtags only:
-{
-  "text": "updated text content",
-  "hashtags": ["updated", "hashtags"]
-}
-''';
-
-      final response = await _sendEditRequest(editInstruction);
-      await _applyTextEdit(response['text'], response['hashtags']);
+      final updatedAction =
+          await aiService.processVoiceCommand(editInstruction);
+      if (mounted) {
+        await _applyTextEdit(
+            updatedAction.content.text, updatedAction.content.hashtags);
+      }
     } catch (e) {
       if (kDebugMode) {
         print('❌ Voice edit processing error: $e');
@@ -556,50 +589,6 @@ Update the post with the user's instruction. If they want to add text, append or
     } catch (_) {}
 
     return transcription.trim();
-  }
-
-  Future<Map<String, dynamic>> _sendEditRequest(String instruction) async {
-    final apiKey = dotenv.env['OPENAI_API_KEY'];
-    if (apiKey == null || apiKey.isEmpty) {
-      throw Exception('OPENAI_API_KEY not found');
-    }
-
-    final requestBody = {
-      'model': 'gpt-4o-mini',
-      'messages': [
-        {
-          'role': 'system',
-          'content':
-              'You are a social media post editor. Update posts based on user voice instructions. Return only valid JSON with "text" and "hashtags" fields.',
-        },
-        {
-          'role': 'user',
-          'content': instruction,
-        }
-      ],
-      'max_tokens': 256,
-      'temperature': 0.1,
-      'response_format': {'type': 'json_object'},
-    };
-
-    final response = await http.post(
-      Uri.parse('https://api.openai.com/v1/chat/completions'),
-      headers: {
-        'Authorization': 'Bearer $apiKey',
-        'Content-Type': 'application/json',
-      },
-      body: jsonEncode(requestBody),
-    );
-
-    if (response.statusCode != 200) {
-      throw Exception('ChatGPT API error: ${response.body}');
-    }
-
-    final responseData = jsonDecode(response.body) as Map<String, dynamic>;
-    final choices = responseData['choices'] as List;
-    final content = choices[0]['message']['content'] as String;
-
-    return jsonDecode(content) as Map<String, dynamic>;
   }
 
   Future<void> _applyTextEdit(String newText, List<dynamic> newHashtags) async {
@@ -673,15 +662,15 @@ Update the post with the user's instruction. If they want to add text, append or
         // Header section (60px height)
         Container(
           height: 60,
-          padding: EdgeInsets.symmetric(horizontal: _spacing3),
+          padding: const EdgeInsets.symmetric(horizontal: _spacing3),
           child: _buildHeader(),
         ),
 
         // Social platforms section (72px height with spacing)
         Container(
           height: 72,
-          padding: EdgeInsets.symmetric(horizontal: _spacing4),
-          margin: EdgeInsets.only(top: _spacing2),
+          padding: const EdgeInsets.symmetric(horizontal: _spacing4),
+          margin: const EdgeInsets.only(top: _spacing2),
           child: _buildPlatformsRow(),
         ),
 
@@ -691,12 +680,12 @@ Update the post with the user's instruction. If they want to add text, append or
             physics: const BouncingScrollPhysics(),
             child: Column(
               children: [
-                SizedBox(height: _spacing4),
+                const SizedBox(height: _spacing4),
 
                 // Media preview (if available)
                 if (_action.content.media.isNotEmpty) ...[
                   _buildMediaPreview(),
-                  SizedBox(height: _spacing3),
+                  const SizedBox(height: _spacing3),
                 ],
 
                 // Post content box (main text/hashtags)
@@ -709,12 +698,12 @@ Update the post with the user's instruction. If they want to add text, append or
                       _isRecording ? _stopVoiceRecording : _startVoiceRecording,
                 ),
 
-                SizedBox(height: _spacing3),
+                const SizedBox(height: _spacing3),
 
                 // Schedule info
                 _buildScheduleInfo(),
 
-                SizedBox(height: _spacing6),
+                const SizedBox(height: _spacing6),
               ],
             ),
           ),
@@ -723,10 +712,10 @@ Update the post with the user's instruction. If they want to add text, append or
         // Bottom action bar (fixed height: 102px)
         Container(
           height: 102,
-          padding: EdgeInsets.all(_spacing3),
+          padding: const EdgeInsets.all(_spacing3),
           decoration: BoxDecoration(
             color: Colors.black.withValues(alpha: 0.3),
-            borderRadius: BorderRadius.only(
+            borderRadius: const BorderRadius.only(
               topLeft: Radius.circular(_spacing3),
               topRight: Radius.circular(_spacing3),
             ),
@@ -753,7 +742,7 @@ Update the post with the user's instruction. If they want to add text, append or
             minHeight: 40,
           ),
         ),
-        Expanded(
+        const Expanded(
           child: Text(
             'Review Your Post',
             style: TextStyle(
@@ -764,7 +753,7 @@ Update the post with the user's instruction. If they want to add text, append or
             textAlign: TextAlign.center,
           ),
         ),
-        SizedBox(width: 40), // Balance the back button
+        const SizedBox(width: 40), // Balance the back button
       ],
     );
   }
@@ -773,7 +762,7 @@ Update the post with the user's instruction. If they want to add text, append or
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
+        const Row(
           children: [
             Icon(
               Icons.share,
@@ -791,7 +780,7 @@ Update the post with the user's instruction. If they want to add text, append or
             ),
           ],
         ),
-        SizedBox(height: _spacing1),
+        const SizedBox(height: _spacing1),
         Consumer<AuthService>(
           builder: (context, authService, _) {
             return Wrap(
@@ -804,7 +793,7 @@ Update the post with the user's instruction. If they want to add text, append or
                     final isConnected = snapshot.data ?? false;
 
                     return Container(
-                      padding: EdgeInsets.symmetric(
+                      padding: const EdgeInsets.symmetric(
                         horizontal: _spacing2,
                         vertical: _spacing1,
                       ),
@@ -823,7 +812,7 @@ Update the post with the user's instruction. If they want to add text, append or
                         mainAxisSize: MainAxisSize.min,
                         children: [
                           _getPlatformIcon(platform),
-                          SizedBox(width: _spacing1),
+                          const SizedBox(width: _spacing1),
                           Text(
                             platform.substring(0, 1).toUpperCase() +
                                 platform.substring(1),
@@ -856,7 +845,7 @@ Update the post with the user's instruction. If they want to add text, append or
     return Container(
       width: MediaQuery.of(context).size.width * 0.9,
       height: 200,
-      margin: EdgeInsets.symmetric(horizontal: _spacing3),
+      margin: const EdgeInsets.symmetric(horizontal: _spacing3),
       decoration: BoxDecoration(
         color: Colors.grey.shade100,
         borderRadius: BorderRadius.circular(_spacing3),
@@ -889,7 +878,7 @@ Update the post with the user's instruction. If they want to add text, append or
               left: 0,
               right: 0,
               child: Container(
-                padding: EdgeInsets.all(_spacing2),
+                padding: const EdgeInsets.all(_spacing2),
                 decoration: BoxDecoration(
                   gradient: LinearGradient(
                     begin: Alignment.bottomCenter,
@@ -928,7 +917,7 @@ Update the post with the user's instruction. If they want to add text, append or
               color: Colors.grey.shade400,
               size: 40,
             ),
-            SizedBox(height: _spacing1),
+            const SizedBox(height: _spacing1),
             Text(
               isVideo ? 'Video Preview' : 'Image Preview',
               style: TextStyle(
@@ -950,8 +939,8 @@ Update the post with the user's instruction. If they want to add text, append or
 
     return Container(
       width: MediaQuery.of(context).size.width * 0.9,
-      margin: EdgeInsets.symmetric(horizontal: _spacing3),
-      padding: EdgeInsets.all(_spacing3),
+      margin: const EdgeInsets.symmetric(horizontal: _spacing3),
+      padding: const EdgeInsets.all(_spacing3),
       decoration: BoxDecoration(
         color: Colors.white.withValues(alpha: 0.1),
         borderRadius: BorderRadius.circular(_spacing2),
@@ -966,12 +955,12 @@ Update the post with the user's instruction. If they want to add text, append or
             color: const Color(0xFFFF0080),
             size: 18,
           ),
-          SizedBox(width: _spacing2),
+          const SizedBox(width: _spacing2),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
+                const Text(
                   'Schedule',
                   style: TextStyle(
                     fontSize: 11,
@@ -979,7 +968,7 @@ Update the post with the user's instruction. If they want to add text, append or
                     color: Colors.white70,
                   ),
                 ),
-                SizedBox(height: 2),
+                const SizedBox(height: 2),
                 Text(
                   scheduleText,
                   style: const TextStyle(
@@ -993,10 +982,10 @@ Update the post with the user's instruction. If they want to add text, append or
           ),
           TextButton(
             onPressed: _editSchedule,
-            child: Text(
+            child: const Text(
               'Change',
               style: TextStyle(
-                color: const Color(0xFFFF0080),
+                color: Color(0xFFFF0080),
                 fontWeight: FontWeight.w500,
                 fontSize: 12,
               ),
@@ -1057,7 +1046,7 @@ Update the post with the user's instruction. If they want to add text, append or
             ),
           ),
         ),
-        SizedBox(height: _spacing2),
+        const SizedBox(height: _spacing2),
         Row(
           children: [
             Expanded(
@@ -1080,7 +1069,7 @@ Update the post with the user's instruction. If they want to add text, append or
                 ),
               ),
             ),
-            SizedBox(width: _spacing2),
+            const SizedBox(width: _spacing2),
             Expanded(
               child: SizedBox(
                 height: 36, // Fixed height for secondary buttons

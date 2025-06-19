@@ -293,21 +293,24 @@ class AuthService extends ChangeNotifier {
   // Helper method to get Twitter user info
   Future<Map<String, dynamic>> _getTwitterUserInfo(String accessToken) async {
     try {
-      final response = await Future.delayed(
-          const Duration(milliseconds: 500),
-          () => {
-                'id': 'twitter_user_${DateTime.now().millisecondsSinceEpoch}',
-                'username': 'user_${DateTime.now().millisecondsSinceEpoch}',
-                'name': 'Twitter User'
-              });
+      final response = await http.get(
+        Uri.parse('https://api.twitter.com/2/users/me'),
+        headers: {
+          'Authorization': 'Bearer $accessToken',
+          'Content-Type': 'application/json',
+        },
+      );
 
-      // TODO: Replace with actual Twitter API call
-      // final response = await http.get(
-      //   Uri.parse('https://api.twitter.com/2/users/me'),
-      //   headers: {'Authorization': 'Bearer $accessToken'},
-      // );
+      if (response.statusCode != 200) {
+        throw Exception('Twitter API error: ${response.body}');
+      }
 
-      return response;
+      final data = jsonDecode(response.body);
+      return {
+        'id': data['data']['id'],
+        'username': data['data']['username'],
+        'name': data['data']['name']
+      };
     } catch (e) {
       throw Exception('Failed to get Twitter user info: $e');
     }

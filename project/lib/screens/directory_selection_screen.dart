@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
-import 'package:file_picker/file_picker.dart';
-import 'dart:io';
-import '../services/directory_service.dart';
+import '../services/media_coordinator.dart';
+import '../services/directory_service.dart'; // For MediaDirectory class
 import 'package:provider/provider.dart';
+import '../widgets/directory_picker_sheet.dart';
 
 class DirectorySelectionScreen extends StatefulWidget {
   const DirectorySelectionScreen({super.key});
@@ -13,130 +13,194 @@ class DirectorySelectionScreen extends StatefulWidget {
 }
 
 class _DirectorySelectionScreenState extends State<DirectorySelectionScreen> {
-  DirectoryService? _directory_service;
-  bool _isLoading = true;
-  final bool _isSaving = false;
   List<MediaDirectory> _directories = [];
-  bool _customDirectoriesEnabled = false;
+  MediaCoordinator? _mediaCoordinator;
+  bool _isLoading = true;
+  bool _isCustomEnabled = false;
 
   @override
   void initState() {
     super.initState();
-    _initializeService();
+    _initializeScreen();
   }
 
-  Future<void> _initializeService() async {
+  Future<void> _initializeScreen() async {
     setState(() {
       _isLoading = true;
     });
 
     try {
-      _directory_service =
-          Provider.of<DirectoryService>(context, listen: false);
-      await _directory_service!.initialize();
+      _mediaCoordinator = Provider.of<MediaCoordinator>(context, listen: false);
+
+      // MediaCoordinator should already be initialized by ServiceInitializationWrapper
+      if (!_mediaCoordinator!.isInitialized) {
+        await _mediaCoordinator!.initialize();
+      }
 
       setState(() {
         _directories =
-            List<MediaDirectory>.from(_directory_service!.directories);
-        _customDirectoriesEnabled =
-            _directory_service!.isCustomDirectoriesEnabled;
+            List<MediaDirectory>.from(_mediaCoordinator!.directories);
+        _isCustomEnabled = _mediaCoordinator!.isCustomDirectoriesEnabled;
         _isLoading = false;
       });
     } catch (e) {
       setState(() {
         _isLoading = false;
       });
-
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to load directories: $e')),
+          SnackBar(content: Text('Failed to initialize screen: $e')),
         );
       }
     }
   }
 
   Future<void> _toggleCustomDirectories(bool enabled) async {
-    if (_directory_service == null) return;
+    if (_mediaCoordinator == null) return;
 
     setState(() {
-      _customDirectoriesEnabled = enabled;
+      _isLoading = true;
     });
 
     try {
-      await _directory_service!.setCustomDirectoriesEnabled(enabled);
+      await _mediaCoordinator!.setCustomDirectoriesEnabled(enabled);
+
+      setState(() {
+        _isCustomEnabled = enabled;
+        _isLoading = false;
+      });
     } catch (e) {
+      setState(() {
+        _isLoading = false;
+      });
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to update setting: $e')),
+          SnackBar(content: Text('Failed to toggle custom directories: $e')),
         );
       }
     }
   }
 
   Future<void> _toggleDirectory(String directoryId, bool enabled) async {
-    if (_directory_service == null) return;
+    if (_mediaCoordinator == null) return;
+
+    setState(() {
+      _isLoading = true;
+    });
 
     try {
-      await _directory_service!.updateDirectoryEnabled(directoryId, enabled);
+      await _mediaCoordinator!.updateDirectoryEnabled(directoryId, enabled);
 
       setState(() {
         _directories =
-            List<MediaDirectory>.from(_directory_service!.directories);
+            List<MediaDirectory>.from(_mediaCoordinator!.directories);
+        _isLoading = false;
       });
     } catch (e) {
+      setState(() {
+        _isLoading = false;
+      });
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to update directory: $e')),
+          SnackBar(content: Text('Failed to toggle directory: $e')),
         );
       }
     }
   }
 
-  Future<void> _showAddDirectoryDialog() async {
-    await _showEnhancedAddDirectoryDialog();
-  }
-
   Future<void> _removeDirectory(String directoryId) async {
-    if (_directory_service == null) return;
+    if (_mediaCoordinator == null) return;
 
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Remove Directory'),
-        content: const Text('Are you sure you want to remove this directory?'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Remove'),
-          ),
-        ],
-      ),
-    );
+    try {
+      final directory = _directories.firstWhere(
+        (d) => d.id == directoryId,
+        orElse: () => throw Exception('Directory not found'),
+      );
 
-    if (confirmed == true) {
-      try {
-        await _directory_service!.removeDirectory(directoryId);
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Remove Directory'),
+          content:
+              const Text('Are you sure you want to remove this directory?'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Remove'),
+            ),
+          ],
+        ),
+      );
+
+      if (confirmed == true) {
+        await _mediaCoordinator!.removeDirectory(directoryId);
 
         setState(() {
           _directories =
-              List<MediaDirectory>.from(_directory_service!.directories);
+              List<MediaDirectory>.from(_mediaCoordinator!.directories);
         });
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to remove directory: $e')),
+        );
+      }
+    }
+  }
 
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Directory removed successfully!')),
-          );
-        }
-      } catch (e) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Failed to remove directory: $e')),
-          );
-        }
+  Future<void> _showDirectoryPicker() async {
+    if (_mediaCoordinator == null) return;
+
+    try {
+      final suggestions = await _mediaCoordinator!.getSuggestedDirectories();
+
+      if (!mounted) return;
+
+      await showModalBottomSheet(
+        context: context,
+        isScrollControlled: true,
+        builder: (context) => DirectoryPickerSheet(
+          suggestions: suggestions,
+          onDirectorySelected: _addDirectory,
+        ),
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to show directory picker: $e')),
+        );
+      }
+    }
+  }
+
+  Future<void> _addDirectory(String name, String path) async {
+    if (_mediaCoordinator == null) return;
+
+    setState(() {
+      _isLoading = true;
+    });
+
+    try {
+      await _mediaCoordinator!.addCustomDirectory(name, path);
+
+      setState(() {
+        _directories =
+            List<MediaDirectory>.from(_mediaCoordinator!.directories);
+        _isLoading = false;
+      });
+    } catch (e) {
+      setState(() {
+        _isLoading = false;
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to add directory: $e')),
+        );
       }
     }
   }
@@ -151,7 +215,7 @@ class _DirectorySelectionScreenState extends State<DirectorySelectionScreen> {
         title: const Text('Media Directories'),
         actions: [
           IconButton(
-            onPressed: _showAddDirectoryDialog,
+            onPressed: _showDirectoryPicker,
             icon: const Icon(Icons.add),
             tooltip: 'Add Custom Directory',
           ),
@@ -179,15 +243,15 @@ class _DirectorySelectionScreenState extends State<DirectorySelectionScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Row(
+                      const Row(
                         children: [
                           Icon(
                             Icons.folder_open,
-                            color: const Color(0xFFFF0080),
+                            color: Color(0xFFFF0080),
                             size: 20,
                           ),
-                          const SizedBox(width: 8),
-                          const Text(
+                          SizedBox(width: 8),
+                          Text(
                             'Media Source',
                             style: TextStyle(
                               color: Colors.white,
@@ -199,14 +263,14 @@ class _DirectorySelectionScreenState extends State<DirectorySelectionScreen> {
                       ),
                       const SizedBox(height: 12),
                       SwitchListTile(
-                        value: _customDirectoriesEnabled,
+                        value: _isCustomEnabled,
                         onChanged: _toggleCustomDirectories,
                         title: const Text(
                           'Use Custom Directories',
                           style: TextStyle(color: Colors.white),
                         ),
                         subtitle: Text(
-                          _customDirectoriesEnabled
+                          _isCustomEnabled
                               ? 'Scanning specific directories for media'
                               : 'Using photo albums (recommended)',
                           style: TextStyle(
@@ -222,7 +286,7 @@ class _DirectorySelectionScreenState extends State<DirectorySelectionScreen> {
                 ),
 
                 // Directories list
-                if (_customDirectoriesEnabled) ...[
+                if (_isCustomEnabled) ...[
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 16),
                     child: Row(
@@ -394,9 +458,9 @@ class _DirectorySelectionScreenState extends State<DirectorySelectionScreen> {
             padding: const EdgeInsets.all(16),
             child: Row(
               children: [
-                Icon(
+                const Icon(
                   Icons.add_circle_outline,
-                  color: const Color(0xFFFF0080),
+                  color: Color(0xFFFF0080),
                   size: 24,
                 ),
                 const SizedBox(width: 12),
@@ -432,7 +496,7 @@ class _DirectorySelectionScreenState extends State<DirectorySelectionScreen> {
                 // Browse button
                 Expanded(
                   child: ElevatedButton.icon(
-                    onPressed: _browseForDirectory,
+                    onPressed: _showDirectoryPicker,
                     icon: const Icon(Icons.folder_open, size: 18),
                     label: const Text('Browse Folders'),
                     style: ElevatedButton.styleFrom(
@@ -453,7 +517,7 @@ class _DirectorySelectionScreenState extends State<DirectorySelectionScreen> {
                 // Manual entry button
                 Expanded(
                   child: ElevatedButton.icon(
-                    onPressed: _showEnhancedAddDirectoryDialog,
+                    onPressed: _showDirectoryPicker,
                     icon: const Icon(Icons.edit, size: 18),
                     label: const Text('Enter Path'),
                     style: ElevatedButton.styleFrom(
@@ -475,296 +539,5 @@ class _DirectorySelectionScreenState extends State<DirectorySelectionScreen> {
         ],
       ),
     );
-  }
-
-  Future<void> _browseForDirectory() async {
-    try {
-      if (Platform.isAndroid || Platform.isIOS) {
-        // On mobile, show path suggestions since direct browsing is limited
-        await _showDirectorySuggestions();
-      } else {
-        // On desktop platforms, use file picker for directory selection
-        final selectedDirectory = await FilePicker.platform.getDirectoryPath();
-
-        if (selectedDirectory != null) {
-          await _addDirectoryWithValidation(
-            'Custom Directory',
-            selectedDirectory,
-          );
-        }
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to browse directories: $e')),
-        );
-      }
-    }
-  }
-
-  Future<void> _showDirectorySuggestions() async {
-    if (_directory_service == null) return;
-
-    try {
-      final suggestions = await _directory_service!.getSuggestedDirectories();
-
-      if (!mounted) return;
-
-      final selectedPath = await showDialog<String>(
-        context: context,
-        builder: (context) => AlertDialog(
-          backgroundColor: const Color(0xFF1A1A1A),
-          title: const Text(
-            'Suggested Directories',
-            style: TextStyle(color: Colors.white),
-          ),
-          content: SizedBox(
-            width: double.maxFinite,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Text(
-                  'Select a directory or use "Enter Path" for custom locations:',
-                  style: TextStyle(color: Colors.white70, fontSize: 14),
-                ),
-                const SizedBox(height: 16),
-                if (suggestions.isEmpty)
-                  const Text(
-                    'No accessible directories found. Use "Enter Path" to specify a custom directory.',
-                    style: TextStyle(color: Colors.white60, fontSize: 12),
-                  )
-                else
-                  ListView.builder(
-                    shrinkWrap: true,
-                    itemCount: suggestions.length,
-                    itemBuilder: (context, index) {
-                      final suggestion = suggestions[index];
-                      return ListTile(
-                        leading: const Icon(
-                          Icons.folder,
-                          color: Color(0xFFFF0080),
-                          size: 20,
-                        ),
-                        title: Text(
-                          suggestion.split('/').last,
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 14,
-                          ),
-                        ),
-                        subtitle: Text(
-                          suggestion,
-                          style: TextStyle(
-                            color: Colors.white.withValues(alpha: 0.6),
-                            fontSize: 12,
-                          ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        onTap: () => Navigator.pop(context, suggestion),
-                        dense: true,
-                      );
-                    },
-                  ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text(
-                'Cancel',
-                style: TextStyle(color: Colors.white70),
-              ),
-            ),
-            TextButton(
-              onPressed: () => Navigator.pop(context, 'manual'),
-              child: const Text(
-                'Enter Path',
-                style: TextStyle(color: Color(0xFFFF0080)),
-              ),
-            ),
-          ],
-        ),
-      );
-
-      if (selectedPath == 'manual') {
-        await _showEnhancedAddDirectoryDialog();
-      } else if (selectedPath != null && selectedPath.isNotEmpty) {
-        await _addDirectoryWithValidation(
-          selectedPath.split('/').last,
-          selectedPath,
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to get suggestions: $e')),
-        );
-      }
-    }
-  }
-
-  Future<void> _showEnhancedAddDirectoryDialog() async {
-    final TextEditingController nameController = TextEditingController();
-    final TextEditingController pathController = TextEditingController();
-
-    // Pre-fill with platform-appropriate example
-    if (Platform.isAndroid) {
-      pathController.text = '/storage/emulated/0/Pictures/';
-    } else if (Platform.isIOS) {
-      pathController.text = 'NSDocumentDirectory/Photos/';
-    }
-
-    final result = await showDialog<Map<String, String>>(
-      context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: const Color(0xFF1A1A1A),
-        title: const Text(
-          'Add Custom Directory',
-          style: TextStyle(color: Colors.white),
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              'Specify a custom directory to scan for media files:',
-              style: TextStyle(
-                color: Colors.white.withValues(alpha: 0.7),
-                fontSize: 14,
-              ),
-            ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: nameController,
-              style: const TextStyle(color: Colors.white),
-              decoration: InputDecoration(
-                labelText: 'Display Name',
-                labelStyle:
-                    TextStyle(color: Colors.white.withValues(alpha: 0.7)),
-                hintText: 'e.g., "Instagram Photos"',
-                hintStyle:
-                    TextStyle(color: Colors.white.withValues(alpha: 0.5)),
-                border: OutlineInputBorder(
-                  borderSide:
-                      BorderSide(color: Colors.white.withValues(alpha: 0.3)),
-                ),
-                enabledBorder: OutlineInputBorder(
-                  borderSide:
-                      BorderSide(color: Colors.white.withValues(alpha: 0.3)),
-                ),
-                focusedBorder: const OutlineInputBorder(
-                  borderSide: BorderSide(color: Color(0xFFFF0080)),
-                ),
-              ),
-            ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: pathController,
-              style: const TextStyle(color: Colors.white),
-              decoration: InputDecoration(
-                labelText: 'Directory Path',
-                labelStyle:
-                    TextStyle(color: Colors.white.withValues(alpha: 0.7)),
-                hintText: Platform.isAndroid
-                    ? '/storage/emulated/0/Pictures/YourFolder'
-                    : 'NSDocumentDirectory/YourFolder',
-                hintStyle:
-                    TextStyle(color: Colors.white.withValues(alpha: 0.5)),
-                border: OutlineInputBorder(
-                  borderSide:
-                      BorderSide(color: Colors.white.withValues(alpha: 0.3)),
-                ),
-                enabledBorder: OutlineInputBorder(
-                  borderSide:
-                      BorderSide(color: Colors.white.withValues(alpha: 0.3)),
-                ),
-                focusedBorder: const OutlineInputBorder(
-                  borderSide: BorderSide(color: Color(0xFFFF0080)),
-                ),
-                helperText: Platform.isAndroid
-                    ? 'Full path to Android directory'
-                    : 'iOS directory identifier',
-                helperStyle:
-                    TextStyle(color: Colors.white.withValues(alpha: 0.5)),
-              ),
-              maxLines: 2,
-            ),
-            const SizedBox(height: 8),
-            Text(
-              '💡 Tip: Use the "Browse Folders" button for suggestions',
-              style: TextStyle(
-                color: Colors.white.withValues(alpha: 0.6),
-                fontSize: 12,
-                fontStyle: FontStyle.italic,
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text(
-              'Cancel',
-              style: TextStyle(color: Colors.white70),
-            ),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              final name = nameController.text.trim();
-              final path = pathController.text.trim();
-              if (name.isNotEmpty && path.isNotEmpty) {
-                Navigator.pop(context, {'name': name, 'path': path});
-              }
-            },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFFFF0080),
-              foregroundColor: Colors.white,
-            ),
-            child: const Text('Add Directory'),
-          ),
-        ],
-      ),
-    );
-
-    if (result != null) {
-      await _addDirectoryWithValidation(
-        result['name']!,
-        result['path']!,
-      );
-    }
-  }
-
-  Future<void> _addDirectoryWithValidation(String name, String path) async {
-    if (_directory_service == null) return;
-
-    try {
-      await _directory_service!.addCustomDirectory(name, path);
-
-      setState(() {
-        _directories =
-            List<MediaDirectory>.from(_directory_service!.directories);
-      });
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('✅ Added directory: $name'),
-            backgroundColor: Colors.green.withValues(alpha: 0.8),
-            duration: const Duration(seconds: 3),
-          ),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('❌ Failed to add directory: $e'),
-            backgroundColor: Colors.red.withValues(alpha: 0.8),
-            duration: const Duration(seconds: 4),
-          ),
-        );
-      }
-    }
   }
 }

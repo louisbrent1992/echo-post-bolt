@@ -59,151 +59,79 @@ class DirectoryService extends ChangeNotifier {
   static const String _prefsKey = 'media_directories';
   static const String _enabledKey = 'custom_directories_enabled';
 
-  List<MediaDirectory> _directories = [];
   bool _isInitialized = false;
-  bool _customDirectoriesEnabled = false;
+  bool _isCustomDirectoriesEnabled = false;
+  List<MediaDirectory> _directories = [];
+  MediaDirectory? _activeDirectory;
+
+  bool get isInitialized => _isInitialized;
+  bool get isCustomDirectoriesEnabled => _isCustomDirectoriesEnabled;
+  List<MediaDirectory> get directories {
+    if (!_isInitialized) {
+      throw StateError(
+          'DirectoryService not initialized. Call initialize() first.');
+    }
+    return List.unmodifiable(_directories);
+  }
+
+  List<MediaDirectory> get enabledDirectories =>
+      _directories.where((d) => d.isEnabled).toList();
+  MediaDirectory? get activeDirectory => _activeDirectory;
 
   /// Get platform-specific default directories
   static List<MediaDirectory> getPlatformDefaults() {
+    final List<MediaDirectory> defaults = [];
+
     if (Platform.isAndroid) {
-      return [
-        const MediaDirectory(
-          id: 'android_dcim_camera',
-          displayName: 'Camera Photos',
-          path: '/storage/emulated/0/DCIM/Camera',
-          isDefault: true,
-          isEnabled: true,
-        ),
-        const MediaDirectory(
-          id: 'android_pictures',
-          displayName: 'Pictures',
-          path: '/storage/emulated/0/Pictures',
-          isDefault: true,
-          isEnabled: true,
-        ),
-        const MediaDirectory(
-          id: 'android_downloads',
-          displayName: 'Downloads',
-          path: '/storage/emulated/0/Download',
-          isDefault: true,
-          isEnabled: false,
-        ),
-        const MediaDirectory(
-          id: 'android_whatsapp_images',
-          displayName: 'WhatsApp Images',
-          path: '/storage/emulated/0/WhatsApp/Media/WhatsApp Images',
-          isDefault: false,
-          isEnabled: false,
-        ),
-        const MediaDirectory(
-          id: 'android_screenshots',
-          displayName: 'Screenshots',
-          path: '/storage/emulated/0/Pictures/Screenshots',
-          isDefault: false,
-          isEnabled: false,
-        ),
-      ];
+      defaults.add(const MediaDirectory(
+        id: 'default_android_camera',
+        path: '/storage/emulated/0/DCIM/Camera',
+        displayName: 'Camera',
+        isDefault: true,
+        isEnabled: true,
+      ));
+      defaults.add(const MediaDirectory(
+        id: 'default_android_pictures',
+        path: '/storage/emulated/0/Pictures',
+        displayName: 'Pictures',
+        isDefault: true,
+        isEnabled: true,
+      ));
     } else if (Platform.isIOS) {
-      return [
-        const MediaDirectory(
-          id: 'ios_photos',
-          displayName: 'Photos Library',
-          path: 'NSDocumentDirectory/Photos',
-          isDefault: true,
-          isEnabled: true,
-        ),
-        const MediaDirectory(
-          id: 'ios_documents',
-          displayName: 'Documents',
-          path: 'NSDocumentDirectory',
-          isDefault: true,
-          isEnabled: false,
-        ),
-        const MediaDirectory(
-          id: 'ios_downloads',
-          displayName: 'Downloads',
-          path: 'NSDownloadsDirectory',
-          isDefault: false,
-          isEnabled: false,
-        ),
-      ];
-    } else {
-      // Desktop fallbacks
-      return [
-        const MediaDirectory(
-          id: 'default_pictures',
-          displayName: 'Pictures',
-          path: 'Pictures',
-          isDefault: true,
-          isEnabled: true,
-        ),
-        const MediaDirectory(
-          id: 'default_downloads',
-          displayName: 'Downloads',
-          path: 'Downloads',
-          isDefault: false,
-          isEnabled: false,
-        ),
-      ];
+      defaults.add(const MediaDirectory(
+        id: 'default_ios_photos',
+        path: 'Photos',
+        displayName: 'Camera Roll',
+        isDefault: true,
+        isEnabled: true,
+      ));
     }
+
+    return defaults;
   }
 
   /// Initialize the service with stored preferences
   Future<void> initialize() async {
     if (_isInitialized) return;
+    await _loadSettings();
+  }
 
+  Future<void> _loadSettings() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-
-      // Load custom directories enabled flag
-      _customDirectoriesEnabled = prefs.getBool(_enabledKey) ?? false;
-
-      // Load stored directories or use defaults
-      final stored = prefs.getStringList(_prefsKey);
-      if (stored != null && stored.isNotEmpty) {
-        _directories = stored
-            .map((jsonStr) {
-              try {
-                final Map<String, dynamic> json = Map<String, dynamic>.from(
-                    Uri.splitQueryString(jsonStr)
-                        .map((k, v) => MapEntry(k, _decodeValue(v))));
-                return MediaDirectory.fromJson(json);
-              } catch (e) {
-                if (kDebugMode) {
-                  print('Error parsing stored directory: $e');
-                }
-                return null;
-              }
-            })
-            .where((dir) => dir != null)
-            .cast<MediaDirectory>()
-            .toList();
-      }
-
-      // If no stored directories, use platform defaults
-      if (_directories.isEmpty) {
-        _directories = getPlatformDefaults();
-        await _saveDirectories();
-      }
-
-      _isInitialized = true;
-
-      if (kDebugMode) {
-        print('📁 DirectoryService initialized');
-        print('   Custom directories enabled: $_customDirectoriesEnabled');
-        print('   Total directories: ${_directories.length}');
-        for (final dir in _directories) {
-          print(
-              '   - ${dir.displayName} (${dir.path}) - enabled: ${dir.isEnabled}');
-        }
-      }
-    } catch (e) {
-      if (kDebugMode) {
-        print('❌ Failed to initialize DirectoryService: $e');
-      }
-      // Fallback to platform defaults
+      _isCustomDirectoriesEnabled = prefs.getBool(_enabledKey) ?? false;
       _directories = getPlatformDefaults();
       _isInitialized = true;
+      notifyListeners();
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ Failed to load directory settings: $e');
+      }
+      // Use defaults
+      _isCustomDirectoriesEnabled = false;
+      _directories = getPlatformDefaults();
+      _isInitialized = true;
+      notifyListeners();
     }
   }
 
@@ -217,32 +145,12 @@ class DirectoryService extends ChangeNotifier {
     return Uri.encodeComponent(value);
   }
 
-  /// Get all directories
-  List<MediaDirectory> get directories {
-    if (!_isInitialized) {
-      throw StateError(
-          'DirectoryService not initialized. Call initialize() first.');
-    }
-    return List.unmodifiable(_directories);
-  }
-
-  /// Get enabled directories only
-  List<MediaDirectory> get enabledDirectories {
-    return directories.where((dir) => dir.isEnabled).toList();
-  }
-
-  /// Check if custom directories are enabled (vs album-only mode)
-  bool get isCustomDirectoriesEnabled => _customDirectoriesEnabled;
-
   /// Toggle custom directories mode
   Future<void> setCustomDirectoriesEnabled(bool enabled) async {
-    _customDirectoriesEnabled = enabled;
+    _isCustomDirectoriesEnabled = enabled;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_enabledKey, enabled);
-
-    if (kDebugMode) {
-      print('📁 Custom directories ${enabled ? 'enabled' : 'disabled'}');
-    }
+    notifyListeners();
   }
 
   /// Update a directory's enabled status
@@ -256,6 +164,7 @@ class DirectoryService extends ChangeNotifier {
         print(
             '📁 Directory ${_directories[index].displayName} ${enabled ? 'enabled' : 'disabled'}');
       }
+      notifyListeners();
     }
   }
 
@@ -292,6 +201,7 @@ class DirectoryService extends ChangeNotifier {
     if (kDebugMode) {
       print('📁 Added custom directory: $displayName ($path)');
     }
+    notifyListeners();
   }
 
   /// Remove a custom directory (can't remove defaults)
@@ -309,6 +219,7 @@ class DirectoryService extends ChangeNotifier {
       if (kDebugMode) {
         print('📁 Removed directory: ${directory.displayName}');
       }
+      notifyListeners();
     }
   }
 
@@ -320,6 +231,7 @@ class DirectoryService extends ChangeNotifier {
     if (kDebugMode) {
       print('📁 Reset to platform defaults');
     }
+    notifyListeners();
   }
 
   /// Check if a directory path exists and is accessible
@@ -398,6 +310,57 @@ class DirectoryService extends ChangeNotifier {
       if (kDebugMode) {
         print('❌ Failed to save directories: $e');
       }
+    }
+  }
+
+  void setActiveDirectory(String path) {
+    final directory = _directories.firstWhere(
+      (d) => d.path == path,
+      orElse: () => MediaDirectory(
+        id: 'custom_${DateTime.now().millisecondsSinceEpoch}',
+        path: path,
+        displayName: path.split(Platform.pathSeparator).last,
+        isDefault: false,
+        isEnabled: true,
+      ),
+    );
+
+    if (!_directories.contains(directory)) {
+      _directories.add(directory);
+    }
+
+    _activeDirectory = directory;
+    notifyListeners();
+  }
+
+  void addDirectory(String path) {
+    final displayName = path.split(Platform.pathSeparator).last;
+    final directory = MediaDirectory(
+      id: 'custom_${DateTime.now().millisecondsSinceEpoch}',
+      path: path,
+      displayName: displayName,
+      isDefault: false,
+      isEnabled: true,
+    );
+
+    if (!_directories.contains(directory)) {
+      _directories.add(directory);
+      notifyListeners();
+    }
+  }
+
+  void toggleDirectory(String path, bool enabled) {
+    final index = _directories.indexWhere((d) => d.path == path);
+    if (index != -1) {
+      final directory = _directories[index];
+      _directories[index] = MediaDirectory(
+        id: directory.id,
+        path: directory.path,
+        displayName: directory.displayName,
+        isDefault: directory.isDefault,
+        isEnabled: enabled,
+      );
+      notifyListeners();
     }
   }
 }

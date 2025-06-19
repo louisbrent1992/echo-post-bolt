@@ -11,6 +11,7 @@ import 'package:path_provider/path_provider.dart';
 
 import '../models/social_action.dart';
 import '../services/ai_service.dart';
+import '../services/media_coordinator.dart';
 import '../widgets/mic_button.dart';
 import '../widgets/social_icon.dart';
 import '../widgets/post_preview.dart';
@@ -40,7 +41,8 @@ import '../services/firestore_service.dart';
 /// 5. Media Resolution – If the JSON includes a `media_query`, the user is
 ///    routed to `MediaSelectionScreen` to pick matching local assets.  If the
 ///    JSON already contains concrete `media.file_uri` entries, this step is
-///    skipped.
+///    skipped. This is now coordinated through `MediaCoordinator` for consistent
+///    validation, metadata enrichment, and recovery mechanisms.
 /// 6. Review & Publish – Finally, the user lands on `ReviewPostScreen`,
 ///    previews the composed post, edits if necessary, and confirms.  Upon
 ///    confirmation, the background posting workflow dispatches the post to the
@@ -90,10 +92,19 @@ class _CommandScreenState extends State<CommandScreen>
   final int _maxSilenceBeforeWarning =
       10; // 5 seconds of silence before warning
 
+  // Media coordinator for centralized media handling
+  late final MediaCoordinator _mediaCoordinator;
+
   @override
   void initState() {
     super.initState();
     _initializeAnimations();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _mediaCoordinator = Provider.of<MediaCoordinator>(context, listen: false);
   }
 
   void _initializeAnimations() {
@@ -276,7 +287,7 @@ class _CommandScreenState extends State<CommandScreen>
 
       // Configure optimal recording settings for speech recognition
       // Using M4A format for optimal file size
-      final recordConfig = RecordConfig(
+      const recordConfig = RecordConfig(
         encoder: AudioEncoder.aacLc, // AAC-LC codec for M4A format
         bitRate: 128000, // 128 kbps - good quality for speech
         sampleRate:
@@ -1039,28 +1050,47 @@ class _CommandScreenState extends State<CommandScreen>
         // Continue even if Firestore save fails
       }
 
+      // Use MediaCoordinator to recover and validate media state
+      if (kDebugMode) {
+        print('🔄 Using MediaCoordinator to recover/validate media state...');
+      }
+
+      final recoveredAction = await _mediaCoordinator.recoverMediaState(action);
+      final finalAction = recoveredAction ?? action;
+
       if (mounted) {
         setState(() {
           _transcription = transcription;
-          _currentAction = action;
+          _currentAction = finalAction;
           _recordingState = RecordingState.ready;
         });
 
-        // Protocol-compliant media handling
+        // Enhanced media status logging using MediaCoordinator
         if (kDebugMode) {
-          print('🎯 UI updated with new action');
+          print('🎯 UI updated with validated action');
 
-          // Check media status according to protocol
-          final hasValidMedia = action.content.media.isNotEmpty &&
-              action.content.media.any((media) => media.fileUri.isNotEmpty);
-          final hasMediaQuery = action.mediaQuery?.isNotEmpty == true;
+          // Check media status through coordinator
+          final hasValidMedia = finalAction.content.media.isNotEmpty &&
+              finalAction.content.media
+                  .any((media) => media.fileUri.isNotEmpty);
+          final hasMediaQuery =
+              finalAction.mediaQuery?.searchTerms.isNotEmpty == true;
 
           if (hasValidMedia) {
+            // Validate existing media URIs
+            var validCount = 0;
+            for (final media in finalAction.content.media) {
+              if (await _mediaCoordinator.validateMediaURI(media.fileUri)) {
+                validCount++;
+              }
+            }
             print(
-                '✅ Action contains valid media file URIs - media selection can be skipped');
+                '✅ Action contains $validCount valid media file URIs out of ${finalAction.content.media.length}');
           } else if (hasMediaQuery) {
             print('🔍 Action contains media query - will need media selection');
-            print('   Query: "${action.mediaQuery}"');
+            print(
+                '   Search Terms: "${finalAction.mediaQuery!.searchTerms.join(', ')}"');
+            print('   Media Types: ${finalAction.mediaQuery!.mediaTypes}');
           } else {
             print('⚠️ Action has no media or media query');
           }
@@ -1123,35 +1153,146 @@ class _CommandScreenState extends State<CommandScreen>
   Future<void> _navigateToMediaSelection() async {
     if (_currentAction == null) return;
 
-    final updatedAction = await Navigator.push<SocialAction>(
-      context,
-      MaterialPageRoute(
-        builder: (context) => MediaSelectionScreen(action: _currentAction!),
-      ),
-    );
+    try {
+      if (kDebugMode) {
+        print('🔍 Navigating to media selection with MediaCoordinator...');
+      }
 
-    if (updatedAction != null) {
-      setState(() {
-        _currentAction = updatedAction;
-      });
+      // Fetch candidates via MediaCoordinator if we have a query
+      List<Map<String, dynamic>>? initialCandidates;
+      if (_currentAction!.mediaQuery != null) {
+        final query = _currentAction!.mediaQuery!;
+        final searchTerms = query.searchTerms.join(' ');
+
+        // Build date range if available
+        DateTimeRange? dateRange;
+        if (query.dateRange != null) {
+          dateRange = DateTimeRange(
+            start: query.dateRange!.startDate ??
+                DateTime.now().subtract(const Duration(days: 365)),
+            end: query.dateRange!.endDate ?? DateTime.now(),
+          );
+        }
+
+        if (kDebugMode) {
+          print('   Search Terms: "$searchTerms"');
+          print('   Media Types: ${query.mediaTypes}');
+          print('   Date Range: ${dateRange?.toString() ?? 'None'}');
+          print('   Directory: ${query.directoryPath ?? 'All'}');
+        }
+
+        // Get media candidates through coordinator
+        initialCandidates = await _mediaCoordinator.getMediaForQuery(
+          searchTerms,
+          dateRange: dateRange,
+          mediaTypes: query.mediaTypes.isNotEmpty ? query.mediaTypes : null,
+          directory: query.directoryPath,
+        );
+
+        if (kDebugMode) {
+          print('📊 Found ${initialCandidates.length} media candidates');
+        }
+      }
+
+      final updatedAction = await Navigator.push<SocialAction>(
+        context,
+        MaterialPageRoute(
+          builder: (context) => MediaSelectionScreen(
+            action: _currentAction!,
+            initialCandidates: initialCandidates,
+          ),
+        ),
+      );
+
+      if (updatedAction != null) {
+        // Validate the updated action through coordinator before setting state
+        final validatedAction =
+            await _mediaCoordinator.recoverMediaState(updatedAction);
+        setState(() {
+          _currentAction = validatedAction ?? updatedAction;
+        });
+
+        if (kDebugMode) {
+          print('✅ Media selection completed and validated');
+          print(
+              '📊 Selected media count: ${_currentAction!.content.media.length}');
+        }
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ Error in media selection navigation: $e');
+      }
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to load media selection: $e'),
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
     }
   }
 
   Future<void> _navigateToReviewPost() async {
     if (_currentAction == null) return;
 
-    final result = await Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (context) => ReviewPostScreen(action: _currentAction!),
-      ),
-    );
+    try {
+      if (kDebugMode) {
+        print('🔍 Navigating to review post with final validation...');
+      }
 
-    if (result == true) {
-      // Post was successfully published, reset the state
-      setState(() {
-        _resetRecordingState();
-      });
+      // Last-minute sanity check through MediaCoordinator
+      final safeAction =
+          await _mediaCoordinator.recoverMediaState(_currentAction!);
+      final actionToReview = safeAction ?? _currentAction!;
+
+      if (kDebugMode) {
+        print('✅ Final action validated for review');
+        print('📊 Media count: ${actionToReview.content.media.length}');
+
+        // Log any media validation issues
+        if (actionToReview.content.media.isNotEmpty) {
+          var validCount = 0;
+          for (final media in actionToReview.content.media) {
+            if (await _mediaCoordinator.validateMediaURI(media.fileUri)) {
+              validCount++;
+            }
+          }
+          print(
+              '📊 Valid media URIs: $validCount/${actionToReview.content.media.length}');
+        }
+      }
+
+      final result = await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => ReviewPostScreen(action: actionToReview),
+        ),
+      );
+
+      if (result == true) {
+        // Post was successfully published, reset the state
+        if (kDebugMode) {
+          print('✅ Post published successfully, resetting state');
+        }
+        setState(() {
+          _resetRecordingState();
+        });
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ Error in review post navigation: $e');
+      }
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to prepare post for review: $e'),
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
     }
   }
 
@@ -1163,10 +1304,6 @@ class _CommandScreenState extends State<CommandScreen>
       ),
     );
   }
-
-  bool get _hasMedia => _currentAction?.content.media.isNotEmpty ?? false;
-  bool get _isJsonReady =>
-      _currentAction != null && _recordingState == RecordingState.ready;
 
   @override
   Widget build(BuildContext context) {
@@ -1340,7 +1477,7 @@ class ParticlesPainter extends CustomPainter {
     final paint = Paint()
       ..color = const Color(0xFFFF0080).withValues(alpha: 0.1);
 
-    final particleCount = 15;
+    const particleCount = 15;
     for (int i = 0; i < particleCount; i++) {
       final x = (size.width / particleCount) * i;
       final y = size.height * 0.3 +

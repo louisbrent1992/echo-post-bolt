@@ -35,13 +35,13 @@ class TranscriptionStatus extends StatelessWidget {
           Row(
             children: [
               if (isProcessing) ...[
-                SizedBox(
+                const SizedBox(
                   width: 12,
                   height: 12,
                   child: CircularProgressIndicator(
                     strokeWidth: 2,
                     valueColor: AlwaysStoppedAnimation<Color>(
-                      const Color(0xFFFFD700),
+                      Color(0xFFFFD700),
                     ),
                   ),
                 ),

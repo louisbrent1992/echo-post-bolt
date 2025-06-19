@@ -17,28 +17,49 @@ class SocialPostService {
 
     for (final platform in action.platforms) {
       try {
+        bool shouldPost = false;
         switch (platform) {
           case 'facebook':
-            await _simulatePost('Facebook', action);
-            results['facebook'] = true;
+            shouldPost = action.platformData.facebook?.postHere ?? false;
+            if (shouldPost) {
+              await _simulatePost('Facebook', action);
+              results['facebook'] = true;
+            }
             break;
           case 'instagram':
-            await _simulatePost('Instagram', action);
-            results['instagram'] = true;
+            shouldPost = action.platformData.instagram?.postHere ?? false;
+            if (shouldPost) {
+              await _simulatePost('Instagram', action);
+              results['instagram'] = true;
+            }
             break;
           case 'twitter':
-            await _simulatePost('Twitter', action);
-            results['twitter'] = true;
+            shouldPost = action.platformData.twitter?.postHere ?? false;
+            if (shouldPost) {
+              await _simulatePost('Twitter', action);
+              results['twitter'] = true;
+            }
             break;
           case 'tiktok':
-            await _simulatePost('TikTok', action);
-            results['tiktok'] = true;
+            shouldPost = action.platformData.tiktok?.postHere ?? false;
+            if (shouldPost) {
+              await _simulatePost('TikTok', action);
+              results['tiktok'] = true;
+            }
             break;
           default:
             if (kDebugMode) {
               print('Unsupported platform: $platform');
             }
             results[platform] = false;
+        }
+
+        // If platform is in the list but post_here is false, mark as skipped
+        if (!shouldPost) {
+          results[platform] = true; // Consider skipped as success
+          if (kDebugMode) {
+            print('Skipped posting to $platform (post_here is false)');
+          }
         }
       } catch (e) {
         if (kDebugMode) {

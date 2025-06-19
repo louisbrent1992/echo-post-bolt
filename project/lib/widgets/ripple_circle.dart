@@ -95,16 +95,16 @@ class RipplePainter extends CustomPainter {
     final center = Offset(size.width / 2, size.height / 2);
 
     final paint = Paint()
-      ..color = color.withOpacity(opacity)
+      ..color = color.withAlpha((opacity * 255).round())
       ..style = PaintingStyle.stroke
       ..strokeWidth = strokeWidth;
 
     // Create gradient effect
     final gradient = RadialGradient(
       colors: [
-        color.withOpacity(opacity),
-        color.withOpacity(opacity * 0.5),
-        color.withOpacity(0),
+        color.withAlpha((opacity * 255).round()),
+        color.withAlpha((opacity * 0.5 * 255).round()),
+        color.withAlpha(0),
       ],
       stops: const [0.0, 0.7, 1.0],
     );
@@ -376,16 +376,16 @@ class VoiceRipplePainter extends CustomPainter {
     final strokeWidth = 1.0 + (amplitude * 3.0);
 
     final paint = Paint()
-      ..color = color.withOpacity(opacity)
+      ..color = color.withAlpha((opacity * 255).round())
       ..style = PaintingStyle.stroke
       ..strokeWidth = strokeWidth;
 
     // Create amplitude-responsive gradient
     final gradient = RadialGradient(
       colors: [
-        color.withOpacity(opacity * amplitude),
-        color.withOpacity(opacity * amplitude * 0.7),
-        color.withOpacity(0),
+        color.withAlpha(((opacity * amplitude) * 255).round()),
+        color.withAlpha(((opacity * amplitude * 0.7) * 255).round()),
+        color.withAlpha(0),
       ],
       stops: const [0.0, 0.6, 1.0],
     );

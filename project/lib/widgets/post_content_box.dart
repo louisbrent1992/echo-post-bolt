@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import '../models/social_action.dart';
 
 class PostContentBox extends StatelessWidget {
@@ -24,16 +25,17 @@ class PostContentBox extends StatelessWidget {
     final mentions = action.content.mentions;
     final hasContent = caption.isNotEmpty || hashtags.isNotEmpty;
 
-    // Debug output to help identify content issues
-    if (caption.isEmpty && hashtags.isEmpty) {
-      print('🔍 PostContentBox Debug: No content found');
-      print('   Caption: "$caption"');
-      print('   Hashtags: $hashtags');
-      print('   Mentions: $mentions');
-    } else {
-      print('✅ PostContentBox Debug: Content available');
-      print('   Caption: "$caption"');
-      print('   Hashtags: $hashtags');
+    if (kDebugMode) {
+      if (caption.isEmpty && hashtags.isEmpty) {
+        print('🔍 PostContentBox Debug: No content found');
+        print('   Caption: "$caption"');
+        print('   Hashtags: $hashtags');
+        print('   Mentions: $mentions');
+      } else {
+        print('✅ PostContentBox Debug: Content available');
+        print('   Caption: "$caption"');
+        print('   Hashtags: $hashtags');
+      }
     }
 
     return Container(

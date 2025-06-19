@@ -1,18 +1,23 @@
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
-import 'package:flutter_dotenv/flutter_dotenv.dart';
 
 import '../models/social_action.dart';
-import 'media_metadata_service.dart';
+import 'media_coordinator.dart';
 
 class AIService {
-  static const String _openai_api_url =
+  static const String _openaiApiUrl =
       'https://api.openai.com/v1/chat/completions';
-  final String _api_key;
-  final MediaMetadataService _media_metadata_service;
+  final String _apiKey;
+  MediaCoordinator? _mediaCoordinator;
 
-  AIService(this._api_key, this._media_metadata_service);
+  AIService(this._apiKey, [MediaCoordinator? mediaCoordinator])
+      : _mediaCoordinator = mediaCoordinator;
+
+  /// Set the MediaCoordinator instance (called after both services are created)
+  void setMediaCoordinator(MediaCoordinator mediaCoordinator) {
+    _mediaCoordinator = mediaCoordinator;
+  }
 
   /// Attempts to repair common JSON formatting issues
   String repairJson(String brokenJson) {
@@ -158,98 +163,149 @@ class AIService {
 
     try {
       // Get media context for the prompt
-      final media_context = _media_metadata_service.get_media_context_for_ai();
+      final mediaContext = _mediaCoordinator?.getMediaContextForAi();
 
       final messages = [
         {
           'role': 'system',
-          'content':
-              '''You are a JSON generator that creates structured social media post actions.
+          'content': '''
+You are a JSON generator for the EchoPost app.
 
-IMPORTANT: You must return ONLY a valid JSON object with proper nested structures. Do not include any explanatory text.
-Every object field must be properly nested - never return flat string values where an object is expected.
+Your task is to generate a complete SocialAction object, formatted as JSON. This object will be used by the app to preview and post social media content based on a spoken command and available device media.
 
-Required structure (EXACT format required):
+You will receive two fields from the user:
+- "transcription": a string containing the spoken command
+- "media_context": a list of media metadata representing local image, video, or audio files
+
+You must:
+1. Interpret the transcription as an intent to create a social post. Extract any spoken content, hashtags, mentions, and platform names.
+2. If the user specifies post text, use it as content.text. **If no post text is provided, generate an appropriate caption based on the available media_context. This text must be relevant, engaging, and accompanied by suitable hashtags. Do not leave content.text null or empty. This applies across all platforms.**
+3. Extract any media references from the transcription (e.g., "post the sunset photo"), match against media_context, and include selected items in content.media.
+4. If media is likely required but cannot be matched exactly, set media_query with appropriate search parameters:
+   - directory_path: The most relevant directory based on the user's request
+   - search_terms: Keywords from the user's description (e.g., ["sunset", "beach"])
+   - date_range: If time is mentioned (e.g., "from yesterday")
+   - media_types: Required media types (e.g., ["image", "video"])
+   - location_query: If location is mentioned
+5. Always return all platform_data keys in the order: facebook, instagram, twitter, tiktok.
+6. Each platform object must include `"post_here": true` or `false`.
+7. If a platform is not used, still return its object with `"post_here": false` and all other internal fields set to null or defaults.
+
+Return ONLY a valid JSON object. No extra commentary or explanation.
+
+IMPORTANT: Use the exact field names shown below (snake_case, not camelCase).
+
+EXAMPLE with media_query:
 {
-  "actionId": "echo_${DateTime.now().millisecondsSinceEpoch}",
-  "createdAt": "${DateTime.now().toIso8601String()}",
-  "platforms": ["instagram", "twitter"],  // Array of platform names
-  "content": {  // Must be an object with these exact fields
-    "text": "Your post text here",
-    "hashtags": ["tag1", "tag2"],  // Array of strings without # symbol
-    "mentions": ["user1", "user2"],  // Array of strings without @ symbol
-    "media": [  // Array of media objects
-      {
-        "fileUri": "file:///path/to/media",
-        "mimeType": "image/jpeg",
-        "deviceMetadata": {  // Required nested object
-          "creationTime": "2024-03-14T12:00:00Z",
-          "width": 1920,
-          "height": 1080,
-          "orientation": 1,
-          "fileSizeBytes": 1000000
-        }
-      }
-    ]
+  "action_id": "echo_1721407200000",
+  "created_at": "2025-06-19T15:30:00Z",
+  "platforms": ["instagram", "twitter"],
+  "content": {
+    "text": "A perfect evening by the lake.",
+    "hashtags": ["sunset", "nature"],
+    "mentions": [],
+    "link": null,
+    "media": []
   },
-  "options": {  // Must be an object
+  "options": {
     "schedule": "now",
-    "visibility": "public",
-    "locationTag": null,  // Optional nested object
-    "replyToPostId": null
+    "visibility": {
+      "instagram": "public",
+      "twitter": "public"
+    },
+    "location_tag": null,
+    "reply_to_post_id": null
   },
-  "platformData": {  // Must be an object with optional platform-specific settings
+  "platform_data": {
+    "facebook": {
+      "post_here": false,
+      "post_as_page": false,
+      "page_id": "",
+      "post_type": null,
+      "media_file_uri": null,
+      "video_file_uri": null,
+      "audio_file_uri": null,
+      "thumbnail_uri": null,
+      "scheduled_time": null,
+      "additional_fields": null
+    },
     "instagram": {
-      "postType": "feed",
-      "shareToStory": false
+      "post_here": true,
+      "post_type": "feed",
+      "carousel": null,
+      "ig_user_id": "",
+      "media_type": "image",
+      "media_file_uri": "file:///storage/emulated/0/DCIM/Camera/IMG_1234.jpg",
+      "video_thumbnail_uri": null,
+      "video_file_uri": null,
+      "audio_file_uri": null,
+      "scheduled_time": null
     },
     "twitter": {
-      "altText": "",
-      "threadMode": false
+      "post_here": true,
+      "alt_texts": ["Sunset by the lake"],
+      "tweet_mode": "extended",
+      "media_type": "image",
+      "media_file_uri": "file:///storage/emulated/0/DCIM/Camera/IMG_1234.jpg",
+      "media_duration": 0,
+      "tweet_link": null,
+      "scheduled_time": null
+    },
+    "tiktok": {
+      "post_here": false,
+      "privacy": "public",
+      "sound": {
+        "use_original_sound": true,
+        "music_id": null
+      },
+      "media_file_uri": null,
+      "video_file_uri": null,
+      "audio_file_uri": null,
+      "scheduled_time": null
     }
   },
-  "internal": {  // Must be an object with these exact fields
-    "retryCount": 0,
-    "userPreferences": {  // Required nested object
-      "defaultPlatforms": [],
-      "defaultHashtags": []
+  "internal": {
+    "retry_count": 0,
+    "ai_generated": true,
+    "original_transcription": "Post the sunset photo from yesterday to Instagram and Twitter with the caption 'A perfect evening by the lake.'",
+    "user_preferences": {
+      "default_platforms": [],
+      "default_hashtags": []
     },
-    "uiFlags": {  // Required nested object
-      "isEditingCaption": false,
-      "isMediaPreviewOpen": false
+    "media_index_id": null,
+    "ui_flags": {
+      "is_editing_caption": false,
+      "is_media_preview_open": false
     },
-    "aiGenerated": true,
-    "originalTranscription": "transcription here"
+    "fallback_reason": null
   },
-  "mediaQuery": null  // Optional string for media search
+  "media_query": {
+    "directory_path": "/storage/emulated/0/DCIM/Camera",
+    "search_terms": ["sunset", "lake", "evening"],
+    "date_range": {
+      "start_date": "2025-06-18T00:00:00Z",
+      "end_date": "2025-06-18T23:59:59Z"
+    },
+    "media_types": ["image"],
+    "location_query": null
+  }
 }
-
-VALIDATION RULES:
-1. All object fields must be proper nested objects, never plain strings
-2. All array fields must be proper arrays, never comma-separated strings
-3. Platform names must be lowercase: "instagram", "twitter", "facebook", "tiktok"
-4. No # symbols in hashtags array
-5. No @ symbols in mentions array
-6. All nested objects must include ALL required fields
-7. Use null for optional fields, not empty strings
-8. Dates must be in ISO 8601 format
-9. Boolean values must be true/false, not strings
-10. Numbers must be numeric values, not strings'''
+'''
         },
         {
           'role': 'user',
           'content': json.encode({
             'transcription': transcription,
-            'media_context': media_context,
+            'media_context': mediaContext,
           })
         }
       ];
 
       final response = await http.post(
-        Uri.parse(_openai_api_url),
+        Uri.parse(_openaiApiUrl),
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': 'Bearer $_api_key',
+          'Authorization': 'Bearer $_apiKey',
         },
         body: json.encode({
           'model': 'gpt-4-turbo-preview',
@@ -264,18 +320,18 @@ VALIDATION RULES:
             'OpenAI API error: ${response.statusCode} - ${response.body}');
       }
 
-      final json_response = json.decode(response.body);
-      final content = json_response['choices'][0]['message']['content'];
+      final jsonResponse = json.decode(response.body);
+      final content = jsonResponse['choices'][0]['message']['content'];
 
       if (kDebugMode) {
         print('📝 ChatGPT response: $content');
       }
 
       // Ensure content is a Map<String, dynamic>
-      Map<String, dynamic> action_json;
+      Map<String, dynamic> actionJson;
       if (content is String) {
         try {
-          action_json = json.decode(content);
+          actionJson = json.decode(content);
         } catch (e) {
           if (kDebugMode) {
             print('❌ Failed to parse content as JSON string: $e');
@@ -284,7 +340,7 @@ VALIDATION RULES:
           throw Exception('Invalid JSON response from ChatGPT');
         }
       } else if (content is Map<String, dynamic>) {
-        action_json = content;
+        actionJson = content;
       } else {
         throw Exception(
             'Unexpected response type from ChatGPT: ${content.runtimeType}');
@@ -292,60 +348,23 @@ VALIDATION RULES:
 
       // Validate required fields
       final requiredFields = [
-        'actionId',
-        'createdAt',
+        'action_id',
+        'created_at',
         'platforms',
         'content',
         'options',
-        'platformData',
+        'platform_data',
         'internal'
       ];
 
       for (final field in requiredFields) {
-        if (!action_json.containsKey(field)) {
+        if (!actionJson.containsKey(field)) {
           throw Exception('Missing required field: $field');
         }
       }
 
-      // Ensure content object has required fields
-      final content_obj = action_json['content'];
-      if (content_obj is! Map<String, dynamic>) {
-        throw Exception('Content field must be an object');
-      }
-
-      final contentFields = ['text', 'hashtags', 'mentions', 'media'];
-      for (final field in contentFields) {
-        if (!content_obj.containsKey(field)) {
-          content_obj[field] = field == 'text' ? '' : [];
-        }
-      }
-
-      // Ensure internal object has required fields
-      final internal = action_json['internal'];
-      if (internal is! Map<String, dynamic>) {
-        throw Exception('Internal field must be an object');
-      }
-
-      internal['retryCount'] = 0;
-      internal['aiGenerated'] = true;
-      internal['originalTranscription'] = transcription;
-
-      if (!internal.containsKey('userPreferences')) {
-        internal['userPreferences'] = {
-          'defaultPlatforms': [],
-          'defaultHashtags': []
-        };
-      }
-
-      if (!internal.containsKey('uiFlags')) {
-        internal['uiFlags'] = {
-          'isEditingCaption': false,
-          'isMediaPreviewOpen': false
-        };
-      }
-
       // Create SocialAction from validated JSON
-      return SocialAction.fromJson(action_json);
+      return SocialAction.fromJson(actionJson);
     } catch (e) {
       if (kDebugMode) {
         print('❌ Error in processVoiceCommand: $e');

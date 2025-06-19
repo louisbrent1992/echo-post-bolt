@@ -3,149 +3,149 @@ import 'dart:convert';
 import 'package:path/path.dart' as path;
 import 'package:path_provider/path_provider.dart';
 import 'package:exif/exif.dart';
-import 'package:provider/provider.dart';
 import 'package:flutter/foundation.dart';
 
 import 'directory_service.dart';
 
 class MediaMetadataService extends ChangeNotifier {
-  static const String _cache_file_name = 'media_metadata_cache.json';
-  static const Duration _cache_refresh_interval = Duration(hours: 1);
+  static const String _cacheFileName = 'media_metadata_cache.json';
+  static const Duration _cacheRefreshInterval = Duration(hours: 1);
 
-  Map<String, dynamic> _metadata_cache = {};
-  DateTime? _last_cache_update;
-  bool _is_initialized = false;
-  DirectoryService? _directory_service;
+  Map<String, dynamic> _metadataCache = {};
+  DateTime? _lastCacheUpdate;
+  bool _isInitialized = false;
+  DirectoryService? _directoryService;
 
   // Getters
-  bool get is_initialized => _is_initialized;
-  DateTime? get last_cache_update => _last_cache_update;
-  Map<String, dynamic> get metadata_cache => _metadata_cache;
+  bool get isInitialized => _isInitialized;
+  DateTime? get lastCacheUpdate => _lastCacheUpdate;
+  Map<String, dynamic> get metadataCache => _metadataCache;
 
-  Future<void> initialize(DirectoryService directory_service) async {
-    if (_is_initialized) return;
+  Future<void> initialize(DirectoryService directoryService) async {
+    if (_isInitialized) return;
 
-    _directory_service = directory_service;
-    await _load_cache();
-    _is_initialized = true;
+    _directoryService = directoryService;
+    await _loadCache();
+    _isInitialized = true;
     notifyListeners();
   }
 
-  Future<void> _load_cache() async {
+  Future<void> _loadCache() async {
     try {
-      final cache_dir = await getApplicationCacheDirectory();
-      final cache_file = File(path.join(cache_dir.path, _cache_file_name));
+      final cacheDir = await getApplicationCacheDirectory();
+      final cacheFile = File(path.join(cacheDir.path, _cacheFileName));
 
-      if (await cache_file.exists()) {
-        final json_string = await cache_file.readAsString();
-        _metadata_cache = json.decode(json_string);
-        _last_cache_update =
-            DateTime.parse(_metadata_cache['last_update'] ?? '');
+      if (await cacheFile.exists()) {
+        final jsonString = await cacheFile.readAsString();
+        _metadataCache = json.decode(jsonString);
+        _lastCacheUpdate = DateTime.parse(_metadataCache['last_update'] ?? '');
 
         // Check if cache needs refresh
-        if (_last_cache_update != null &&
-            DateTime.now().difference(_last_cache_update!) >
-                _cache_refresh_interval) {
-          await refresh_cache();
+        if (_lastCacheUpdate != null &&
+            DateTime.now().difference(_lastCacheUpdate!) >
+                _cacheRefreshInterval) {
+          await refreshCache();
         }
       } else {
-        await refresh_cache();
+        await refreshCache();
       }
     } catch (e) {
       if (kDebugMode) {
         print('Error loading media metadata cache: $e');
       }
-      _metadata_cache = {};
-      await refresh_cache();
+      _metadataCache = {};
+      await refreshCache();
     }
   }
 
-  Future<void> refresh_cache() async {
-    if (_directory_service == null) {
+  Future<void> refreshCache() async {
+    if (_directoryService == null) {
       throw Exception('DirectoryService not initialized');
     }
 
-    await _scan_directories();
-    _last_cache_update = DateTime.now();
+    await _scanDirectories();
+    _lastCacheUpdate = DateTime.now();
 
     // Save cache to file
-    final cache_dir = await getApplicationCacheDirectory();
-    final cache_file = File(path.join(cache_dir.path, _cache_file_name));
-    await cache_file.writeAsString(json.encode(_metadata_cache));
+    final cacheDir = await getApplicationCacheDirectory();
+    final cacheFile = File(path.join(cacheDir.path, _cacheFileName));
+    await cacheFile.writeAsString(json.encode(_metadataCache));
 
     notifyListeners();
   }
 
-  Future<void> _scan_directories() async {
-    final directories = _directory_service!.enabledDirectories;
-    final media_items = <String, Map<String, dynamic>>{};
-    final media_by_date = <String, List<String>>{};
-    final media_by_folder = <String, List<String>>{};
-    final media_by_location = <String, List<String>>{};
-    final directories_info = <String, Map<String, dynamic>>{};
+  Future<void> _scanDirectories() async {
+    final directories = _directoryService!.enabledDirectories;
+    final mediaItems = <String, Map<String, dynamic>>{};
+    final mediaByDate = <String, List<String>>{};
+    final mediaByFolder = <String, List<String>>{};
+    final mediaByLocation = <String, List<String>>{};
+    final directoriesInfo = <String, Map<String, dynamic>>{};
 
     for (final directory in directories) {
-      final dir_path = directory.path;
-      directories_info[dir_path] = {
+      final dirPath = directory.path;
+      directoriesInfo[dirPath] = {
         'name': directory.displayName,
-        'path': dir_path,
+        'path': dirPath,
         'media_count': 0,
       };
 
       try {
-        final dir = Directory(dir_path);
+        final dir = Directory(dirPath);
         if (await dir.exists()) {
           final files = await dir.list().toList();
           for (final file in files) {
-            if (file is File && _is_media_file(file.path)) {
-              final metadata = await _extract_media_metadata(file);
+            if (file is File && _isMediaFile(path.extension(file.path))) {
+              final metadata = await _extractMediaMetadata(file);
               if (metadata != null) {
-                final media_id = file.path;
-                media_items[media_id] = metadata;
+                final mediaId = file.path;
+                mediaItems[mediaId] = metadata;
 
                 // Add to date index
                 final date =
                     metadata['creation_time']?.toString().split('T')[0];
                 if (date != null) {
-                  media_by_date.putIfAbsent(date, () => []).add(media_id);
+                  mediaByDate.putIfAbsent(date, () => []).add(mediaId);
                 }
 
                 // Add to folder index
-                media_by_folder.putIfAbsent(dir_path, () => []).add(media_id);
+                mediaByFolder.putIfAbsent(dirPath, () => []).add(mediaId);
 
                 // Add to location index if coordinates exist
                 if (metadata['latitude'] != null &&
                     metadata['longitude'] != null) {
-                  final location_key =
+                  final locationKey =
                       '${metadata['latitude']},${metadata['longitude']}';
-                  media_by_location
-                      .putIfAbsent(location_key, () => [])
-                      .add(media_id);
+                  mediaByLocation
+                      .putIfAbsent(locationKey, () => [])
+                      .add(mediaId);
                 }
 
-                directories_info[dir_path]!['media_count']++;
+                directoriesInfo[dirPath]!['media_count']++;
               }
             }
           }
         }
       } catch (e) {
-        print('Error scanning directory $dir_path: $e');
+        if (kDebugMode) {
+          print('Error scanning directory $dirPath: $e');
+        }
       }
     }
 
-    _metadata_cache = {
-      'media_items': media_items,
-      'media_by_date': media_by_date,
-      'media_by_folder': media_by_folder,
-      'media_by_location': media_by_location,
-      'directories': directories_info,
+    _metadataCache = {
+      'media_items': mediaItems,
+      'media_by_date': mediaByDate,
+      'media_by_folder': mediaByFolder,
+      'media_by_location': mediaByLocation,
+      'directories': directoriesInfo,
     };
 
-    await _save_cache();
+    await _saveCache();
   }
 
-  bool _is_media_file(String extension) {
-    const media_extensions = {
+  bool _isMediaFile(String extension) {
+    const mediaExtensions = {
       '.jpg',
       '.jpeg',
       '.png',
@@ -163,19 +163,18 @@ class MediaMetadataService extends ChangeNotifier {
       '.3gp',
       '.flv'
     };
-    return media_extensions.contains(extension);
+    return mediaExtensions.contains(extension);
   }
 
-  Future<Map<String, dynamic>?> _extract_media_metadata(File file) async {
+  Future<Map<String, dynamic>?> _extractMediaMetadata(File file) async {
     try {
       final stats = await file.stat();
-      final mime_type =
-          _get_mime_type_from_extension(path.extension(file.path));
+      final mimeType = _getMimeTypeFromExtension(path.extension(file.path));
 
       final metadata = <String, dynamic>{
         'id': path.basename(file.path),
         'file_uri': file.path,
-        'mime_type': mime_type,
+        'mime_type': mimeType,
         'creation_time': stats.modified.toIso8601String(),
         'file_size_bytes': stats.size,
         'width': 0,
@@ -184,50 +183,49 @@ class MediaMetadataService extends ChangeNotifier {
         'folder': path.dirname(file.path),
       };
 
-      if (mime_type.startsWith('image/')) {
+      if (mimeType.startsWith('image/')) {
         try {
           final bytes = await file.readAsBytes();
-          final exif_data = await readExifFromBytes(bytes);
+          final exifData = await readExifFromBytes(bytes);
 
-          if (exif_data.isNotEmpty) {
+          if (exifData.isNotEmpty) {
             // Extract GPS coordinates
-            final gps_lat = exif_data['GPS GPSLatitude'];
-            final gps_lon = exif_data['GPS GPSLongitude'];
-            final gps_lat_ref = exif_data['GPS GPSLatitudeRef'];
-            final gps_lon_ref = exif_data['GPS GPSLongitudeRef'];
+            final gpsLat = exifData['GPS GPSLatitude'];
+            final gpsLon = exifData['GPS GPSLongitude'];
+            final gpsLatRef = exifData['GPS GPSLatitudeRef'];
+            final gpsLonRef = exifData['GPS GPSLongitudeRef'];
 
-            if (gps_lat != null && gps_lon != null) {
-              final lat =
-                  _parse_gps_coordinate(gps_lat, gps_lat_ref?.toString());
-              final lon =
-                  _parse_gps_coordinate(gps_lon, gps_lon_ref?.toString());
+            if (gpsLat != null && gpsLon != null) {
+              final lat = _parseGpsCoordinate(gpsLat, gpsLatRef?.toString());
+              final lon = _parseGpsCoordinate(gpsLon, gpsLonRef?.toString());
               if (lat != null) metadata['latitude'] = lat;
               if (lon != null) metadata['longitude'] = lon;
             }
 
             // Extract image dimensions
-            final width = exif_data['Image ImageWidth'] ??
-                exif_data['EXIF ExifImageWidth'];
-            final height = exif_data['Image ImageLength'] ??
-                exif_data['EXIF ExifImageLength'];
+            final width =
+                exifData['Image ImageWidth'] ?? exifData['EXIF ExifImageWidth'];
+            final height = exifData['Image ImageLength'] ??
+                exifData['EXIF ExifImageLength'];
 
-            if (width != null)
+            if (width != null) {
               metadata['width'] = int.tryParse(width.toString()) ?? 0;
-            if (height != null)
+            }
+            if (height != null) {
               metadata['height'] = int.tryParse(height.toString()) ?? 0;
+            }
 
             // Extract creation date from EXIF
-            final date_time = exif_data['Image DateTime'] ??
-                exif_data['EXIF DateTimeOriginal'];
-            if (date_time != null) {
-              final date_string = date_time.toString();
-              final formatted_date = date_string
-                      .substring(0, 10)
-                      .replaceAll(':', '-') +
-                  (date_string.length > 10 ? date_string.substring(10) : '');
-              final parsed_date = DateTime.tryParse(formatted_date);
-              if (parsed_date != null) {
-                metadata['creation_time'] = parsed_date.toIso8601String();
+            final dateTime =
+                exifData['Image DateTime'] ?? exifData['EXIF DateTimeOriginal'];
+            if (dateTime != null) {
+              final dateString = dateTime.toString();
+              final formattedDate =
+                  dateString.substring(0, 10).replaceAll(':', '-') +
+                      (dateString.length > 10 ? dateString.substring(10) : '');
+              final parsedDate = DateTime.tryParse(formattedDate);
+              if (parsedDate != null) {
+                metadata['creation_time'] = parsedDate.toIso8601String();
               }
             }
           }
@@ -242,44 +240,8 @@ class MediaMetadataService extends ChangeNotifier {
     }
   }
 
-  void _add_to_cache(
-      Map<String, dynamic> metadata, Map<String, dynamic> cache) {
-    // Increment total media count
-    cache['media_count'] = (cache['media_count'] as int) + 1;
-
-    // Add to date-based index
-    final date = metadata['creation_time'].toString().split('T')[0];
-    if (!cache['media_by_date'].containsKey(date)) {
-      cache['media_by_date'][date] = [];
-    }
-    cache['media_by_date'][date].add(metadata['id']);
-
-    // Add to location-based index if coordinates exist
-    if (metadata['latitude'] != null && metadata['longitude'] != null) {
-      final location_key = '${metadata['latitude']},${metadata['longitude']}';
-      if (!cache['media_by_location'].containsKey(location_key)) {
-        cache['media_by_location'][location_key] = [];
-      }
-      cache['media_by_location'][location_key].add(metadata['id']);
-    }
-
-    // Add to folder-based index
-    final folder = metadata['folder'];
-    if (!cache['media_by_folder'].containsKey(folder)) {
-      cache['media_by_folder'][folder] = [];
-    }
-    cache['media_by_folder'][folder].add(metadata['id']);
-
-    // Update directory count
-    final dir_path = path.dirname(metadata['file_uri']);
-    if (cache['directories'].containsKey(dir_path)) {
-      cache['directories'][dir_path]['media_count'] =
-          (cache['directories'][dir_path]['media_count'] as int) + 1;
-    }
-  }
-
-  String _get_mime_type_from_extension(String extension) {
-    const mime_types = {
+  String _getMimeTypeFromExtension(String extension) {
+    const mimeTypes = {
       '.jpg': 'image/jpeg',
       '.jpeg': 'image/jpeg',
       '.png': 'image/png',
@@ -297,10 +259,10 @@ class MediaMetadataService extends ChangeNotifier {
       '.3gp': 'video/3gpp',
       '.flv': 'video/x-flv',
     };
-    return mime_types[extension.toLowerCase()] ?? 'application/octet-stream';
+    return mimeTypes[extension.toLowerCase()] ?? 'application/octet-stream';
   }
 
-  double? _parse_gps_coordinate(dynamic coordinate, String? reference) {
+  double? _parseGpsCoordinate(dynamic coordinate, String? reference) {
     try {
       if (coordinate is List && coordinate.length >= 3) {
         final degrees = (coordinate[0] as num).toDouble();
@@ -322,106 +284,326 @@ class MediaMetadataService extends ChangeNotifier {
   }
 
   // Helper method to get media context for AI prompts
-  Map<String, dynamic> get_media_context_for_ai() {
-    if (!_is_initialized || _metadata_cache.isEmpty) {
+  Map<String, dynamic> getMediaContextForAi() {
+    if (_directoryService == null) {
+      throw StateError(
+          'MediaMetadataService not initialized. Call initialize() first.');
+    }
+
+    try {
+      // Get all enabled directories
+      final directories = _directoryService!.enabledDirectories;
+      final mediaItems = _metadataCache['media_items'] ?? {};
+      final mediaByDate = _metadataCache['media_by_date'] ?? {};
+      final mediaByFolder = _metadataCache['media_by_folder'] ?? {};
+      final mediaByLocation = _metadataCache['media_by_location'] ?? {};
+      final directoriesInfo = _metadataCache['directories'] ?? {};
+
+      // Get directory information with detailed stats
+      final directoryInfos = directories.map((directory) {
+        final dirPath = directory.path;
+        final dirInfo = directoriesInfo[dirPath] ?? {};
+        final mediaList = mediaByFolder[dirPath] ?? [];
+
+        // Get the most recent 100 files in this directory
+        final recentFiles = mediaList
+            .take(100)
+            .map((id) => mediaItems[id])
+            .where((item) => item != null)
+            .map((item) => {
+                  'file_uri': item!['file_uri'],
+                  'file_name': path.basename(item!['file_uri']),
+                  'mime_type': item['mime_type'],
+                  'timestamp': item['creation_time'],
+                  'device_metadata': {
+                    'creation_time': item['creation_time'],
+                    'latitude': item['latitude'],
+                    'longitude': item['longitude'],
+                    'orientation': item['orientation'] ?? 1,
+                    'width': item['width'] ?? 0,
+                    'height': item['height'] ?? 0,
+                    'file_size_bytes': item['file_size_bytes'] ?? 0,
+                    'duration': item['duration'] ?? 0,
+                    'bitrate': item['bitrate'],
+                    'sampling_rate': item['sampling_rate'],
+                    'frame_rate': item['frame_rate']
+                  }
+                })
+            .toList();
+
+        // Calculate directory statistics
+        final locationStats = _calculateLocationStats(mediaList);
+        final dateRange = _calculateDateRange(mediaList);
+
+        return {
+          'name': dirInfo['name'],
+          'path': dirInfo['path'],
+          'media_count': dirInfo['media_count'],
+          'recent_files': recentFiles,
+          'stats': {
+            'has_location_data': locationStats['has_location'],
+            'common_locations': locationStats['common_locations'],
+            'date_range': dateRange,
+            'media_types': _getMediaTypesInDirectory(mediaList)
+          }
+        };
+      }).toList();
+
+      // Get recent media across all directories
+      final recentMedia = getRecentMedia(limit: 100)
+          .map((item) => {
+                'file_uri': item['file_uri'],
+                'file_name': path.basename(item['file_uri']),
+                'mime_type': item['mime_type'],
+                'timestamp': item['creation_time'],
+                'directory': item['folder'],
+                'device_metadata': {
+                  'creation_time': item['creation_time'],
+                  'latitude': item['latitude'],
+                  'longitude': item['longitude'],
+                  'orientation': item['orientation'] ?? 1,
+                  'width': item['width'] ?? 0,
+                  'height': item['height'] ?? 0,
+                  'file_size_bytes': item['file_size_bytes'] ?? 0,
+                  'duration': item['duration'] ?? 0,
+                  'bitrate': item['bitrate'],
+                  'sampling_rate': item['sampling_rate'],
+                  'frame_rate': item['frame_rate']
+                }
+              })
+          .toList();
+
+      return {
+        'media_context': {
+          'recent_media': recentMedia,
+          'directories': directoryInfos,
+          'total_count': _metadataCache['media_items']?.length ?? 0,
+          'summary': {
+            'total_directories': directories.length,
+            'total_files': _metadataCache['media_items']?.length ?? 0,
+            'date_range': _calculateGlobalDateRange(),
+            'media_types_available': _getAllMediaTypes()
+          }
+        }
+      };
+    } catch (e) {
+      if (kDebugMode) {
+        print('Error getting media context for AI: $e');
+      }
+      // Return empty context on error
       return {
         'media_context': {
           'recent_media': [],
           'directories': [],
-          'total_count': 0
+          'total_count': 0,
+          'summary': {
+            'total_directories': 0,
+            'total_files': 0,
+            'date_range': null,
+            'media_types_available': []
+          }
         }
       };
     }
+  }
 
-    // Get recent media items
-    final recent_media = get_recent_media(limit: 10)
-        .map((item) => {
-              'file_uri': item['file_uri'],
-              'file_name': path.basename(item['file_uri']),
-              'timestamp': item['creation_time'],
-              'directory': item['folder'],
-              'device_metadata': {
-                'creation_time': item['creation_time'],
-                'latitude': item['latitude'],
-                'longitude': item['longitude'],
-                'orientation': item['orientation'] ?? 1,
-                'width': item['width'] ?? 0,
-                'height': item['height'] ?? 0,
-                'file_size_bytes': item['file_size_bytes'] ?? 0,
-                'duration': item['duration'] ?? 0,
-                'bitrate': item['bitrate'],
-                'sampling_rate': item['sampling_rate'],
-                'frame_rate': item['frame_rate']
-              }
-            })
-        .toList();
+  Map<String, dynamic> _calculateLocationStats(List<String> mediaIds) {
+    final locations = <String>[];
+    var hasLocation = false;
 
-    // Get directory information
-    final directories = _metadata_cache['directories']
-        .entries
-        .map((entry) => {
-              'name': entry.value['name'],
-              'path': entry.value['path'],
-              'media_count': entry.value['media_count']
-            })
-        .toList();
+    for (final id in mediaIds) {
+      final item = _metadataCache['media_items']?[id];
+      if (item != null &&
+          item['latitude'] != null &&
+          item['longitude'] != null) {
+        hasLocation = true;
+        final locationKey = '${item['latitude']},${item['longitude']}';
+        locations.add(locationKey);
+      }
+    }
+
+    // Get the most common locations (up to 5)
+    final locationCounts = <String, int>{};
+    for (final location in locations) {
+      locationCounts[location] = (locationCounts[location] ?? 0) + 1;
+    }
+
+    final commonLocations = locationCounts.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
 
     return {
-      'media_context': {
-        'recent_media': recent_media,
-        'directories': directories,
-        'total_count': _metadata_cache['media_count'] ?? 0
-      }
+      'has_location': hasLocation,
+      'common_locations': commonLocations.take(5).map((e) => e.key).toList()
     };
   }
 
-  Map<String, dynamic>? get_media_item(String media_id) {
-    return _metadata_cache['media_items']?[media_id];
+  Map<String, String> _calculateDateRange(List<String> mediaIds) {
+    DateTime? earliest;
+    DateTime? latest;
+
+    for (final id in mediaIds) {
+      final item = _metadataCache['media_items']?[id];
+      if (item != null && item['creation_time'] != null) {
+        final date = DateTime.tryParse(item['creation_time']);
+        if (date != null) {
+          if (earliest == null || date.isBefore(earliest)) {
+            earliest = date;
+          }
+          if (latest == null || date.isAfter(latest)) {
+            latest = date;
+          }
+        }
+      }
+    }
+
+    return {
+      'earliest': earliest?.toIso8601String() ?? '',
+      'latest': latest?.toIso8601String() ?? ''
+    };
   }
 
-  List<Map<String, dynamic>> get_media_by_date(String date) {
-    final media_ids = _metadata_cache['media_by_date']?[date] ?? [];
-    return media_ids
-        .map((id) => get_media_item(id))
+  Map<String, String> _calculateGlobalDateRange() {
+    final allMediaIds = _metadataCache['media_items']?.keys.toList() ?? [];
+    return _calculateDateRange(allMediaIds);
+  }
+
+  Map<String, int> _getMediaTypesInDirectory(List<String> mediaIds) {
+    final typeCounts = <String, int>{};
+
+    for (final id in mediaIds) {
+      final item = _metadataCache['media_items']?[id];
+      if (item != null && item['mime_type'] != null) {
+        final type = item['mime_type'];
+        typeCounts[type] = (typeCounts[type] ?? 0) + 1;
+      }
+    }
+
+    return typeCounts;
+  }
+
+  Map<String, int> _getAllMediaTypes() {
+    final allMediaIds = _metadataCache['media_items']?.keys.toList() ?? [];
+    return _getMediaTypesInDirectory(allMediaIds);
+  }
+
+  Map<String, dynamic>? getMediaItem(String mediaId) {
+    return _metadataCache['media_items']?[mediaId];
+  }
+
+  List<Map<String, dynamic>> getMediaByDate(String date) {
+    final mediaIds = _metadataCache['media_by_date']?[date] ?? [];
+    return mediaIds
+        .map((id) => getMediaItem(id))
         .whereType<Map<String, dynamic>>()
         .toList();
   }
 
-  List<Map<String, dynamic>> get_media_by_folder(String folder_path) {
-    final media_ids = _metadata_cache['media_by_folder']?[folder_path] ?? [];
-    return media_ids
-        .map((id) => get_media_item(id))
+  List<Map<String, dynamic>> getMediaByFolder(String folderPath) {
+    final mediaIds = _metadataCache['media_by_folder']?[folderPath] ?? [];
+    return mediaIds
+        .map((id) => getMediaItem(id))
         .whereType<Map<String, dynamic>>()
         .toList();
   }
 
-  List<Map<String, dynamic>> get_media_by_location(
+  List<Map<String, dynamic>> getMediaByLocation(
       double latitude, double longitude) {
-    final location_key = '$latitude,$longitude';
-    final media_ids = _metadata_cache['media_by_location']?[location_key] ?? [];
-    return media_ids
-        .map((id) => get_media_item(id))
+    final locationKey = '$latitude,$longitude';
+    final mediaIds = _metadataCache['media_by_location']?[locationKey] ?? [];
+    return mediaIds
+        .map((id) => getMediaItem(id))
         .whereType<Map<String, dynamic>>()
         .toList();
   }
 
-  List<Map<String, dynamic>> get_recent_media({int limit = 10}) {
-    final dates = _metadata_cache['media_by_date']?.keys.toList()
+  List<Map<String, dynamic>> getRecentMedia({int limit = 10}) {
+    final dates = _metadataCache['media_by_date']?.keys.toList()
       ?..sort((a, b) => b.compareTo(a));
 
     if (dates == null || dates.isEmpty) return [];
 
-    final recent_media = <Map<String, dynamic>>[];
+    final recentMedia = <Map<String, dynamic>>[];
     for (final date in dates) {
-      final media = get_media_by_date(date);
-      recent_media.addAll(media);
-      if (recent_media.length >= limit) break;
+      final media = getMediaByDate(date);
+      recentMedia.addAll(media);
+      if (recentMedia.length >= limit) break;
     }
 
-    return recent_media.take(limit).toList();
+    return recentMedia.take(limit).toList();
   }
 
-  Future<void> _save_cache() async {
+  Future<void> _saveCache() async {
     // Implementation of _save_cache method
+  }
+
+  /// Extracts metadata from a media file
+  Future<Map<String, dynamic>> extractMetadata(File file) async {
+    try {
+      if (!await file.exists()) {
+        throw Exception('File does not exist: ${file.path}');
+      }
+
+      final extension = path.extension(file.path).toLowerCase();
+      final mimeType = _getMimeTypeFromExtension(extension);
+
+      Map<String, dynamic> metadata = {
+        'mime_type': mimeType,
+        'file_size_bytes': await file.length(),
+        'last_modified': (await file.lastModified()).toIso8601String(),
+      };
+
+      // Extract EXIF data if available
+      if (mimeType.startsWith('image/')) {
+        try {
+          final bytes = await file.readAsBytes();
+          final exifData = await readExifFromBytes(bytes);
+
+          if (exifData.isEmpty) {
+            return metadata;
+          }
+
+          // Extract GPS coordinates if available
+          final gpsLatitude = exifData['GPS GPSLatitude'];
+          final gpsLatitudeRef = exifData['GPS GPSLatitudeRef']?.toString();
+          final gpsLongitude = exifData['GPS GPSLongitude'];
+          final gpsLongitudeRef = exifData['GPS GPSLongitudeRef']?.toString();
+
+          if (gpsLatitude != null && gpsLongitude != null) {
+            metadata['latitude'] =
+                _parseGpsCoordinate(gpsLatitude, gpsLatitudeRef ?? 'N');
+            metadata['longitude'] =
+                _parseGpsCoordinate(gpsLongitude, gpsLongitudeRef ?? 'E');
+          }
+
+          // Extract creation date if available
+          final dateTime = exifData['EXIF DateTimeOriginal']?.toString() ??
+              exifData['EXIF DateTimeDigitized']?.toString();
+
+          if (dateTime != null) {
+            metadata['creation_time'] = dateTime;
+          }
+
+          // Extract image dimensions if available
+          final width = exifData['EXIF ExifImageWidth']?.toString();
+          final height = exifData['EXIF ExifImageLength']?.toString();
+
+          if (width != null && height != null) {
+            metadata['width'] = int.tryParse(width);
+            metadata['height'] = int.tryParse(height);
+          }
+        } catch (e) {
+          if (kDebugMode) {
+            print('⚠️ Failed to extract EXIF data: $e');
+          }
+        }
+      }
+
+      return metadata;
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ Error extracting metadata: $e');
+      }
+      rethrow;
+    }
   }
 }
