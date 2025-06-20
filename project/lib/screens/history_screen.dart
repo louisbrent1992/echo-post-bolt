@@ -36,12 +36,9 @@ class _HistoryScreenState extends State<HistoryScreen> {
           leftAction: IconButton(
             icon: const Icon(Icons.home, color: Colors.white),
             onPressed: () {
-              // Navigate to home (Command Screen) instead of just popping
-              Navigator.pushAndRemoveUntil(
-                context,
-                MaterialPageRoute(builder: (context) => const CommandScreen()),
-                (route) => false,
-              );
+              // Navigate to home (Command Screen) while preserving post state
+              // Use pop instead of pushAndRemoveUntil to maintain state
+              Navigator.pop(context);
             },
           ),
           rightAction: PopupMenuButton<String>(
@@ -184,12 +181,8 @@ class _HistoryScreenState extends State<HistoryScreen> {
                       const SizedBox(height: 32),
                       ElevatedButton.icon(
                         onPressed: () {
-                          Navigator.pushAndRemoveUntil(
-                            context,
-                            MaterialPageRoute(
-                                builder: (context) => const CommandScreen()),
-                            (route) => false,
-                          );
+                          // Navigate back to CommandScreen while preserving state
+                          Navigator.pop(context);
                         },
                         icon: const Icon(Icons.add),
                         label: const Text('Create Your First Post'),

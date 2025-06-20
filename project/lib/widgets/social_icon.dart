@@ -340,18 +340,21 @@ class SixSlotHeader extends StatelessWidget {
 class CommandHeader extends StatelessWidget {
   final List<String> selectedPlatforms;
   final Function(String)? onPlatformToggle;
+  final Widget? leftAction;
   final Widget? rightAction;
 
   const CommandHeader({
     super.key,
     required this.selectedPlatforms,
     this.onPlatformToggle,
+    this.leftAction,
     this.rightAction,
   });
 
   @override
   Widget build(BuildContext context) {
     return SixSlotHeader(
+      slot1: leftAction,
       slot2to5: SocialIconsRow(
         selectedPlatforms: selectedPlatforms,
         onPlatformToggle: onPlatformToggle,

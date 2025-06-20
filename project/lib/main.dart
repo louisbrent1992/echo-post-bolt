@@ -9,6 +9,7 @@ import 'services/firestore_service.dart';
 import 'services/social_post_service.dart';
 import 'services/ai_service.dart';
 import 'services/media_coordinator.dart';
+import 'services/social_action_post_coordinator.dart';
 import 'screens/login_screen.dart';
 import 'screens/command_screen.dart';
 
@@ -42,6 +43,9 @@ Future<void> main() async {
         ChangeNotifierProvider(create: (_) => AuthService()),
         ChangeNotifierProvider<MediaCoordinator>(
           create: (_) => MediaCoordinator(),
+        ),
+        ChangeNotifierProvider<SocialActionPostCoordinator>(
+          create: (_) => SocialActionPostCoordinator(),
         ),
         Provider<AIService>(
           create: (context) => AIService(apiKey),
@@ -172,18 +176,44 @@ class _ServiceInitializationWrapperState
         print('✅ MediaCoordinator and all dependent services initialized');
       }
 
-      // Connect AIService with MediaCoordinator
+      // Initialize SocialActionPostCoordinator
+      if (!mounted) return;
+
+      setState(() {
+        _initializationStatus = 'Initializing post coordinator...';
+      });
+
+      final postCoordinator =
+          Provider.of<SocialActionPostCoordinator>(context, listen: false);
+      final aiService = Provider.of<AIService>(context, listen: false);
+      final firestoreService =
+          Provider.of<FirestoreService>(context, listen: false);
+      final socialPostService =
+          Provider.of<SocialPostService>(context, listen: false);
+
+      await postCoordinator.initialize(
+        mediaCoordinator: mediaCoordinator,
+        firestoreService: firestoreService,
+        aiService: aiService,
+        socialPostService: socialPostService,
+      );
+
+      if (kDebugMode) {
+        print('✅ SocialActionPostCoordinator initialized');
+      }
+
+      // Connect AIService with coordinators
       if (!mounted) return;
 
       setState(() {
         _initializationStatus = 'Connecting AI service...';
       });
 
-      final aiService = Provider.of<AIService>(context, listen: false);
       aiService.setMediaCoordinator(mediaCoordinator);
+      aiService.setPostCoordinator(postCoordinator);
 
       if (kDebugMode) {
-        print('🤖 AIService connected to MediaCoordinator');
+        print('🤖 AIService connected to coordinators');
       }
 
       if (!mounted) return;
@@ -203,6 +233,9 @@ class _ServiceInitializationWrapperState
 
       if (kDebugMode) {
         print('🎉 All services initialized successfully!');
+        print('   ✅ MediaCoordinator');
+        print('   ✅ SocialActionPostCoordinator');
+        print('   ✅ AIService with coordinators');
       }
     } catch (e) {
       if (kDebugMode) {

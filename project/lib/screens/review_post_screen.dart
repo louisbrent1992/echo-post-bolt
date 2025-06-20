@@ -12,9 +12,9 @@ import 'package:flutter/foundation.dart';
 
 import '../models/social_action.dart';
 import '../services/firestore_service.dart';
-import '../services/social_post_service.dart';
 import '../services/ai_service.dart';
 import '../services/media_coordinator.dart';
+import '../services/social_action_post_coordinator.dart';
 import '../screens/history_screen.dart';
 import '../screens/command_screen.dart';
 import '../widgets/post_content_box.dart';
@@ -127,8 +127,9 @@ class _ReviewPostScreenState extends State<ReviewPostScreen> {
   bool _isProcessingVoice = false;
   String? _currentRecordingPath;
 
-  // Media coordinator for validation
+  // Coordinators for validation and state synchronization
   late final MediaCoordinator _mediaCoordinator;
+  late final SocialActionPostCoordinator _postCoordinator;
 
   // Systematic grid spacing constants (multiples of 6 for visual harmony)
   static const double _gridUnit = 6.0;
@@ -149,6 +150,12 @@ class _ReviewPostScreenState extends State<ReviewPostScreen> {
   void didChangeDependencies() {
     super.didChangeDependencies();
     _mediaCoordinator = Provider.of<MediaCoordinator>(context, listen: false);
+    _postCoordinator =
+        Provider.of<SocialActionPostCoordinator>(context, listen: false);
+
+    // CRITICAL: Sync coordinator with current action for bidirectional state management
+    _postCoordinator.syncWithExistingPost(_action);
+
     _validateMediaOnLoad();
   }
 
@@ -184,9 +191,6 @@ class _ReviewPostScreenState extends State<ReviewPostScreen> {
   }
 
   Future<void> _editCaption() async {
-    final firestoreService =
-        Provider.of<FirestoreService>(context, listen: false);
-
     final result = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
@@ -232,40 +236,53 @@ class _ReviewPostScreenState extends State<ReviewPostScreen> {
     );
 
     if (result != null) {
-      final updatedAction = SocialAction(
-        actionId: _action.actionId,
-        createdAt: _action.createdAt,
-        platforms: _action.platforms,
-        content: Content(
-          text: result,
-          hashtags: _action.content.hashtags,
-          mentions: _action.content.mentions,
-          link: _action.content.link,
-          media: _action.content.media,
-        ),
-        options: _action.options,
-        platformData: _action.platformData,
-        internal: _action.internal,
-      );
+      try {
+        // CRITICAL: Update through coordinator for bidirectional sync
+        await _postCoordinator.updatePostContent(result);
 
-      await firestoreService.updateAction(
-        updatedAction.actionId,
-        updatedAction.toJson(),
-      );
+        // Get the updated post from coordinator
+        final updatedPost = _postCoordinator.currentPost;
+        if (updatedPost != null) {
+          setState(() {
+            _action = updatedPost;
+            _captionController.text = result;
+          });
 
-      if (mounted) {
-        setState(() {
-          _action = updatedAction;
-          _captionController.text = result;
-        });
+          if (kDebugMode) {
+            print('✅ Caption updated via coordinator');
+            print('   New text: "$result"');
+            print('   Hashtags: ${updatedPost.content.hashtags}');
+          }
+
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content:
+                    Text('Caption updated! Changes synced across screens 📝'),
+                duration: Duration(seconds: 2),
+              ),
+            );
+          }
+        }
+      } catch (e) {
+        if (kDebugMode) {
+          print('❌ Failed to update caption via coordinator: $e');
+        }
+
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Failed to update caption: $e'),
+              backgroundColor: Colors.red,
+              duration: const Duration(seconds: 3),
+            ),
+          );
+        }
       }
     }
   }
 
   Future<void> _editSchedule() async {
-    final firestoreService =
-        Provider.of<FirestoreService>(context, listen: false);
-
     final now = DateTime.now();
     final initialDate = _action.options.schedule == 'now'
         ? now
@@ -293,38 +310,68 @@ class _ReviewPostScreenState extends State<ReviewPostScreen> {
           pickedTime.minute,
         );
 
-        final updatedAction = SocialAction(
-          actionId: _action.actionId,
-          createdAt: _action.createdAt,
-          platforms: _action.platforms,
-          content: _action.content,
-          options: Options(
-            schedule: scheduledDateTime.toIso8601String(),
-            locationTag: _action.options.locationTag,
-            visibility: _action.options.visibility,
-            replyToPostId: _action.options.replyToPostId,
-          ),
-          platformData: _action.platformData,
-          internal: _action.internal,
-        );
+        try {
+          // CRITICAL: Update through coordinator for centralized state management
+          await _postCoordinator
+              .updatePostSchedule(scheduledDateTime.toIso8601String());
 
-        await firestoreService.updateAction(
-          updatedAction.actionId,
-          updatedAction.toJson(),
-        );
+          // Get the updated post from coordinator
+          final updatedPost = _postCoordinator.currentPost;
+          if (updatedPost != null) {
+            setState(() {
+              _action = updatedPost;
+            });
 
-        if (mounted) {
-          setState(() {
-            _action = updatedAction;
-          });
+            if (kDebugMode) {
+              print('✅ Schedule updated via coordinator');
+              print('   New schedule: ${scheduledDateTime.toIso8601String()}');
+            }
+
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(
+                      'Schedule updated to ${DateFormat('MMM d, yyyy \'at\' h:mm a').format(scheduledDateTime)}'),
+                  duration: const Duration(seconds: 2),
+                ),
+              );
+            }
+          }
+        } catch (e) {
+          if (kDebugMode) {
+            print('❌ Failed to update schedule via coordinator: $e');
+          }
+
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Failed to update schedule: $e'),
+                backgroundColor: Colors.red,
+                duration: const Duration(seconds: 3),
+              ),
+            );
+          }
         }
       }
     }
   }
 
   Future<void> _confirmAndPost() async {
-    final socialPostService =
-        Provider.of<SocialPostService>(context, listen: false);
+    // Check execution readiness first
+    final readiness = _postCoordinator.executionReadiness;
+    if (!readiness.isReady) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+                'Post not ready: ${readiness.missingRequirements.join(', ')}'),
+            backgroundColor: Colors.orange,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+      return;
+    }
 
     setState(() {
       _isPosting = true;
@@ -332,7 +379,8 @@ class _ReviewPostScreenState extends State<ReviewPostScreen> {
     });
 
     try {
-      final results = await socialPostService.postToAllPlatforms(_action);
+      // CRITICAL: Use coordinator's centralized post execution
+      final results = await _postCoordinator.finalizeAndExecutePost();
 
       setState(() {
         _postResults = results;
@@ -340,6 +388,8 @@ class _ReviewPostScreenState extends State<ReviewPostScreen> {
       });
 
       if (mounted) {
+        final allSucceeded = _postResults.values.every((success) => success);
+
         await showDialog(
           context: context,
           barrierDismissible: false,
@@ -385,16 +435,7 @@ class _ReviewPostScreenState extends State<ReviewPostScreen> {
             actions: [
               TextButton(
                 onPressed: () {
-                  Navigator.pop(context);
-                  if (_postResults.values.every((success) => success)) {
-                    Navigator.pushAndRemoveUntil(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => const HistoryScreen(),
-                      ),
-                      (route) => route.isFirst,
-                    );
-                  }
+                  Navigator.pop(context); // Close the dialog
                 },
                 child: const Text('OK',
                     style: TextStyle(color: Color(0xFFFF0080))),
@@ -402,6 +443,24 @@ class _ReviewPostScreenState extends State<ReviewPostScreen> {
             ],
           ),
         );
+
+        // CRITICAL: Handle navigation based on posting results
+        if (mounted) {
+          if (allSucceeded) {
+            // Navigate to history and return true to CommandScreen
+            // The coordinator has already reset its state after successful posting
+            Navigator.pushAndRemoveUntil(
+              context,
+              MaterialPageRoute(
+                builder: (context) => const HistoryScreen(),
+              ),
+              (route) => route.isFirst,
+            );
+          } else {
+            // Stay on review screen for failed posts
+            // Don't navigate away, let user retry or go back manually
+          }
+        }
       }
     } catch (e) {
       setState(() {
@@ -416,8 +475,6 @@ class _ReviewPostScreenState extends State<ReviewPostScreen> {
   }
 
   Future<void> _cancelPost() async {
-    final firestoreService =
-        Provider.of<FirestoreService>(context, listen: false);
     final navigator = Navigator.of(context);
 
     final confirmed = await showDialog<bool>(
@@ -443,14 +500,17 @@ class _ReviewPostScreenState extends State<ReviewPostScreen> {
     );
 
     if (confirmed == true) {
-      await firestoreService.deleteAction(_action.actionId);
+      // CRITICAL: Reset coordinator state instead of direct Firestore deletion
+      // The coordinator manages all post state, including cleanup
+      _postCoordinator.reset();
+
+      if (kDebugMode) {
+        print('✅ Post discarded via coordinator reset');
+      }
+
       if (mounted) {
-        navigator.pushAndRemoveUntil(
-          MaterialPageRoute(
-            builder: (context) => const CommandScreen(),
-          ),
-          (route) => route.isFirst,
-        );
+        // Navigate back to CommandScreen with clean state
+        Navigator.pop(context);
       }
     }
   }
@@ -624,44 +684,47 @@ User voice instruction: "$transcription"''';
   }
 
   Future<void> _applyTextEdit(String newText, List<dynamic> newHashtags) async {
-    final firestoreService =
-        Provider.of<FirestoreService>(context, listen: false);
+    try {
+      // CRITICAL: Update through coordinator for centralized state management
+      await _postCoordinator.updatePostContent(newText.trim());
 
-    final updatedAction = SocialAction(
-      actionId: _action.actionId,
-      createdAt: _action.createdAt,
-      platforms: _action.platforms,
-      content: Content(
-        text: newText.trim(),
-        hashtags: newHashtags
-            .map((h) => h.toString().replaceAll('#', '').trim())
-            .toList(),
-        mentions: _action.content.mentions,
-        link: _action.content.link,
-        media: _action.content.media,
-      ),
-      options: _action.options,
-      platformData: _action.platformData,
-      internal: _action.internal,
-    );
+      // Get the updated post from coordinator
+      final updatedPost = _postCoordinator.currentPost;
+      if (updatedPost != null) {
+        setState(() {
+          _action = updatedPost;
+          _captionController.text = newText.trim();
+        });
 
-    // Update in Firestore
-    await firestoreService.updateAction(
-        _action.actionId, updatedAction.toJson());
+        if (kDebugMode) {
+          print('✅ Voice edit applied via coordinator');
+          print('   New text: "${newText.trim()}"');
+          print('   Hashtags: ${updatedPost.content.hashtags}');
+        }
 
-    // Update local state
-    setState(() {
-      _action = updatedAction;
-      _captionController.text = newText.trim();
-    });
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Post updated with voice edit! 🎉'),
+              duration: Duration(seconds: 2),
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ Failed to apply voice edit via coordinator: $e');
+      }
 
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Post updated with voice edit! 🎉'),
-          duration: Duration(seconds: 2),
-        ),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to apply voice edit: $e'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
     }
   }
 
@@ -959,59 +1022,27 @@ User voice instruction: "$transcription"''';
       );
 
       if (updatedAction != null) {
-        // Update the local state with the new action
-        setState(() {
-          _action = updatedAction;
-        });
+        // CRITICAL: Update through coordinator for bidirectional sync
+        await _postCoordinator.replaceMedia(updatedAction.content.media);
 
-        // Only update Firestore if this is not a temporary action
-        final isTemporaryAction = _action.actionId.startsWith('temp_');
-        if (!isTemporaryAction) {
-          try {
-            // Update Firestore
-            final firestoreService =
-                Provider.of<FirestoreService>(context, listen: false);
-            await firestoreService.updateAction(
-              _action.actionId,
-              _action.toJson(),
-            );
+        // Get the updated post from coordinator
+        final updatedPost = _postCoordinator.currentPost;
+        if (updatedPost != null) {
+          setState(() {
+            _action = updatedPost;
+          });
 
-            if (kDebugMode) {
-              print(
-                  '💾 Media updated in Firestore for action: ${_action.actionId}');
-            }
-
-            if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text('Media updated successfully! 🎉'),
-                  duration: Duration(seconds: 2),
-                ),
-              );
-            }
-          } catch (firestoreError) {
-            if (kDebugMode) {
-              print('❌ Firestore update failed: $firestoreError');
-            }
-            // Still show success since local state was updated
-            if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text('Media updated locally (sync pending)'),
-                  duration: Duration(seconds: 2),
-                ),
-              );
-            }
-          }
-        } else {
           if (kDebugMode) {
-            print(
-                '🔄 Skipping Firestore update for temporary action: ${_action.actionId}');
+            print('✅ Media updated via coordinator');
+            print('   Media count: ${updatedPost.content.media.length}');
+            print('   Synced across screens');
           }
+
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(
-                content: Text('Media updated! 🎉'),
+                content:
+                    Text('Media updated! Changes synced across screens 🎉'),
                 duration: Duration(seconds: 2),
               ),
             );
@@ -1020,7 +1051,7 @@ User voice instruction: "$transcription"''';
       }
     } catch (e) {
       if (kDebugMode) {
-        print('❌ Media selection navigation error: $e');
+        print('❌ Media selection error: $e');
       }
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

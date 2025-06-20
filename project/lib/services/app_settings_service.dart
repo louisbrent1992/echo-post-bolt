@@ -6,7 +6,7 @@ class AppSettingsService extends ChangeNotifier {
   static const String _aiMediaContextEnabledKey = 'ai_media_context_enabled';
 
   // Default values
-  static const int _defaultMediaContextLimit = 100;
+  static const int _defaultMediaContextLimit = 25;
   static const bool _defaultMediaContextEnabled = true;
 
   bool _isInitialized = false;

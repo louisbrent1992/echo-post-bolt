@@ -4,12 +4,14 @@ import 'package:http/http.dart' as http;
 
 import '../models/social_action.dart';
 import 'media_coordinator.dart';
+import 'social_action_post_coordinator.dart';
 
 class AIService {
   static const String _openaiApiUrl =
       'https://api.openai.com/v1/chat/completions';
   final String _apiKey;
   MediaCoordinator? _mediaCoordinator;
+  SocialActionPostCoordinator? _postCoordinator;
 
   AIService(this._apiKey, [MediaCoordinator? mediaCoordinator])
       : _mediaCoordinator = mediaCoordinator;
@@ -17,6 +19,11 @@ class AIService {
   /// Set the MediaCoordinator instance (called after both services are created)
   void setMediaCoordinator(MediaCoordinator mediaCoordinator) {
     _mediaCoordinator = mediaCoordinator;
+  }
+
+  /// Set the SocialActionPostCoordinator instance for robust JSON handling
+  void setPostCoordinator(SocialActionPostCoordinator postCoordinator) {
+    _postCoordinator = postCoordinator;
   }
 
   /// Attempts to repair common JSON formatting issues
@@ -156,6 +163,65 @@ class AIService {
     return repaired;
   }
 
+  /// Robust JSON parsing using the post coordinator's advanced repair strategies
+  Map<String, dynamic> robustJsonParse(String jsonString) {
+    if (_postCoordinator != null) {
+      return _postCoordinator!.robustJsonParse(jsonString);
+    }
+
+    // Fallback to original repair logic if coordinator not available
+    return _fallbackJsonParse(jsonString);
+  }
+
+  /// Fallback JSON parsing when coordinator is not available
+  Map<String, dynamic> _fallbackJsonParse(String jsonString) {
+    try {
+      return json.decode(jsonString) as Map<String, dynamic>;
+    } catch (e) {
+      if (kDebugMode) {
+        print('🔧 Direct JSON parse failed, attempting basic repair...');
+      }
+
+      try {
+        final repairedJson = repairJson(jsonString);
+        return json.decode(repairedJson) as Map<String, dynamic>;
+      } catch (repairError) {
+        if (kDebugMode) {
+          print('❌ JSON repair failed: $repairError');
+        }
+
+        // Return minimal structure to prevent complete failure
+        return {
+          'action_id': 'emergency_${DateTime.now().millisecondsSinceEpoch}',
+          'created_at': DateTime.now().toIso8601String(),
+          'platforms': ['instagram', 'twitter'],
+          'content': {
+            'text': 'Error processing voice command',
+            'hashtags': [],
+            'mentions': [],
+            'media': [],
+          },
+          'options': {
+            'schedule': 'now',
+            'visibility': {
+              'instagram': 'public',
+              'twitter': 'public',
+            },
+          },
+          'platform_data': {
+            'instagram': {'post_here': true},
+            'twitter': {'post_here': true},
+          },
+          'internal': {
+            'ai_generated': false,
+            'original_transcription': '',
+            'fallback_reason': 'emergency_fallback',
+          },
+        };
+      }
+    }
+  }
+
   Future<SocialAction> processVoiceCommand(
     String transcription, {
     List<MediaItem>? preSelectedMedia,
@@ -213,12 +279,41 @@ class AIService {
         {
           'role': 'system',
           'content': '''
-You are a JSON generator for the EchoPost app.
+You are a social media content creator and JSON generator for the EchoPost app.
 
-Your task is to generate a complete SocialAction object, formatted as JSON. This object will be used by the app to preview and post social media content based on a spoken command and available device media.
+Your task is to transform a spoken transcription into an engaging, platform-ready social media post and generate a complete SocialAction object as JSON.
+
+**CRITICAL: CONTENT TRANSFORMATION REQUIREMENTS**
+
+1. **POST CONTENT CREATION:**
+   - The transcription is your STARTING POINT, not the final post
+   - Transform the transcription into engaging, concise social media content
+   - Make it suitable for platforms like Instagram, Twitter, Facebook, and TikTok
+   - Use compelling language, emojis where appropriate, and clear calls-to-action
+   - Keep posts concise but engaging (Instagram: 125-150 chars optimal, Twitter: under 280)
+
+2. **HASHTAG REQUIREMENTS (MANDATORY):**
+   - ALWAYS generate relevant hashtags and include them in the "hashtags" array
+   - Include 3-8 hashtags that are relevant to the content
+   - Mix popular hashtags with niche ones for better reach
+   - Consider trending hashtags when relevant
+   - Examples: ["travel", "sunset", "photography", "wanderlust", "nature"]
+
+3. **CONTENT ENHANCEMENT:**
+   - Add context and emotion that may be missing from the transcription
+   - Include relevant emojis to increase engagement
+   - Create compelling captions that encourage interaction
+   - Transform casual speech into polished social media content
+
+**EXAMPLE TRANSFORMATIONS:**
+- Transcription: "posting a picture of my coffee"
+- Enhanced Post: "Starting my Monday with the perfect brew ☕️ Nothing beats that first sip of morning motivation! What's fueling your week? #MondayMotivation #CoffeeLovers #MorningRitual #CoffeeTime #Productivity"
+
+- Transcription: "sharing my workout video"  
+- Enhanced Post: "Crushing today's workout! 💪 Remember: progress over perfection. Every rep counts, every day matters. Who's joining me tomorrow? #FitnessJourney #WorkoutMotivation #HealthyLifestyle #FitLife #NoExcuses"
 
 You will receive these fields from the user:
-- "transcription": a string containing the spoken command
+- "transcription": a string containing the spoken command (TRANSFORM THIS!)
 - "media_context": an object containing available media files from the user's device, with recent_media sorted by creation time (newest first)
 - "pre_selected_media": (optional) media items that the user has already selected before recording
 
@@ -237,88 +332,53 @@ You will receive these fields from the user:
    - "post the latest video" → Select first video from media_context.recent_media
    - "share my last 3 photos" → Select first 3 images from media_context.recent_media
 
-3. **MEDIA CONTEXT STRUCTURE:**
-   The media_context.recent_media array contains objects with:
-   - file_uri: Complete file path for the media
-   - file_name: Just the filename 
-   - mime_type: Media type (image/jpeg, video/mp4, etc.)
-   - timestamp: Creation date/time (sorted newest first)
-   - directory: Source directory path
-   - device_metadata: Width, height, file size, etc.
-
-4. **CONTENT.MEDIA ARRAY FORMAT:**
-   When selecting media from context, create MediaItem objects like this:
+3. **CONTENT.MEDIA STRUCTURE:**
+   When including media in content.media, use this exact structure:
    ```json
-    {
-     "file_uri": "file:///storage/emulated/0/DCIM/Camera/IMG_20241219_143022.jpg",
+   {
+     "file_uri": "file:///path/to/media.jpg",
      "mime_type": "image/jpeg",
      "device_metadata": {
-       "creation_time": "2024-12-19T14:30:22Z",
-       "width": 3024,
-       "height": 4032,
-       "file_size_bytes": 2847293,
-       "latitude": null,
-       "longitude": null,
-      "orientation": 1,
-       "duration": 0,
-      "bitrate": null,
-       "sampling_rate": null,
-       "frame_rate": null
-    }
+       "creation_time": "2024-01-15T10:30:00.000Z",
+       "latitude": 40.7128,
+       "longitude": -74.0060,
+       "orientation": 1,
+       "width": 1920,
+       "height": 1080,
+       "file_size_bytes": 2048576
+     }
    }
    ```
 
-5. **TEXT GENERATION:**
-   - If user specifies post text, use it as content.text
-   - If no text provided, generate engaging caption based on selected media or context
-   - Never leave content.text empty - always provide meaningful text with hashtags
+4. **MEDIA_QUERY vs CONTENT.MEDIA:**
+   - Use content.media when you have specific media from context to include
+   - Use media_query only when no suitable media found but media is needed
+   - NEVER use both content.media and media_query for the same content type
 
-6. **MEDIA_QUERY FALLBACK:**
-   Only create media_query when:
-   - User requests specific media that's not in the context (e.g., "sunset photos from last week")
-   - No media context is provided but media is clearly needed
-   - User requests broad search (e.g., "photos with my dog")
-
-**EXAMPLE WITH DIRECT MEDIA SELECTION:**
-User says: "post my last picture"
-If media_context.recent_media[0] exists, select it directly:
+**RESPONSE FORMAT:**
+Your response must be valid JSON with this exact structure:
 
 ```json
 {
-  "action_id": "echo_1734624622000",
-  "created_at": "2024-12-19T14:30:22Z",
-  "platforms": ["instagram"],
+  "action_id": "echo_[timestamp]",
+  "created_at": "[ISO8601 timestamp]", 
+  "platforms": ["instagram", "twitter", "facebook", "tiktok"],
   "content": {
-    "text": "Capturing the moment ✨",
-    "hashtags": ["photography", "memories"],
-    "mentions": [],
+    "text": "[ENHANCED social media post - NOT raw transcription]",
+    "hashtags": ["MANDATORY", "relevant", "hashtags", "array"],
+    "mentions": ["relevant_accounts"],
     "link": null,
-    "media": [
-      {
-        "file_uri": "file:///storage/emulated/0/DCIM/Camera/IMG_20241219_143022.jpg",
-        "mime_type": "image/jpeg",
-        "device_metadata": {
-          "creation_time": "2024-12-19T14:30:22Z",
-          "width": 3024,
-          "height": 4032,
-          "file_size_bytes": 2847293,
-          "latitude": null,
-          "longitude": null,
-          "orientation": 1,
-          "duration": 0,
-          "bitrate": null,
-          "sampling_rate": null,
-          "frame_rate": null
-        }
-      }
-    ]
+    "media": [...]
   },
   "options": {
     "schedule": "now",
-    "visibility": {
-      "instagram": "public"
-    },
     "location_tag": null,
+    "visibility": {
+      "instagram": "public",
+      "twitter": "public", 
+      "facebook": "public",
+      "tiktok": "public"
+    },
     "reply_to_post_id": null
   },
   "platform_data": {
@@ -340,19 +400,19 @@ If media_context.recent_media[0] exists, select it directly:
       "carousel": null,
       "ig_user_id": "",
       "media_type": "image",
-      "media_file_uri": "file:///storage/emulated/0/DCIM/Camera/IMG_20241219_143022.jpg",
+      "media_file_uri": null,
       "video_thumbnail_uri": null,
       "video_file_uri": null,
       "audio_file_uri": null,
       "scheduled_time": null
     },
     "twitter": {
-      "post_here": false,
+      "post_here": true,
       "alt_texts": [],
       "tweet_mode": "extended",
       "media_type": null,
       "media_file_uri": null,
-      "media_duration": 0,
+      "media_duration": null,
       "tweet_link": null,
       "scheduled_time": null
     },
@@ -372,7 +432,7 @@ If media_context.recent_media[0] exists, select it directly:
   "internal": {
     "retry_count": 0,
     "ai_generated": true,
-    "original_transcription": "post my last picture",
+    "original_transcription": "[exact user transcription]",
     "user_preferences": {
       "default_platforms": [],
       "default_hashtags": []
@@ -388,13 +448,11 @@ If media_context.recent_media[0] exists, select it directly:
 }
 ```
 
-**CRITICAL REQUIREMENTS:**
-- Always return complete, valid JSON with ALL required fields
-- Use exact field names (snake_case, not camelCase)
-- When media context is available and user references it, SELECT from it directly
-- Only create media_query as absolute last resort
-- Never leave content.media empty if suitable media exists in context
+**REQUIREMENTS:**
+- ALWAYS transform transcription into engaging social media content
+- ALWAYS include relevant hashtags in the hashtags array (3-8 hashtags minimum)
 - Always include all platform_data objects (facebook, instagram, twitter, tiktok) even if post_here is false
+- Focus on engagement, clarity, and platform optimization
 '''
         },
         {
@@ -434,17 +492,19 @@ If media_context.recent_media[0] exists, select it directly:
             '📊 Response length: ${content?.toString().length ?? 0} characters');
       }
 
-      // Ensure content is a Map<String, dynamic>
+      // Use robust JSON parsing instead of direct decode
       Map<String, dynamic> actionJson;
       if (content is String) {
         try {
-          actionJson = json.decode(content);
+          // CRITICAL FIX: Use robust JSON parsing instead of direct decode
+          actionJson = robustJsonParse(content);
         } catch (e) {
           if (kDebugMode) {
-            print('❌ Failed to parse content as JSON string: $e');
+            print('❌ Failed to parse content with robust parser: $e');
             print('📝 Raw content: $content');
           }
-          throw Exception('Invalid JSON response from ChatGPT');
+          throw Exception(
+              'Invalid JSON response from ChatGPT after all repair attempts');
         }
       } else if (content is Map<String, dynamic>) {
         actionJson = content;

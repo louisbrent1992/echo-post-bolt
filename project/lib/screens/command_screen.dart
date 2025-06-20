@@ -12,6 +12,7 @@ import 'package:path_provider/path_provider.dart';
 import '../models/social_action.dart';
 import '../services/ai_service.dart';
 import '../services/media_coordinator.dart';
+import '../services/social_action_post_coordinator.dart';
 import '../widgets/mic_button.dart';
 import '../widgets/social_icon.dart';
 import '../widgets/post_content_box.dart';
@@ -67,8 +68,6 @@ class _CommandScreenState extends State<CommandScreen>
   final AudioRecorder _record = AudioRecorder();
 
   RecordingState _recordingState = RecordingState.idle;
-  String _transcription = '';
-  SocialAction? _currentAction;
   String? _currentRecordingPath;
   bool _isStoppingRecording = false;
   bool _isStartingRecording = false;
@@ -94,15 +93,9 @@ class _CommandScreenState extends State<CommandScreen>
   final int _maxSilenceBeforeWarning =
       10; // 5 seconds of silence before warning
 
-  // Media coordinator for centralized media handling
+  // Coordinators - now using SocialActionPostCoordinator for all state management
+  late final SocialActionPostCoordinator _postCoordinator;
   late final MediaCoordinator _mediaCoordinator;
-
-  // Pre-selected media state (can be set before recording)
-  List<MediaItem> _preSelectedMedia = [];
-  bool _hasPreSelectedMedia = false;
-
-  // Welcome dialog state
-  bool _hasShownWelcome = false;
 
   @override
   void initState() {
@@ -113,7 +106,16 @@ class _CommandScreenState extends State<CommandScreen>
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    _postCoordinator =
+        Provider.of<SocialActionPostCoordinator>(context, listen: false);
     _mediaCoordinator = Provider.of<MediaCoordinator>(context, listen: false);
+
+    if (kDebugMode) {
+      print('🎯 CommandScreen: Connected to SocialActionPostCoordinator');
+      print('   Post state: ${_postCoordinator.postState}');
+      print('   Has content: ${_postCoordinator.hasContent}');
+      print('   Has media: ${_postCoordinator.hasMedia}');
+    }
   }
 
   void _initializeAnimations() {
@@ -148,8 +150,6 @@ class _CommandScreenState extends State<CommandScreen>
     _recordingTimer = null;
     _amplitudeTimer = null;
     _recordingDuration = 0;
-    _transcription = '';
-    _currentAction = null;
     _currentRecordingPath = null;
     _isStartingRecording = false;
     _isStoppingRecording = false;
@@ -164,17 +164,15 @@ class _CommandScreenState extends State<CommandScreen>
     _hasSpeechDetected = false;
     _silenceCount = 0;
 
-    // Optionally clear pre-selected media (e.g., when user explicitly resets)
+    // Use coordinator to manage state reset
+    _postCoordinator.setRecordingState(false);
+
     if (clearPreSelectedMedia) {
-      _preSelectedMedia = [];
-      _hasPreSelectedMedia = false;
+      _postCoordinator.reset(); // Full reset including media
     }
 
     if (kDebugMode) {
-      print('🔄 Recording state reset to idle');
-      if (clearPreSelectedMedia) {
-        print('🔄 Pre-selected media cleared');
-      }
+      print('🔄 Recording state reset to idle via coordinator');
     }
   }
 
@@ -192,8 +190,7 @@ class _CommandScreenState extends State<CommandScreen>
 
   Future<void> _startRecording() async {
     if (kDebugMode) {
-      print(
-          '🎤 Starting recording... Current state: $_recordingState, isStartingRecording: $_isStartingRecording');
+      print('🎤 Starting recording... Current state: $_recordingState');
     }
 
     if (_recordingState != RecordingState.idle) {
@@ -213,35 +210,25 @@ class _CommandScreenState extends State<CommandScreen>
 
     _isStartingRecording = true;
 
+    // Update coordinator recording state
+    _postCoordinator.setRecordingState(true);
+
     try {
       // Check and request microphone permission
-      if (kDebugMode) {
-        print('🔍 Checking microphone permission...');
-      }
-
       bool hasPermission = await _record.hasPermission();
-      if (kDebugMode) {
-        print('🔍 Initial microphone permission: $hasPermission');
-      }
-
-      // Final permission check - the record package automatically requests permission if needed
       if (!hasPermission) {
         _isStartingRecording = false;
-        if (kDebugMode) {
-          print('❌ Microphone permission denied by user');
-        }
+        _postCoordinator.setRecordingState(false);
+
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: const Text(
-                  'Microphone permission is required for voice recording. Please grant permission when prompted or check app settings.'),
+                  'Microphone permission is required for voice recording.'),
               duration: const Duration(seconds: 5),
               action: SnackBarAction(
                 label: 'Retry',
-                onPressed: () {
-                  // Retry recording which will trigger permission request again
-                  _startRecording();
-                },
+                onPressed: _startRecording,
               ),
             ),
           );
@@ -249,119 +236,54 @@ class _CommandScreenState extends State<CommandScreen>
         return;
       }
 
-      if (kDebugMode) {
-        print('✅ Microphone permission granted');
-      }
-
       // Validate recording environment
-      if (kDebugMode) {
-        print('🔍 Validating recording environment...');
-      }
-
       if (!await _validateRecordingEnvironment()) {
         _isStartingRecording = false;
-        if (kDebugMode) {
-          print('❌ Recording environment validation failed');
-        }
+        _postCoordinator.setRecordingState(false);
         return;
       }
 
-      // Set up recording path - use M4A format for optimal file size
+      // Set up recording path
       final tempDir = await getTemporaryDirectory();
-
-      // Ensure temp directory exists and is writable
-      if (!await tempDir.exists()) {
-        try {
-          await tempDir.create(recursive: true);
-          if (kDebugMode) {
-            print('📁 Created temp directory: ${tempDir.path}');
-          }
-        } catch (e) {
-          throw Exception('Failed to create temporary directory: $e');
-        }
-      }
-
-      // Use M4A format for optimal file size
       final m4aPath =
           '${tempDir.path}/recording_${DateTime.now().millisecondsSinceEpoch}.m4a';
-
-      if (kDebugMode) {
-        print('📁 Recording to path: $m4aPath');
-        print('📁 Temp directory exists: ${await tempDir.exists()}');
-        print('📁 Temp directory path: ${tempDir.path}');
-      }
-
-      // Set the path BEFORE starting recording
       _currentRecordingPath = m4aPath;
 
-      // Update UI state immediately
+      // Update UI state
       setState(() {
         _recordingState = RecordingState.recording;
       });
 
-      if (kDebugMode) {
-        print('🎛️ UI state updated to recording');
-      }
-
-      // Configure optimal recording settings for speech recognition
-      // Using M4A format for optimal file size
+      // Configure and start recording
       const recordConfig = RecordConfig(
-        encoder: AudioEncoder.aacLc, // AAC-LC codec for M4A format
-        bitRate: 128000, // 128 kbps - good quality for speech
-        sampleRate:
-            16000, // 16kHz - optimal for speech recognition (Whisper's native rate)
-        numChannels: 1, // Mono recording for voice
-        autoGain: true, // Enable auto gain for consistent levels
-        echoCancel: true, // Enable echo cancellation
-        noiseSuppress: true, // Enable noise suppression
+        encoder: AudioEncoder.aacLc,
+        bitRate: 128000,
+        sampleRate: 16000,
+        numChannels: 1,
+        autoGain: true,
+        echoCancel: true,
+        noiseSuppress: true,
       );
-
-      if (kDebugMode) {
-        print('🎛️ Recording config:');
-        print('   Encoder: ${recordConfig.encoder}');
-        print('   Bitrate: ${recordConfig.bitRate} bps');
-        print('   Sample Rate: ${recordConfig.sampleRate} Hz');
-        print('   Channels: ${recordConfig.numChannels}');
-        print('   Auto Gain: ${recordConfig.autoGain}');
-        print('   Echo Cancel: ${recordConfig.echoCancel}');
-        print('   Noise Suppress: ${recordConfig.noiseSuppress}');
-      }
-
-      // Start the actual recording
-      if (kDebugMode) {
-        print('🚀 Starting audio recording...');
-      }
 
       _recordingStartTime = DateTime.now();
       await _record.start(recordConfig, path: m4aPath);
 
-      if (kDebugMode) {
-        print(
-            '🎙️ Audio recording started at: ${_recordingStartTime!.toIso8601String()}');
-      }
-
-      // Small delay to allow microphone to fully initialize before starting timer
-      // This prevents timing mismatch between timer and actual audio capture
       await Future.delayed(const Duration(milliseconds: 100));
-
-      // Start the recording timer and amplitude monitoring
       _startRecordingTimer();
       _startAmplitudeMonitoring();
 
       if (kDebugMode) {
-        print('✅ Recording setup complete. Path: $_currentRecordingPath');
-        print('⏰ Recording timer and amplitude monitoring started');
+        print('✅ Recording started successfully');
       }
     } catch (e) {
       if (kDebugMode) {
         print('❌ Failed to start recording: $e');
-        print('📊 Error type: ${e.runtimeType}');
       }
 
-      // Reset state on error
       setState(() {
         _recordingState = RecordingState.idle;
       });
+      _postCoordinator.setRecordingState(false);
       _currentRecordingPath = null;
 
       if (mounted) {
@@ -374,9 +296,6 @@ class _CommandScreenState extends State<CommandScreen>
       }
     } finally {
       _isStartingRecording = false;
-      if (kDebugMode) {
-        print('🔚 _startRecording completed. Final state: $_recordingState');
-      }
     }
   }
 
@@ -488,55 +407,33 @@ class _CommandScreenState extends State<CommandScreen>
     final stopTime = DateTime.now();
     if (kDebugMode) {
       print('🛑 Stopping recording at: ${stopTime.toIso8601String()}');
-      print(
-          '🛑 Current state: $_recordingState, isStoppingRecording: $_isStoppingRecording');
-      print('🛑 Recording duration when stop called: ${_recordingDuration}s');
     }
 
     // Handle different states
     if (_recordingState == RecordingState.idle) {
-      if (kDebugMode) {
-        print('❌ Already in idle state, nothing to stop');
-      }
       return;
     }
 
-    // If we're in processing or ready state, just reset to idle
     if (_recordingState == RecordingState.processing ||
         _recordingState == RecordingState.ready) {
-      if (kDebugMode) {
-        print('🔄 Resetting from $_recordingState to idle');
-      }
       setState(() {
         _resetRecordingState();
       });
       return;
     }
 
-    // Handle the actual recording stop (only when in recording state)
     if (_recordingState != RecordingState.recording) {
-      if (kDebugMode) {
-        print(
-            '❌ Cannot stop recording: not in recording state (current: $_recordingState)');
-      }
       return;
     }
 
     if (_isStoppingRecording) {
-      if (kDebugMode) {
-        print('❌ Already stopping recording, ignoring additional stop request');
-      }
       return;
     }
 
     _isStoppingRecording = true;
 
     try {
-      if (kDebugMode) {
-        print('📍 About to call _record.stop()');
-      }
-
-      // Stop the recording and get the path
+      // Stop recording
       final recordedPath = await _record.stop();
       _stopRecordingTimer();
       _stopAmplitudeMonitoring();
@@ -545,48 +442,40 @@ class _CommandScreenState extends State<CommandScreen>
           ? stopTime.difference(_recordingStartTime!).inMilliseconds / 1000.0
           : 0.0;
 
-      if (kDebugMode) {
-        print('📍 Recording stopped, returned path: $recordedPath');
-        print('📍 Current recording path: $_currentRecordingPath');
-        print('📍 Timer duration: ${_recordingDuration}s');
-        print('📍 Actual duration: ${actualDuration.toStringAsFixed(2)}s');
-      }
-
-      // Check if speech was detected during recording
+      // Validate recording quality
       if (!_hasSpeechDetected) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
               content: Text(
-                  '🎤 No speech detected. Try speaking louder, closer to the microphone, or check your microphone permissions.'),
+                  '🎤 No speech detected. Try speaking louder or closer to the microphone.'),
               duration: Duration(seconds: 4),
               backgroundColor: Colors.orange,
             ),
           );
         }
-        throw Exception(
-            'No speech detected during recording. Please speak louder, closer to the microphone, or check microphone permissions.');
+        throw Exception('No speech detected during recording.');
       }
 
-      // Check minimum recording duration (0.5 second minimum for meaningful speech)
       const minRecordingDuration = 0.5;
       if (actualDuration < minRecordingDuration) {
         throw Exception(
-            'Recording too short (${actualDuration.toStringAsFixed(2)}s). Please hold the button longer and speak clearly. Minimum duration: ${minRecordingDuration}s');
+            'Recording too short (${actualDuration.toStringAsFixed(2)}s). Minimum duration: ${minRecordingDuration}s');
       }
 
+      // Update coordinator processing state
+      _postCoordinator.setProcessingState(true);
       setState(() {
         _recordingState = RecordingState.processing;
       });
 
-      // Use the returned path or fallback to stored path
+      // Use recorded path or fallback
       final pathToProcess = recordedPath ?? _currentRecordingPath;
-
-      if (pathToProcess == null || pathToProcess.isEmpty) {
+      if (pathToProcess == null) {
         throw Exception('No recording path available');
       }
 
-      // Verify file exists before processing
+      // Validate file
       final file = File(pathToProcess);
       if (!await file.exists()) {
         throw Exception('Recording file does not exist: $pathToProcess');
@@ -597,27 +486,52 @@ class _CommandScreenState extends State<CommandScreen>
         throw Exception('Recording file is empty');
       }
 
-      // Validate M4A file format
       await _validateM4aFile(file, fileSize);
 
+      // Transcribe and process through coordinator
       if (kDebugMode) {
-        print('⏳ Processing recording from: $pathToProcess ($fileSize bytes)');
+        print('⏳ Processing recording through SocialActionPostCoordinator...');
       }
 
       final transcription = await _transcribeWithWhisper(pathToProcess);
-
       if (transcription.isEmpty) {
         throw Exception('Whisper returned empty transcription');
       }
 
-      await _processTranscription(transcription);
+      // CRITICAL: Use coordinator for all processing
+      await _postCoordinator.processVoiceTranscription(transcription);
+
+      // CRITICAL: Clean up coordinator processing state after completion
+      _postCoordinator.setProcessingState(false);
+
+      // Update UI based on coordinator state
+      setState(() {
+        _recordingState = _postCoordinator.isPostComplete
+            ? RecordingState.ready
+            : RecordingState.processing;
+      });
+
+      if (kDebugMode) {
+        print('✅ Voice processing complete via coordinator');
+        print('   Post complete: ${_postCoordinator.isPostComplete}');
+        print('   Has content: ${_postCoordinator.hasContent}');
+        print('   Has media: ${_postCoordinator.hasMedia}');
+      }
+
+      // Auto-advance if post is complete
+      if (_postCoordinator.isPostComplete) {
+        await _checkAndAdvanceToReview();
+      }
     } catch (e) {
       if (kDebugMode) {
         print('❌ Error in _stopRecording: $e');
       }
+
+      _postCoordinator.setProcessingState(false);
       setState(() {
         _recordingState = RecordingState.idle;
       });
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -806,76 +720,10 @@ class _CommandScreenState extends State<CommandScreen>
     }
   }
 
-  /// Validates that the SocialAction created from ChatGPT response is complete and ready for UI
-  void _validateSocialAction(
-      SocialAction action, String originalTranscription) {
-    try {
-      // Validate basic structure
-      if (action.actionId.isEmpty) {
-        throw Exception('SocialAction missing actionId');
-      }
-
-      if (action.platforms.isEmpty) {
-        throw Exception('SocialAction has no platforms selected');
-      }
-
-      if (action.content.text.isEmpty) {
-        throw Exception('SocialAction has empty text content');
-      }
-
-      // Validate platform consistency
-      final validPlatforms = ['instagram', 'twitter', 'facebook', 'tiktok'];
-      for (final platform in action.platforms) {
-        if (!validPlatforms.contains(platform)) {
-          throw Exception('Invalid platform: $platform');
-        }
-      }
-
-      // Validate content structure
-      if (action.content.hashtags.any((tag) => tag.startsWith('#'))) {
-        throw Exception('Hashtags should not include # symbol');
-      }
-
-      // Validate internal metadata
-      if (action.internal.originalTranscription != originalTranscription) {
-        if (kDebugMode) {
-          print('⚠️ Warning: Original transcription mismatch');
-          print('   Expected: "$originalTranscription"');
-          print('   Stored: "${action.internal.originalTranscription}"');
-        }
-      }
-
-      if (!action.internal.aiGenerated) {
-        throw Exception('SocialAction should be marked as AI generated');
-      }
-
-      // Log validation success
-      if (kDebugMode) {
-        print('✅ SocialAction validation passed:');
-        print('   ID: ${action.actionId}');
-        print(
-            '   Platforms: ${action.platforms.length} (${action.platforms.join(', ')})');
-        print('   Text: ${action.content.text.length} chars');
-        print('   Hashtags: ${action.content.hashtags.length}');
-        print('   Mentions: ${action.content.mentions.length}');
-        print(
-            '   Media Query: ${action.mediaQuery?.isNotEmpty == true ? 'Yes' : 'No'}');
-        print('   Created: ${action.createdAt}');
-      }
-    } catch (e) {
-      if (kDebugMode) {
-        print('❌ SocialAction validation failed: $e');
-        print('📊 Action JSON: ${action.toJson()}');
-      }
-      throw Exception('ChatGPT response validation failed: $e');
-    }
-  }
-
   Future<String> _transcribeWithWhisper(String audioPath) async {
     final apiKey = dotenv.env['OPENAI_API_KEY'];
     if (apiKey == null || apiKey.isEmpty) {
-      throw Exception(
-          'OPENAI_API_KEY not found in .env.local file. Please add your OpenAI API key.');
+      throw Exception('OPENAI_API_KEY not found in .env.local file.');
     }
 
     if (kDebugMode) {
@@ -883,15 +731,12 @@ class _CommandScreenState extends State<CommandScreen>
     }
 
     try {
-      // Check if file exists and validate
       final file = File(audioPath);
       if (!await file.exists()) {
         throw Exception('Audio file does not exist: $audioPath');
       }
 
       final fileSize = await file.length();
-
-      // Check file size limit (25MB = 26,214,400 bytes)
       const maxFileSize = 26214400;
       if (fileSize > maxFileSize) {
         throw Exception(
@@ -902,29 +747,16 @@ class _CommandScreenState extends State<CommandScreen>
         throw Exception('Audio file is empty');
       }
 
-      if (kDebugMode) {
-        print(
-            '📁 File size: $fileSize bytes (${(fileSize / 1024 / 1024).toStringAsFixed(2)} MB)');
-      }
-
       final url = Uri.parse('https://api.openai.com/v1/audio/transcriptions');
       final request = http.MultipartRequest('POST', url);
 
-      // Set headers
       request.headers['Authorization'] = 'Bearer $apiKey';
       request.headers['User-Agent'] = 'EchoPost/1.0.0';
-
-      // Set required fields
       request.fields['model'] = 'whisper-1';
       request.fields['response_format'] = 'json';
-
-      // Optional: specify language for better accuracy
       request.fields['language'] = 'en';
-
-      // Optional: lower temperature for more deterministic results
       request.fields['temperature'] = '0.0';
 
-      // Add the audio file
       final multipartFile = await http.MultipartFile.fromPath(
         'file',
         audioPath,
@@ -932,16 +764,8 @@ class _CommandScreenState extends State<CommandScreen>
       );
       request.files.add(multipartFile);
 
-      if (kDebugMode) {
-        print('🚀 Sending request to Whisper API...');
-        print('📋 Request fields: ${request.fields}');
-        print(
-            '📎 File: ${multipartFile.filename} (${multipartFile.length} bytes)');
-      }
-
-      // Send request with timeout
       final response = await request.send().timeout(
-        const Duration(seconds: 60), // 60 second timeout for audio processing
+        const Duration(seconds: 60),
         onTimeout: () {
           throw Exception('Whisper API request timed out after 60 seconds');
         },
@@ -949,46 +773,28 @@ class _CommandScreenState extends State<CommandScreen>
 
       final responseBody = await response.stream.bytesToString();
 
-      if (kDebugMode) {
-        print('📡 Whisper API response status: ${response.statusCode}');
-        print('📡 Whisper API response headers: ${response.headers}');
-      }
-
       if (response.statusCode != 200) {
         String errorMessage = 'Whisper API error (${response.statusCode})';
-
         try {
           final errorJson = json.decode(responseBody);
           if (errorJson.containsKey('error')) {
             final errorDetails = errorJson['error'];
             errorMessage +=
                 ': ${errorDetails['message'] ?? errorDetails['type'] ?? 'Unknown error'}';
-
-            if (errorDetails.containsKey('code')) {
-              errorMessage += ' (Code: ${errorDetails['code']})';
-            }
           }
         } catch (e) {
           errorMessage += ': $responseBody';
         }
-
         throw Exception(errorMessage);
       }
 
-      if (kDebugMode) {
-        print('📡 Whisper API response body: $responseBody');
-      }
-
-      // Parse JSON response
       final jsonResponse = json.decode(responseBody) as Map<String, dynamic>;
-
       if (!jsonResponse.containsKey('text')) {
         throw Exception(
             'Invalid response from Whisper API: missing "text" field');
       }
 
       final transcription = jsonResponse['text'] as String? ?? '';
-
       if (transcription.isEmpty) {
         throw Exception('Whisper API returned empty transcription');
       }
@@ -997,12 +803,9 @@ class _CommandScreenState extends State<CommandScreen>
         print('✅ Transcription received: "$transcription"');
       }
 
-      // Clean up the audio file
+      // Clean up audio file
       try {
         await file.delete();
-        if (kDebugMode) {
-          print('🗑️ Cleaned up audio file');
-        }
       } catch (e) {
         if (kDebugMode) {
           print('⚠️ Warning: Could not delete audio file: $e');
@@ -1015,268 +818,34 @@ class _CommandScreenState extends State<CommandScreen>
         print('❌ Whisper transcription error: $e');
       }
 
-      // Clean up the audio file even on error
       try {
         await File(audioPath).delete();
-      } catch (_) {
-        // Ignore cleanup errors
-      }
+      } catch (_) {}
 
       rethrow;
     }
   }
 
-  Future<void> _processTranscription(String transcription) async {
-    if (kDebugMode) {
-      print('🔄 Processing transcription: "$transcription"');
-    }
-
-    try {
-      if (!mounted) {
-        return;
-      }
-
-      final aiService = Provider.of<AIService>(context, listen: false);
-      final firestoreService =
-          Provider.of<FirestoreService>(context, listen: false);
-
-      if (kDebugMode) {
-        print('🚀 Calling AIService.processVoiceCommand...');
-        if (_hasPreSelectedMedia) {
-          print(
-              '📎 Including ${_preSelectedMedia.length} pre-selected media items in structured context');
-          for (final media in _preSelectedMedia) {
-            final isVideo = media.mimeType.startsWith('video/');
-            final type = isVideo ? 'video' : 'image';
-            print(
-                '   - $type: ${media.fileUri} (${media.deviceMetadata.width}x${media.deviceMetadata.height})');
-          }
-        }
-      }
-
-      // Enhanced transcription with media context if pre-selected media exists
-      String enhancedTranscription = transcription;
-      if (_hasPreSelectedMedia) {
-        // Instead of appending media context to transcription, we'll pass it through
-        // the AI service's structured media context. This prevents ChatGPT from
-        // receiving conflicting media information that causes incomplete JSON.
-
-        if (kDebugMode) {
-          print(
-              '📎 Including ${_preSelectedMedia.length} pre-selected media items in structured context');
-          for (final media in _preSelectedMedia) {
-            final isVideo = media.mimeType.startsWith('video/');
-            final type = isVideo ? 'video' : 'image';
-            print(
-                '   - $type: ${media.fileUri} (${media.deviceMetadata.width}x${media.deviceMetadata.height})');
-          }
-        }
-
-        // Pass pre-selected media through AI service's structured context
-        // The AI service will handle this properly without conflicting with transcription
-        enhancedTranscription =
-            transcription; // Keep original transcription clean
-      }
-
-      final action = await aiService.processVoiceCommand(
-        enhancedTranscription,
-        preSelectedMedia: _hasPreSelectedMedia ? _preSelectedMedia : null,
-      );
-
-      if (kDebugMode) {
-        print('✅ Received SocialAction from AI service');
-        print('📋 Platforms: ${action.platforms}');
-        print('📝 Text: "${action.content.text}"');
-        print('🏷️ Hashtags: ${action.content.hashtags}');
-        print('🔍 Media Query: "${action.mediaQuery}"');
-      }
-
-      // Ensure default platforms are selected if none specified
-      final defaultPlatforms = ['instagram', 'twitter', 'facebook', 'tiktok'];
-      final platformsToUse =
-          action.platforms.isEmpty ? defaultPlatforms : action.platforms;
-
-      // Create action with proper platform defaults
-      final actionWithPlatforms = SocialAction(
-        actionId: action.actionId,
-        createdAt: action.createdAt,
-        platforms: platformsToUse,
-        content: action.content,
-        options: action.options,
-        platformData: action.platformData,
-        internal: action.internal,
-        mediaQuery: action.mediaQuery,
-      );
-
-      // Validate the created SocialAction
-      _validateSocialAction(actionWithPlatforms, transcription);
-
-      // Save the action to Firestore
-      try {
-        await firestoreService.saveAction(actionWithPlatforms.toJson());
-        if (kDebugMode) {
-          print('💾 Saved action to Firestore');
-        }
-      } catch (e) {
-        if (kDebugMode) {
-          print('⚠️ Failed to save to Firestore: $e');
-        }
-        // Continue even if Firestore save fails
-      }
-
-      // Use MediaCoordinator to recover and validate media state
-      if (kDebugMode) {
-        print('🔄 Using MediaCoordinator to recover/validate media state...');
-      }
-
-      final recoveredAction =
-          await _mediaCoordinator.recoverMediaState(actionWithPlatforms);
-      var finalAction = recoveredAction ?? actionWithPlatforms;
-
-      // If we have pre-selected media and the AI didn't include media, merge them
-      if (_hasPreSelectedMedia && finalAction.content.media.isEmpty) {
-        if (kDebugMode) {
-          print('🔗 Merging pre-selected media with AI-generated action');
-        }
-
-        finalAction = SocialAction(
-          actionId: finalAction.actionId,
-          createdAt: finalAction.createdAt,
-          platforms: finalAction.platforms,
-          content: Content(
-            text: finalAction.content.text,
-            hashtags: finalAction.content.hashtags,
-            mentions: finalAction.content.mentions,
-            link: finalAction.content.link,
-            media: _preSelectedMedia, // Include pre-selected media
-          ),
-          options: finalAction.options,
-          platformData: finalAction.platformData,
-          internal: finalAction.internal,
-          mediaQuery: finalAction.mediaQuery,
-        );
-
-        // Clear pre-selected media since it's now part of the action
-        _preSelectedMedia = [];
-        _hasPreSelectedMedia = false;
-      }
-
-      if (mounted) {
-        setState(() {
-          _transcription = transcription;
-          _currentAction = finalAction;
-          _recordingState = RecordingState.ready;
-        });
-
-        // Enhanced media status logging using MediaCoordinator
-        if (kDebugMode) {
-          print('🎯 UI updated with validated action');
-
-          // Check media status through coordinator
-          final hasValidMedia = finalAction.content.media.isNotEmpty &&
-              finalAction.content.media
-                  .any((media) => media.fileUri.isNotEmpty);
-          final hasMediaQuery =
-              finalAction.mediaQuery?.searchTerms.isNotEmpty == true;
-
-          if (hasValidMedia) {
-            // Validate existing media URIs
-            var validCount = 0;
-            for (final media in finalAction.content.media) {
-              if (await _mediaCoordinator.validateMediaURI(media.fileUri)) {
-                validCount++;
-              }
-            }
-            print(
-                '✅ Action contains $validCount valid media file URIs out of ${finalAction.content.media.length}');
-          } else if (hasMediaQuery) {
-            print('🔍 Action contains media query - will need media selection');
-            print(
-                '   Search Terms: "${finalAction.mediaQuery!.searchTerms.join(', ')}"');
-            print('   Media Types: ${finalAction.mediaQuery!.mediaTypes}');
-          } else {
-            print('⚠️ Action has no media or media query');
-          }
-        }
-
-        // Check if post is now complete and advance automatically
-        await _checkAndAdvanceToReview();
-      }
-    } catch (e) {
-      if (kDebugMode) {
-        print('❌ Error in _processTranscription: $e');
-        print('📊 Stack trace: ${StackTrace.current}');
-      }
-
-      if (mounted) {
-        setState(() {
-          _recordingState = RecordingState.idle;
-        });
-
-        // Show more detailed error message
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to process transcription: $e'),
-            duration: const Duration(seconds: 5),
-            action: SnackBarAction(
-              label: 'Retry',
-              onPressed: () {
-                if (_transcription.isNotEmpty) {
-                  _processTranscription(_transcription);
-                }
-              },
-            ),
-          ),
-        );
-      }
-    }
-  }
-
   void _togglePlatform(String platform) {
-    if (_currentAction == null) return;
-
-    final updatedPlatforms = List<String>.from(_currentAction!.platforms);
-    if (updatedPlatforms.contains(platform)) {
-      updatedPlatforms.remove(platform);
-    } else {
-      updatedPlatforms.add(platform);
-    }
-
-    setState(() {
-      _currentAction = SocialAction(
-        actionId: _currentAction!.actionId,
-        createdAt: _currentAction!.createdAt,
-        platforms: updatedPlatforms,
-        content: _currentAction!.content,
-        options: _currentAction!.options,
-        platformData: _currentAction!.platformData,
-        internal: _currentAction!.internal,
-        mediaQuery: _currentAction!.mediaQuery,
-      );
-    });
+    _postCoordinator.togglePlatform(platform);
   }
 
   Future<void> _navigateToMediaSelection() async {
     try {
       if (kDebugMode) {
-        print('🔍 Navigating to media selection...');
-        print('   Has current action: ${_currentAction != null}');
-        print('   Has pre-selected media: $_hasPreSelectedMedia');
+        print('🔍 Navigating to media selection via coordinator...');
       }
 
-      SocialAction? actionForSelection;
+      // Get current post from coordinator
+      final currentPost = _postCoordinator.currentPost;
       List<Map<String, dynamic>>? initialCandidates;
 
-      if (_currentAction != null) {
+      if (currentPost != null) {
         // Post-recording: Use existing action
-        actionForSelection = _currentAction!;
-
-        // Fetch candidates if we have a media query
-        if (_currentAction!.mediaQuery != null) {
-          final query = _currentAction!.mediaQuery!;
+        if (currentPost.mediaQuery != null) {
+          final query = currentPost.mediaQuery!;
           final searchTerms = query.searchTerms.join(' ');
 
-          // Build date range if available
           DateTimeRange? dateRange;
           if (query.dateRange != null) {
             dateRange = DateTimeRange(
@@ -1286,7 +855,6 @@ class _CommandScreenState extends State<CommandScreen>
             );
           }
 
-          // Get media candidates through coordinator
           initialCandidates = await _mediaCoordinator.getMediaForQuery(
             searchTerms,
             dateRange: dateRange,
@@ -1295,99 +863,59 @@ class _CommandScreenState extends State<CommandScreen>
           );
         }
       } else {
-        // Pre-selection: Create a temporary action for media selection
-        actionForSelection = SocialAction(
-          actionId: 'temp_${DateTime.now().millisecondsSinceEpoch}',
-          createdAt: DateTime.now().toIso8601String(),
-          platforms: ['instagram'], // Default platform for media selection
-          content: Content(
-            text: '',
-            hashtags: [],
-            mentions: [],
-            media: _preSelectedMedia, // Include any existing pre-selected media
-          ),
-          options: Options(),
-          platformData: PlatformData(),
-          internal: Internal(
-            originalTranscription: '',
-            aiGenerated: false,
-          ),
-        );
-
-        // Get general media candidates for browsing
+        // Pre-selection: Get general media candidates
         initialCandidates = await _mediaCoordinator.getMediaForQuery(
-          '', // Empty search for general browsing
-          mediaTypes: ['image', 'video'], // Support both images and videos
+          '',
+          mediaTypes: ['image', 'video'],
         );
       }
 
-      if (kDebugMode) {
-        print('📊 Found ${initialCandidates?.length ?? 0} media candidates');
-      }
+      if (!mounted) return;
 
-      // Capture context before navigation
-      if (!mounted) {
-        return;
-      }
+      final actionForSelection = currentPost ??
+          SocialAction(
+            actionId: 'temp_${DateTime.now().millisecondsSinceEpoch}',
+            createdAt: DateTime.now().toIso8601String(),
+            platforms: ['instagram'],
+            content: Content(
+              text: '',
+              hashtags: [],
+              mentions: [],
+              media: _postCoordinator.preSelectedMedia,
+            ),
+            options: Options(),
+            platformData: PlatformData(),
+            internal: Internal(
+              originalTranscription: '',
+              aiGenerated: false,
+            ),
+          );
+
       final navigator = Navigator.of(context);
       final scaffoldMessenger = ScaffoldMessenger.of(context);
 
       final updatedAction = await navigator.push<SocialAction>(
         MaterialPageRoute(
           builder: (context) => MediaSelectionScreen(
-            action: actionForSelection!,
+            action: actionForSelection,
             initialCandidates: initialCandidates,
           ),
         ),
       );
 
       if (updatedAction != null) {
-        if (_currentAction != null) {
-          // Post-recording: Update existing action
-          final validatedAction =
-              await _mediaCoordinator.recoverMediaState(updatedAction);
-          if (mounted) {
-            setState(() {
-              _currentAction = validatedAction ?? updatedAction;
-            });
-          }
+        // Update coordinator with new media
+        await _postCoordinator.addMedia(updatedAction.content.media);
 
-          if (kDebugMode) {
-            print('✅ Post-recording media selection completed');
-            print(
-                '📊 Selected media count: ${_currentAction!.content.media.length}');
-          }
+        if (kDebugMode) {
+          print('✅ Media selection completed via coordinator');
+          print(
+              '📊 Selected media count: ${updatedAction.content.media.length}');
+        }
 
-          // Check if post is now complete and advance automatically
-          if (mounted) {
-            await _checkAndAdvanceToReview();
-          }
-        } else {
-          // Pre-selection: Store media for later use
-          if (mounted) {
-            setState(() {
-              _preSelectedMedia = List.from(updatedAction.content.media);
-              _hasPreSelectedMedia = _preSelectedMedia.isNotEmpty;
-            });
-          }
-
-          if (kDebugMode) {
-            print('✅ Pre-selection completed');
-            print('📊 Pre-selected media count: ${_preSelectedMedia.length}');
-          }
-
-          if (mounted && _hasPreSelectedMedia) {
-            scaffoldMessenger.showSnackBar(
-              SnackBar(
-                content: Text(
-                    '${_preSelectedMedia.length} media selected! Record your voice to create the post.'),
-                duration: const Duration(seconds: 3),
-              ),
-            );
-
-            // Check if post is now complete and advance automatically
-            await _checkAndAdvanceToReview();
-          }
+        // Auto-advance if post is now complete
+        if (mounted && _postCoordinator.isPostComplete) {
+          await _checkAndAdvanceToReview();
         }
       }
     } catch (e) {
@@ -1407,57 +935,63 @@ class _CommandScreenState extends State<CommandScreen>
   }
 
   Future<void> _navigateToReviewPost() async {
-    if (_currentAction == null) return;
-
-    // Capture context before async operations
-    final navigator = Navigator.of(context);
-    final scaffoldMessenger = ScaffoldMessenger.of(context);
+    final currentPost = _postCoordinator.currentPost;
+    if (currentPost == null) return;
 
     try {
       if (kDebugMode) {
-        print('🔍 Navigating to review post with final validation...');
+        print('🔍 Navigating to review post via coordinator...');
       }
 
-      // Last-minute sanity check through MediaCoordinator
-      final safeAction =
-          await _mediaCoordinator.recoverMediaState(_currentAction!);
-      final actionToReview = safeAction ?? _currentAction!;
-
-      if (kDebugMode) {
-        print('✅ Final action validated for review');
-        print('📊 Media count: ${actionToReview.content.media.length}');
-
-        // Log any media validation issues
-        if (actionToReview.content.media.isNotEmpty) {
-          var validCount = 0;
-          for (final media in actionToReview.content.media) {
-            if (await _mediaCoordinator.validateMediaURI(media.fileUri)) {
-              validCount++;
-            }
-          }
-          print(
-              '📊 Valid media URIs: $validCount/${actionToReview.content.media.length}');
-        }
-      }
+      // Final validation through MediaCoordinator
+      final safeAction = await _mediaCoordinator.recoverMediaState(currentPost);
+      final actionToReview = safeAction ?? currentPost;
 
       if (!mounted) return;
 
+      final navigator = Navigator.of(context);
+
+      // CRITICAL: Ensure clean state before navigation
+      // Reset any processing flags that might cause spinning indicator
+      _postCoordinator.setProcessingState(false);
+      setState(() {
+        _recordingState = RecordingState.idle;
+        _isStoppingRecording = false;
+        _isStartingRecording = false;
+      });
+
+      // Navigate to review screen
       final result = await navigator.push(
         MaterialPageRoute(
           builder: (context) => ReviewPostScreen(action: actionToReview),
         ),
       );
 
-      if (result == true) {
-        // Post was successfully published, reset the state
+      // CRITICAL: Only reset on explicit success (post published)
+      // Back navigation should preserve all state
+      if (mounted && result == true) {
+        // Post was successfully published - full reset
         if (kDebugMode) {
-          print('✅ Post published successfully, resetting state');
+          print('✅ Post published successfully, performing full reset');
         }
-        if (mounted) {
-          setState(() {
-            _resetRecordingState();
-          });
+        _postCoordinator.reset();
+        setState(() {
+          _resetRecordingState(clearPreSelectedMedia: true);
+        });
+      } else {
+        // User navigated back or posting failed - preserve all state
+        if (kDebugMode) {
+          print(
+              '🔙 User navigated back or posting failed, preserving post state');
         }
+        // CRITICAL: Ensure clean UI state on return
+        // The coordinator preserves post content, but UI should be clean
+        _postCoordinator.setProcessingState(false);
+        setState(() {
+          _recordingState = RecordingState.idle;
+          _isStoppingRecording = false;
+          _isStartingRecording = false;
+        });
       }
     } catch (e) {
       if (kDebugMode) {
@@ -1465,7 +999,15 @@ class _CommandScreenState extends State<CommandScreen>
       }
 
       if (mounted) {
-        scaffoldMessenger.showSnackBar(
+        // Reset processing state on error but preserve post content
+        _postCoordinator.setProcessingState(false);
+        setState(() {
+          _recordingState = RecordingState.idle;
+          _isStoppingRecording = false;
+          _isStartingRecording = false;
+        });
+
+        ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Failed to prepare post for review: $e'),
             duration: const Duration(seconds: 3),
@@ -1509,12 +1051,8 @@ class _CommandScreenState extends State<CommandScreen>
   }
 
   Future<void> _editPostText() async {
-    // Capture dependencies before async operations
-    final firestoreService =
-        Provider.of<FirestoreService>(context, listen: false);
-    final scaffoldMessenger = ScaffoldMessenger.of(context);
-    final textController =
-        TextEditingController(text: _currentAction?.content.text ?? '');
+    final textController = TextEditingController(
+        text: _postCoordinator.currentPost?.content.text ?? '');
 
     final result = await showDialog<String>(
       context: context,
@@ -1561,132 +1099,41 @@ class _CommandScreenState extends State<CommandScreen>
     );
 
     if (result != null && result.trim().isNotEmpty) {
-      // Create or update action with default platforms if none selected
-      final defaultPlatforms = ['instagram', 'twitter', 'facebook', 'tiktok'];
-      final currentPlatforms = _currentAction?.platforms ?? [];
-      final platformsToUse =
-          currentPlatforms.isEmpty ? defaultPlatforms : currentPlatforms;
-
-      final actionToUpdate = _currentAction ??
-          SocialAction(
-            actionId: 'temp_${DateTime.now().millisecondsSinceEpoch}',
-            createdAt: DateTime.now().toIso8601String(),
-            platforms: platformsToUse,
-            content: Content(
-              text: '',
-              hashtags: [],
-              mentions: [],
-              media: _hasPreSelectedMedia ? _preSelectedMedia : [],
-            ),
-            options: Options(),
-            platformData: PlatformData(),
-            internal: Internal(
-              originalTranscription: '',
-              aiGenerated: false,
-            ),
-          );
-
-      final updatedAction = SocialAction(
-        actionId: actionToUpdate.actionId,
-        createdAt: actionToUpdate.createdAt,
-        platforms: platformsToUse,
-        content: Content(
-          text: result.trim(),
-          hashtags: actionToUpdate.content.hashtags,
-          mentions: actionToUpdate.content.mentions,
-          link: actionToUpdate.content.link,
-          media: _hasPreSelectedMedia
-              ? _preSelectedMedia
-              : actionToUpdate.content.media,
-        ),
-        options: actionToUpdate.options,
-        platformData: actionToUpdate.platformData,
-        internal: actionToUpdate.internal,
-        mediaQuery: actionToUpdate.mediaQuery,
-      );
-
-      // Clear pre-selected media since it's now part of the action
-      if (_hasPreSelectedMedia) {
-        _preSelectedMedia = [];
-        _hasPreSelectedMedia = false;
-      }
-
-      try {
-        if (_currentAction == null) {
-          // Creating new action
-          await firestoreService.saveAction(updatedAction.toJson());
-        } else {
-          // Updating existing action
-          await firestoreService.updateAction(
-              updatedAction.actionId, updatedAction.toJson());
-        }
-      } catch (e) {
-        if (kDebugMode) {
-          print('⚠️ Failed to save text edit to Firestore: $e');
-        }
-        // Continue even if Firestore save fails
-      }
+      // Update text through coordinator
+      await _postCoordinator.updatePostContent(result.trim());
 
       if (mounted) {
-        setState(() {
-          _currentAction = updatedAction;
-        });
-
-        scaffoldMessenger.showSnackBar(
+        ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Post content updated! 📝'),
             duration: Duration(seconds: 2),
           ),
         );
 
-        // Do NOT automatically advance - stay in command screen for platform selection
-        // The user should be able to see and modify platform selections
+        // Do NOT auto-advance - let user see platform selections
       }
     }
 
     textController.dispose();
   }
 
-  /// Checks if the current post state is complete (has both media and content)
-  bool _isPostComplete() {
-    final hasContent = _currentAction != null &&
-        (_currentAction!.content.text.isNotEmpty ||
-            _currentAction!.content.hashtags.isNotEmpty);
-    final hasMedia = (_currentAction?.content.media.isNotEmpty ?? false) ||
-        _hasPreSelectedMedia;
-
-    if (kDebugMode) {
-      print('🔍 Post completion check:');
-      print('   Has content: $hasContent');
-      print('   Has media: $hasMedia');
-      print('   Is complete: ${hasContent && hasMedia}');
-    }
-
-    return hasContent && hasMedia;
-  }
-
-  /// Checks if we need media selection (has content but no media)
+  bool _isPostComplete() => _postCoordinator.isPostComplete;
   bool _needsMediaSelection() {
-    final hasContent = _currentAction != null &&
-        (_currentAction!.content.text.isNotEmpty ||
-            _currentAction!.content.hashtags.isNotEmpty);
-    final hasMedia = (_currentAction?.content.media.isNotEmpty ?? false) ||
-        _hasPreSelectedMedia;
-    final hasMediaQuery = _currentAction?.mediaQuery?.isNotEmpty == true;
-
+    final hasContent = _postCoordinator.hasContent;
+    final hasMedia = _postCoordinator.hasMedia;
+    final hasMediaQuery =
+        _postCoordinator.currentPost?.mediaQuery?.isNotEmpty == true;
     return hasContent && !hasMedia && hasMediaQuery;
   }
 
-  /// Automatically advances to review post when state is complete
   Future<void> _checkAndAdvanceToReview() async {
-    if (_isPostComplete()) {
+    if (_postCoordinator.isPostComplete) {
       if (kDebugMode) {
-        print('🚀 Post is complete, automatically advancing to review');
+        print(
+            '🚀 Post is complete via coordinator, automatically advancing to review');
       }
 
-      // Small delay for better UX (shows the completion state briefly)
       await Future.delayed(const Duration(milliseconds: 300));
-
       if (mounted) {
         await _navigateToReviewPost();
       }
@@ -1695,70 +1142,78 @@ class _CommandScreenState extends State<CommandScreen>
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      body: AnimatedBuilder(
-        animation: _backgroundAnimation,
-        builder: (context, child) {
-          return Container(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: [
-                  Colors.black,
-                  Color.lerp(
-                    const Color(0xFF1A1A1A),
-                    const Color(0xFF2A1A2A),
-                    _backgroundAnimation.value * 0.3,
-                  )!,
-                ],
-              ),
-            ),
-            child: SafeArea(
-              child: _buildReviewStyleLayout(),
-            ),
-          );
-        },
-      ),
+    return Consumer<SocialActionPostCoordinator>(
+      builder: (context, coordinator, child) {
+        return Scaffold(
+          body: AnimatedBuilder(
+            animation: _backgroundAnimation,
+            builder: (context, child) {
+              return Container(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      Colors.black,
+                      Color.lerp(
+                        const Color(0xFF1A1A1A),
+                        const Color(0xFF2A1A2A),
+                        _backgroundAnimation.value * 0.3,
+                      )!,
+                    ],
+                  ),
+                ),
+                child: SafeArea(
+                  child: _buildReviewStyleLayout(coordinator),
+                ),
+              );
+            },
+          ),
+        );
+      },
     );
   }
 
-  Widget _buildReviewStyleLayout() {
-    // Systematic grid spacing constants (multiples of 6 for visual harmony)
+  Widget _buildReviewStyleLayout(SocialActionPostCoordinator coordinator) {
     const double _gridUnit = 6.0;
-    const double _spacing1 = _gridUnit; // 6px - minimal spacing
-    const double _spacing2 = _gridUnit * 2; // 12px - small spacing
-    const double _spacing3 = _gridUnit * 3; // 18px - medium spacing
-    const double _spacing4 = _gridUnit * 4; // 24px - large spacing
-    const double _spacing5 = _gridUnit * 5; // 30px - extra large spacing
+    const double _spacing1 = _gridUnit;
+    const double _spacing2 = _gridUnit * 2;
+    const double _spacing3 = _gridUnit * 3;
+    const double _spacing4 = _gridUnit * 4;
+    const double _spacing5 = _gridUnit * 5;
 
     return Column(
       children: [
-        // Header section (60px height) - Social Icons
         Container(
           height: 60,
           padding: const EdgeInsets.symmetric(horizontal: _spacing3),
-          child: _buildCommandHeader(),
+          child: CommandHeader(
+            selectedPlatforms: coordinator.currentPost?.platforms ?? [],
+            onPlatformToggle: _togglePlatform,
+            leftAction: coordinator.hasContent || coordinator.hasMedia
+                ? IconButton(
+                    onPressed: _showResetConfirmation,
+                    icon: const Icon(Icons.refresh,
+                        color: Colors.white, size: 24),
+                    tooltip: 'Reset current post',
+                  )
+                : null,
+            rightAction: IconButton(
+              onPressed: _navigateToHistory,
+              icon: const Icon(Icons.history, color: Colors.white, size: 28),
+            ),
+          ),
         ),
-
-        // Main content area (flexible with controlled spacing)
         Expanded(
           child: SingleChildScrollView(
             physics: const BouncingScrollPhysics(),
             child: Column(
               children: [
-                const SizedBox(
-                    height: _spacing4), // 24px - consistent top spacing
-
-                // Media preview section (matching ReviewPostScreen dimensions)
-                _buildCommandMediaSection(),
-
-                // Post content box (always visible - unified approach)
-                const SizedBox(
-                    height:
-                        _spacing1), // 6px - reduced spacing between media buttons and post content
+                const SizedBox(height: _spacing4),
+                _buildCommandMediaSection(coordinator),
+                const SizedBox(height: _spacing1),
                 PostContentBox(
-                  action: _currentAction ?? _createEmptyAction(),
+                  action: coordinator.currentPost ?? _createEmptyAction(),
                   isRecording: _recordingState == RecordingState.recording,
                   isProcessingVoice:
                       _recordingState == RecordingState.processing,
@@ -1767,44 +1222,34 @@ class _CommandScreenState extends State<CommandScreen>
                       ? _stopVoiceEditing
                       : _startVoiceEditing,
                 ),
-                const SizedBox(
-                    height:
-                        _spacing5), // 30px - proportional spacing to transcription area
-
-                const SizedBox(
-                    height:
-                        _spacing2), // 12px - final spacing before bottom area
+                const SizedBox(height: _spacing5),
+                const SizedBox(height: _spacing2),
               ],
             ),
           ),
         ),
-
-        // Bottom unified action area (matching ReviewPostScreen)
         SizedBox(
-          height: 180, // Same height as ReviewPostScreen
+          height: 180,
           child: Column(
             children: [
-              // Transcription status area (upper part)
               Expanded(
                 flex: 2,
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 20),
                   child: Center(
                     child: TranscriptionStatus(
-                      transcription: _transcription,
+                      transcription: coordinator.currentTranscription,
                       isProcessing:
                           _recordingState == RecordingState.processing,
                       isRecording: _recordingState == RecordingState.recording,
                       recordingDuration: _recordingDuration,
                       maxRecordingDuration: _maxRecordingDuration,
-                      context: _getTranscriptionContext(),
-                      customMessage: _getCustomMessage(),
+                      context: _getTranscriptionContext(coordinator),
+                      customMessage: _getCustomMessage(coordinator),
                     ),
                   ),
                 ),
               ),
-
-              // Unified action button area (lower part)
               Expanded(
                 flex: 3,
                 child: SafeArea(
@@ -1814,7 +1259,7 @@ class _CommandScreenState extends State<CommandScreen>
                       width: 120,
                       height: 120,
                       child: UnifiedActionButton(
-                        state: _getUnifiedButtonState(),
+                        state: _getUnifiedButtonState(coordinator),
                         amplitude: normalizedAmplitude,
                         onRecordStart: _startRecording,
                         onRecordStop: _stopRecording,
@@ -1832,34 +1277,17 @@ class _CommandScreenState extends State<CommandScreen>
     );
   }
 
-  Widget _buildCommandHeader() {
-    return CommandHeader(
-      selectedPlatforms: _currentAction?.platforms ?? [],
-      onPlatformToggle: _togglePlatform,
-      rightAction: IconButton(
-        onPressed: _navigateToHistory,
-        icon: const Icon(
-          Icons.history,
-          color: Colors.white,
-          size: 28,
-        ),
-      ),
-    );
-  }
-
-  Widget _buildCommandMediaSection() {
-    // Systematic grid spacing constants (matching main layout)
+  Widget _buildCommandMediaSection(SocialActionPostCoordinator coordinator) {
     const double _gridUnit = 6.0;
-    const double _spacing2 = _gridUnit * 2; // 12px
+    const double _spacing2 = _gridUnit * 2;
 
     return Column(
       children: [
-        // Media preview area - full width, edge to edge (matching ReviewPostScreen)
         Container(
-          width: double.infinity, // Full width
-          height: 250, // Same height as ReviewPostScreen
+          width: double.infinity,
+          height: 250,
           decoration: BoxDecoration(
-            color: Colors.grey.shade900, // Darker background to match theme
+            color: Colors.grey.shade900,
             boxShadow: [
               BoxShadow(
                 color: Colors.black.withValues(alpha: 0.3),
@@ -1868,25 +1296,111 @@ class _CommandScreenState extends State<CommandScreen>
               ),
             ],
           ),
-          child: (_currentAction?.content.media.isNotEmpty == true) ||
-                  _hasPreSelectedMedia
-              ? _buildMediaPreview(context)
+          child: coordinator.hasMedia
+              ? _buildMediaPreview(context, coordinator)
               : _buildEmptyMediaPlaceholder(),
         ),
-
-        const SizedBox(height: _spacing2), // 12px - consistent spacing
-
-        // Unified media buttons row (Directory + Media selection)
+        const SizedBox(height: _spacing2),
         UnifiedMediaButtons(
           onDirectorySelection: _navigateToDirectorySelection,
           onMediaSelection: _navigateToMediaSelection,
-          hasMedia: (_currentAction?.content.media.isNotEmpty ?? false) ||
-              _hasPreSelectedMedia,
+          hasMedia: coordinator.hasMedia,
         ),
-
-        const SizedBox(
-            height: _spacing2), // 12px - consistent spacing after buttons
+        const SizedBox(height: _spacing2),
       ],
+    );
+  }
+
+  Widget _buildMediaPreview(
+      BuildContext context, SocialActionPostCoordinator coordinator) {
+    List<MediaItem> mediaToShow;
+    if (coordinator.currentPost?.content.media.isNotEmpty == true) {
+      mediaToShow = coordinator.currentPost!.content.media;
+    } else if (coordinator.preSelectedMedia.isNotEmpty) {
+      mediaToShow = coordinator.preSelectedMedia;
+    } else {
+      return const SizedBox.shrink();
+    }
+
+    final mediaItem = mediaToShow.first;
+    final isVideo = mediaItem.mimeType.startsWith('video/');
+
+    return Container(
+      width: double.infinity,
+      height: 250,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          isVideo
+              ? Container(
+                  decoration: const BoxDecoration(color: Color(0xFF2A2A2A)),
+                  child: const Center(
+                    child: Icon(Icons.videocam, color: Colors.grey, size: 40),
+                  ),
+                )
+              : Image.file(
+                  File(Uri.parse(mediaItem.fileUri).path),
+                  fit: BoxFit.cover,
+                  errorBuilder: (context, error, stackTrace) {
+                    return Container(
+                      decoration: const BoxDecoration(color: Color(0xFF2A2A2A)),
+                      child: const Center(
+                        child: Icon(Icons.image, color: Colors.grey, size: 40),
+                      ),
+                    );
+                  },
+                ),
+          Positioned(
+            bottom: 0,
+            left: 0,
+            right: 0,
+            child: Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.bottomCenter,
+                  end: Alignment.topCenter,
+                  colors: [
+                    Colors.black.withValues(alpha: 0.7),
+                    Colors.transparent,
+                  ],
+                ),
+              ),
+              child: Row(
+                children: [
+                  Text(
+                    '${mediaItem.deviceMetadata.width} × ${mediaItem.deviceMetadata.height}',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                  if (coordinator.preSelectedMedia.isNotEmpty &&
+                      coordinator.currentPost == null) ...[
+                    const Spacer(),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFFF0080).withValues(alpha: 0.8),
+                      ),
+                      child: const Text(
+                        'Pre-selected',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 10,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -1954,216 +1468,11 @@ class _CommandScreenState extends State<CommandScreen>
     );
   }
 
-  Widget _buildMediaPreview(BuildContext context) {
-    // Determine which media to show - action media takes precedence over pre-selected
-    List<MediaItem> mediaToShow;
-    if (_currentAction?.content.media.isNotEmpty == true) {
-      mediaToShow = _currentAction!.content.media;
-    } else if (_hasPreSelectedMedia) {
-      mediaToShow = _preSelectedMedia;
-    } else {
-      return const SizedBox.shrink();
-    }
-
-    final mediaItem = mediaToShow.first;
-    final isVideo = mediaItem.mimeType.startsWith('video/');
-
-    return Container(
-      width: double.infinity, // Full width, edge to edge
-      height: 250, // Increased height to match ReviewPostScreen
-      decoration: const BoxDecoration(
-        color: Colors.transparent, // Remove white background
-      ),
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          isVideo
-              ? Container(
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF2A2A2A),
-                  ),
-                  child: const Center(
-                    child: Icon(
-                      Icons.videocam,
-                      color: Colors.grey,
-                      size: 40,
-                    ),
-                  ),
-                )
-              : Image.file(
-                  File(Uri.parse(mediaItem.fileUri).path),
-                  fit: BoxFit.cover,
-                  errorBuilder: (context, error, stackTrace) {
-                    return Container(
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF2A2A2A),
-                      ),
-                      child: const Center(
-                        child: Icon(
-                          Icons.image,
-                          color: Colors.grey,
-                          size: 40,
-                        ),
-                      ),
-                    );
-                  },
-                ),
-
-          // Media info overlay
-          Positioned(
-            bottom: 0,
-            left: 0,
-            right: 0,
-            child: Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.bottomCenter,
-                  end: Alignment.topCenter,
-                  colors: [
-                    Colors.black.withValues(alpha: 0.7),
-                    Colors.transparent,
-                  ],
-                ),
-              ),
-              child: Row(
-                children: [
-                  Text(
-                    '${mediaItem.deviceMetadata.width} × ${mediaItem.deviceMetadata.height}',
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                  if (_hasPreSelectedMedia && _currentAction == null) ...[
-                    const Spacer(),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 8, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFFF0080).withValues(alpha: 0.8),
-                      ),
-                      child: const Text(
-                        'Pre-selected',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 10,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ),
-                  ],
-                ],
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildActionButtons(BuildContext context) {
-    final hasMedia = _currentAction!.content.media.isNotEmpty;
-    final hasMediaQuery = _currentAction!.mediaQuery?.isNotEmpty == true;
-
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.3),
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // Main action button
-          SizedBox(
-            width: double.infinity,
-            height: 48,
-            child: ElevatedButton.icon(
-              icon: const Icon(Icons.send, color: Colors.white, size: 18),
-              label: const Text(
-                'Review Post',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.w600,
-                  fontSize: 16,
-                ),
-              ),
-              onPressed: _navigateToReviewPost,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFFFF0080),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                elevation: 2,
-              ),
-            ),
-          ),
-
-          // Secondary button (if needed)
-          if (!hasMedia && hasMediaQuery) ...[
-            const SizedBox(height: 12),
-            SizedBox(
-              width: double.infinity,
-              height: 40,
-              child: OutlinedButton.icon(
-                icon: const Icon(Icons.photo_library, size: 16),
-                label: const Text(
-                  'Add Media',
-                  style: TextStyle(fontWeight: FontWeight.w500, fontSize: 14),
-                ),
-                onPressed: _navigateToMediaSelection,
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: Colors.white,
-                  side: const BorderSide(color: Colors.white),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-
-  Color _getPlatformColor(String platform) {
-    switch (platform) {
-      case 'facebook':
-        return Colors.blue.shade700;
-      case 'instagram':
-        return Colors.pink.shade400;
-      case 'twitter':
-        return Colors.lightBlue.shade400;
-      case 'tiktok':
-        return Colors.black87;
-      default:
-        return Colors.grey.shade600;
-    }
-  }
-
-  Widget _getPlatformIcon(String platform) {
-    switch (platform) {
-      case 'facebook':
-        return const Icon(Icons.facebook, color: Colors.white, size: 16);
-      case 'instagram':
-        return const Icon(Icons.camera_alt, color: Colors.white, size: 16);
-      case 'twitter':
-        return const Icon(Icons.alternate_email, color: Colors.white, size: 16);
-      case 'tiktok':
-        return const Icon(Icons.music_note, color: Colors.white, size: 16);
-      default:
-        return const Icon(Icons.share, color: Colors.white, size: 16);
-    }
-  }
-
-  UnifiedButtonState _getUnifiedButtonState() {
+  UnifiedButtonState _getUnifiedButtonState(
+      SocialActionPostCoordinator coordinator) {
     switch (_recordingState) {
       case RecordingState.idle:
-        // Check if post is complete for automatic advancement
-        if (_isPostComplete()) {
+        if (coordinator.isPostComplete) {
           return UnifiedButtonState.reviewPost;
         }
         return UnifiedButtonState.idle;
@@ -2172,20 +1481,20 @@ class _CommandScreenState extends State<CommandScreen>
       case RecordingState.processing:
         return UnifiedButtonState.processing;
       case RecordingState.ready:
-        // Check if post is complete for automatic advancement
-        if (_isPostComplete()) {
+        if (coordinator.isPostComplete) {
           return UnifiedButtonState.reviewPost;
         }
-        // Check if we need media selection
         if (_needsMediaSelection()) {
           return UnifiedButtonState.addMedia;
         }
-        // Default to review post when transcription is ready
         return UnifiedButtonState.reviewPost;
     }
   }
 
-  TranscriptionContext _getTranscriptionContext() {
+  TranscriptionContext _getTranscriptionContext(
+      SocialActionPostCoordinator coordinator) {
+    // CRITICAL: Only use local recording state, not coordinator processing state
+    // This prevents spinning indicator from appearing due to coordinator operations
     switch (_recordingState) {
       case RecordingState.idle:
         return TranscriptionContext.recording;
@@ -2194,24 +1503,27 @@ class _CommandScreenState extends State<CommandScreen>
       case RecordingState.processing:
         return TranscriptionContext.processing;
       case RecordingState.ready:
-        // Check if we need media selection
-        final hasMedia = _currentAction!.content.media.isNotEmpty;
-        final hasMediaQuery = _currentAction!.mediaQuery?.isNotEmpty == true;
-
-        if (!hasMedia && hasMediaQuery) {
+        if (!coordinator.hasMedia &&
+            coordinator.currentPost?.mediaQuery?.isNotEmpty == true) {
           return TranscriptionContext.addMediaReady;
         }
         return TranscriptionContext.reviewReady;
     }
   }
 
-  String? _getCustomMessage() {
-    // Show welcome message when in idle state with no transcription
+  String? _getCustomMessage(SocialActionPostCoordinator coordinator) {
     if (_recordingState == RecordingState.idle &&
-        _transcription.isEmpty &&
-        _currentAction == null) {
+        coordinator.currentTranscription.isEmpty &&
+        coordinator.currentPost == null) {
       return 'Welcome to EchoPost. Say what you want to post.';
     }
+
+    // CRITICAL: Only show coordinator errors if we're not in an active recording workflow
+    if (_recordingState == RecordingState.idle &&
+        coordinator.lastError != null) {
+      return 'Error: ${coordinator.lastError}';
+    }
+
     return null;
   }
 
@@ -2234,5 +1546,58 @@ class _CommandScreenState extends State<CommandScreen>
       ),
       mediaQuery: null,
     );
+  }
+
+  void _showResetConfirmation() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: Colors.black.withValues(alpha: 0.9),
+        title: const Text(
+          'Reset Current Post?',
+          style: TextStyle(color: Colors.white),
+        ),
+        content: const Text(
+          'This will clear your current post content and selected media. This action cannot be undone.',
+          style: TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text(
+              'CANCEL',
+              style: TextStyle(color: Colors.white70),
+            ),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text(
+              'RESET',
+              style: TextStyle(color: Color(0xFFFF0080)),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      if (kDebugMode) {
+        print('🔄 User confirmed reset - clearing all post state');
+      }
+
+      _postCoordinator.reset();
+      setState(() {
+        _resetRecordingState(clearPreSelectedMedia: true);
+      });
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Post reset successfully! 🔄'),
+            duration: Duration(seconds: 2),
+          ),
+        );
+      }
+    }
   }
 }
