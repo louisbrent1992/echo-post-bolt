@@ -19,6 +19,9 @@ import '../services/media_coordinator.dart';
 import '../screens/history_screen.dart';
 import '../screens/command_screen.dart';
 import '../widgets/post_content_box.dart';
+import '../widgets/unified_action_button.dart';
+import '../widgets/transcription_status.dart';
+import '../screens/media_selection_screen.dart';
 
 class VideoPlayerWidget extends StatefulWidget {
   final String fileUri;
@@ -186,12 +189,28 @@ class _ReviewPostScreenState extends State<ReviewPostScreen> {
     final result = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Edit Caption'),
+        backgroundColor: Colors.black.withValues(alpha: 0.9), // Dark background
+        title:
+            const Text('Edit Caption', style: TextStyle(color: Colors.white)),
         content: TextField(
           controller: _captionController,
-          decoration: const InputDecoration(
+          style: const TextStyle(color: Colors.white), // White text
+          decoration: InputDecoration(
             hintText: 'Enter your caption',
-            border: OutlineInputBorder(),
+            hintStyle: TextStyle(color: Colors.white60), // Light hint text
+            border: OutlineInputBorder(
+              borderSide:
+                  BorderSide(color: Colors.white.withValues(alpha: 0.3)),
+            ),
+            enabledBorder: OutlineInputBorder(
+              borderSide:
+                  BorderSide(color: Colors.white.withValues(alpha: 0.3)),
+            ),
+            focusedBorder: const OutlineInputBorder(
+              borderSide: BorderSide(color: Color(0xFFFF0080)),
+            ),
+            filled: true,
+            fillColor: Colors.white.withValues(alpha: 0.1), // Translucent fill
           ),
           maxLines: 5,
           autofocus: true,
@@ -199,11 +218,13 @@ class _ReviewPostScreenState extends State<ReviewPostScreen> {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('CANCEL'),
+            child:
+                const Text('CANCEL', style: TextStyle(color: Colors.white70)),
           ),
           TextButton(
             onPressed: () => Navigator.pop(context, _captionController.text),
-            child: const Text('SAVE'),
+            child:
+                const Text('SAVE', style: TextStyle(color: Color(0xFFFF0080))),
           ),
         ],
       ),
@@ -322,7 +343,10 @@ class _ReviewPostScreenState extends State<ReviewPostScreen> {
           context: context,
           barrierDismissible: false,
           builder: (context) => AlertDialog(
-            title: const Text('Posting Results'),
+            backgroundColor:
+                Colors.black.withValues(alpha: 0.9), // Dark background
+            title: const Text('Posting Results',
+                style: TextStyle(color: Colors.white)),
             content: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -338,17 +362,19 @@ class _ReviewPostScreenState extends State<ReviewPostScreen> {
                               : Icons.error,
                           color: _postResults[platform]!
                               ? Colors.green
-                              : Theme.of(context).colorScheme.error,
+                              : Colors.red,
                         ),
                         const SizedBox(width: 8),
                         Text(
                           platform.substring(0, 1).toUpperCase() +
                               platform.substring(1),
-                          style: const TextStyle(fontWeight: FontWeight.bold),
+                          style: const TextStyle(
+                              fontWeight: FontWeight.bold, color: Colors.white),
                         ),
                         const SizedBox(width: 8),
                         Text(
                           _postResults[platform]! ? 'Posted' : 'Failed',
+                          style: const TextStyle(color: Colors.white70),
                         ),
                       ],
                     ),
@@ -369,7 +395,8 @@ class _ReviewPostScreenState extends State<ReviewPostScreen> {
                     );
                   }
                 },
-                child: const Text('OK'),
+                child: const Text('OK',
+                    style: TextStyle(color: Color(0xFFFF0080))),
               ),
             ],
           ),
@@ -395,16 +422,20 @@ class _ReviewPostScreenState extends State<ReviewPostScreen> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Discard Post?'),
-        content: const Text('Are you sure you want to discard this post?'),
+        backgroundColor: Colors.black.withValues(alpha: 0.9), // Dark background
+        title:
+            const Text('Discard Post?', style: TextStyle(color: Colors.white)),
+        content: const Text('Are you sure you want to discard this post?',
+            style: TextStyle(color: Colors.white70)),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text('CANCEL'),
+            child:
+                const Text('CANCEL', style: TextStyle(color: Colors.white70)),
           ),
           TextButton(
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('DISCARD'),
+            child: const Text('DISCARD', style: TextStyle(color: Colors.red)),
           ),
         ],
       ),
@@ -666,15 +697,7 @@ User voice instruction: "$transcription"''';
           child: _buildHeader(),
         ),
 
-        // Social platforms section (72px height with spacing)
-        Container(
-          height: 72,
-          padding: const EdgeInsets.symmetric(horizontal: _spacing4),
-          margin: const EdgeInsets.only(top: _spacing2),
-          child: _buildPlatformsRow(),
-        ),
-
-        // Main content area (flexible with controlled spacing)
+        // Main content area (flexible with controlled spacing) - removed redundant platform indicators
         Expanded(
           child: SingleChildScrollView(
             physics: const BouncingScrollPhysics(),
@@ -682,11 +705,8 @@ User voice instruction: "$transcription"''';
               children: [
                 const SizedBox(height: _spacing4),
 
-                // Media preview (if available)
-                if (_action.content.media.isNotEmpty) ...[
-                  _buildMediaPreview(),
-                  const SizedBox(height: _spacing3),
-                ],
+                // Media preview (if available) or placeholder
+                _buildMediaSection(),
 
                 // Post content box (main text/hashtags)
                 PostContentBox(
@@ -709,18 +729,47 @@ User voice instruction: "$transcription"''';
           ),
         ),
 
-        // Bottom action bar (fixed height: 102px)
-        Container(
-          height: 102,
-          padding: const EdgeInsets.all(_spacing3),
-          decoration: BoxDecoration(
-            color: Colors.black.withValues(alpha: 0.3),
-            borderRadius: const BorderRadius.only(
-              topLeft: Radius.circular(_spacing3),
-              topRight: Radius.circular(_spacing3),
-            ),
+        // Bottom unified action area (replaces old action bar)
+        SizedBox(
+          height:
+              180, // Increased height to accommodate transcription status + button
+          child: Column(
+            children: [
+              // Transcription status area (upper part)
+              Expanded(
+                flex: 2,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 20),
+                  child: Center(
+                    child: TranscriptionStatus(
+                      transcription: _action.content.text,
+                      context: TranscriptionContext.confirmReady,
+                      customMessage: 'Ready to post to your social networks',
+                    ),
+                  ),
+                ),
+              ),
+
+              // Unified action button area (lower part)
+              Expanded(
+                flex: 3,
+                child: SafeArea(
+                  minimum: const EdgeInsets.only(bottom: 16),
+                  child: Center(
+                    child: SizedBox(
+                      width: 120,
+                      height: 120,
+                      child: UnifiedActionButton(
+                        state: UnifiedButtonState.confirmPost,
+                        onConfirmPost: _confirmAndPost,
+                        customLabel: 'Confirm & Post',
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
-          child: _buildActionButtons(),
         ),
       ],
     );
@@ -758,154 +807,107 @@ User voice instruction: "$transcription"''';
     );
   }
 
-  Widget _buildPlatformsRow() {
+  Widget _buildMediaSection() {
     return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Row(
-          children: [
-            Icon(
-              Icons.share,
-              color: Colors.white70,
-              size: 14,
+        // Media preview area - full width, edge to edge
+        Container(
+          width: double.infinity, // Full width
+          height: 250, // Increased height for more immersive feel
+          decoration: BoxDecoration(
+            color: Colors.grey.shade100,
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.1),
+                blurRadius: 20,
+                offset: const Offset(0, 8),
+              ),
+            ],
+          ),
+          child: _action.content.media.isEmpty
+              ? _buildMediaPlaceholder()
+              : _buildMediaPreview(),
+        ),
+
+        const SizedBox(height: _spacing2),
+
+        // Media selection button - full width
+        Container(
+          width: double.infinity,
+          height: 40,
+          margin: const EdgeInsets.symmetric(
+              horizontal: _spacing3), // Keep some margin for button
+          child: OutlinedButton.icon(
+            icon: const Icon(Icons.photo_library, size: 16),
+            label: Text(
+              _action.content.media.isEmpty ? 'Select Image' : 'Change Image',
+              style: const TextStyle(fontWeight: FontWeight.w500, fontSize: 13),
             ),
-            SizedBox(width: _spacing1),
-            Text(
-              'Posting to:',
-              style: TextStyle(
-                color: Colors.white70,
-                fontSize: 12,
-                fontWeight: FontWeight.w500,
+            onPressed: _navigateToMediaSelection,
+            style: OutlinedButton.styleFrom(
+              foregroundColor: const Color(0xFFFF0080),
+              side: const BorderSide(color: Color(0xFFFF0080)),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(_spacing2),
               ),
             ),
-          ],
+          ),
         ),
-        const SizedBox(height: _spacing1),
-        Consumer<AuthService>(
-          builder: (context, authService, _) {
-            return Wrap(
-              spacing: _spacing1,
-              runSpacing: _spacing1,
-              children: _action.platforms.map((platform) {
-                return FutureBuilder<bool>(
-                  future: authService.isPlatformConnected(platform),
-                  builder: (context, snapshot) {
-                    final isConnected = snapshot.data ?? false;
 
-                    return Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: _spacing2,
-                        vertical: _spacing1,
-                      ),
-                      decoration: BoxDecoration(
-                        color: isConnected
-                            ? _getPlatformColor(platform).withValues(alpha: 0.2)
-                            : Colors.white.withValues(alpha: 0.1),
-                        borderRadius: BorderRadius.circular(_spacing2),
-                        border: Border.all(
-                          color: isConnected
-                              ? _getPlatformColor(platform)
-                              : Colors.white.withValues(alpha: 0.3),
-                        ),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          _getPlatformIcon(platform),
-                          const SizedBox(width: _spacing1),
-                          Text(
-                            platform.substring(0, 1).toUpperCase() +
-                                platform.substring(1),
-                            style: TextStyle(
-                              fontSize: 11,
-                              color:
-                                  isConnected ? Colors.white : Colors.white70,
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                        ],
-                      ),
-                    );
-                  },
-                );
-              }).toList(),
-            );
-          },
-        ),
+        const SizedBox(height: _spacing3),
       ],
     );
   }
 
   Widget _buildMediaPreview() {
-    if (_action.content.media.isEmpty) return const SizedBox.shrink();
-
     final mediaItem = _action.content.media.first;
     final isVideo = mediaItem.mimeType.startsWith('video/');
 
-    return Container(
-      width: MediaQuery.of(context).size.width * 0.9,
-      height: 200,
-      margin: const EdgeInsets.symmetric(horizontal: _spacing3),
-      decoration: BoxDecoration(
-        color: Colors.grey.shade100,
-        borderRadius: BorderRadius.circular(_spacing3),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.1),
-            blurRadius: 20,
-            offset: const Offset(0, 8),
-          ),
-        ],
-      ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(_spacing3),
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            isVideo
-                ? VideoPlayerWidget(fileUri: mediaItem.fileUri)
-                : Image.file(
-                    File(Uri.parse(mediaItem.fileUri).path),
-                    fit: BoxFit.cover,
-                    errorBuilder: (context, error, stackTrace) {
-                      return _buildMediaPlaceholder(isVideo);
-                    },
-                  ),
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        isVideo
+            ? VideoPlayerWidget(fileUri: mediaItem.fileUri)
+            : Image.file(
+                File(Uri.parse(mediaItem.fileUri).path),
+                fit: BoxFit.cover,
+                errorBuilder: (context, error, stackTrace) {
+                  return _buildVideoPlaceholder();
+                },
+              ),
 
-            // Media info overlay
-            Positioned(
-              bottom: 0,
-              left: 0,
-              right: 0,
-              child: Container(
-                padding: const EdgeInsets.all(_spacing2),
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.bottomCenter,
-                    end: Alignment.topCenter,
-                    colors: [
-                      Colors.black.withValues(alpha: 0.7),
-                      Colors.transparent,
-                    ],
-                  ),
-                ),
-                child: Text(
-                  '${mediaItem.deviceMetadata.width} × ${mediaItem.deviceMetadata.height}',
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 11,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
+        // Media info overlay
+        Positioned(
+          bottom: 0,
+          left: 0,
+          right: 0,
+          child: Container(
+            padding: const EdgeInsets.all(_spacing2),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.bottomCenter,
+                end: Alignment.topCenter,
+                colors: [
+                  Colors.black.withValues(alpha: 0.7),
+                  Colors.transparent,
+                ],
               ),
             ),
-          ],
+            child: Text(
+              '${mediaItem.deviceMetadata.width} × ${mediaItem.deviceMetadata.height}',
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 11,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
         ),
-      ),
+      ],
     );
   }
 
-  Widget _buildMediaPlaceholder(bool isVideo) {
+  Widget _buildMediaPlaceholder() {
     return Container(
       color: Colors.grey.shade200,
       child: Center(
@@ -913,13 +915,48 @@ User voice instruction: "$transcription"''';
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Icon(
-              isVideo ? Icons.videocam : Icons.image,
+              Icons.image,
+              color: Colors.grey.shade400,
+              size: 48,
+            ),
+            const SizedBox(height: _spacing2),
+            Text(
+              'Your image will appear here',
+              style: TextStyle(
+                color: Colors.grey.shade600,
+                fontSize: 16,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+            const SizedBox(height: _spacing1),
+            Text(
+              'Tap "Select Image" below to choose media',
+              style: TextStyle(
+                color: Colors.grey.shade500,
+                fontSize: 12,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildVideoPlaceholder() {
+    return Container(
+      color: Colors.grey.shade200,
+      child: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.videocam,
               color: Colors.grey.shade400,
               size: 40,
             ),
             const SizedBox(height: _spacing1),
             Text(
-              isVideo ? 'Video Preview' : 'Image Preview',
+              'Video Preview',
               style: TextStyle(
                 color: Colors.grey.shade600,
                 fontSize: 12,
@@ -929,6 +966,52 @@ User voice instruction: "$transcription"''';
         ),
       ),
     );
+  }
+
+  Future<void> _navigateToMediaSelection() async {
+    try {
+      final updatedAction = await Navigator.push<SocialAction>(
+        context,
+        MaterialPageRoute(
+          builder: (context) => MediaSelectionScreen(
+            action: _action,
+          ),
+        ),
+      );
+
+      if (updatedAction != null) {
+        // Update the local state with the new action
+        setState(() {
+          _action = updatedAction;
+        });
+
+        // Update Firestore
+        final firestoreService =
+            Provider.of<FirestoreService>(context, listen: false);
+        await firestoreService.updateAction(
+          _action.actionId,
+          _action.toJson(),
+        );
+
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Media updated successfully! 🎉'),
+              duration: Duration(seconds: 2),
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to update media: $e'),
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    }
   }
 
   Widget _buildScheduleInfo() {
@@ -1017,123 +1100,6 @@ User voice instruction: "$transcription"''';
         ],
       ),
     );
-  }
-
-  Widget _buildActionButtons() {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        SizedBox(
-          width: double.infinity,
-          height: 42, // Fixed height for main button
-          child: ElevatedButton.icon(
-            icon: const Icon(Icons.send, color: Colors.white, size: 18),
-            label: const Text(
-              'Confirm & Post',
-              style: TextStyle(
-                color: Colors.white,
-                fontWeight: FontWeight.w600,
-                fontSize: 15,
-              ),
-            ),
-            onPressed: _confirmAndPost,
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFFFF0080),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(_spacing2),
-              ),
-              elevation: 2,
-            ),
-          ),
-        ),
-        const SizedBox(height: _spacing2),
-        Row(
-          children: [
-            Expanded(
-              child: SizedBox(
-                height: 36, // Fixed height for secondary buttons
-                child: OutlinedButton.icon(
-                  icon: const Icon(Icons.photo_library, size: 16),
-                  label: const Text(
-                    'Edit Media',
-                    style: TextStyle(fontWeight: FontWeight.w500, fontSize: 13),
-                  ),
-                  onPressed: () => Navigator.pop(context),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: Colors.white,
-                    side: const BorderSide(color: Colors.white),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(_spacing2),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-            const SizedBox(width: _spacing2),
-            Expanded(
-              child: SizedBox(
-                height: 36, // Fixed height for secondary buttons
-                child: TextButton.icon(
-                  icon: const Icon(Icons.delete, size: 16),
-                  label: const Text(
-                    'Cancel Post',
-                    style: TextStyle(fontWeight: FontWeight.w500, fontSize: 13),
-                  ),
-                  onPressed: _cancelPost,
-                  style: TextButton.styleFrom(
-                    foregroundColor: Colors.white.withValues(alpha: 0.7),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(_spacing2),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
-      ],
-    );
-  }
-
-  Widget _getPlatformIcon(String platform) {
-    IconData icon;
-    switch (platform) {
-      case 'facebook':
-        icon = Icons.facebook;
-        break;
-      case 'instagram':
-        icon = Icons.camera_alt;
-        break;
-      case 'twitter':
-        icon = Icons.flutter_dash;
-        break;
-      case 'tiktok':
-        icon = Icons.music_note;
-        break;
-      default:
-        icon = Icons.public;
-    }
-
-    return Icon(
-      icon,
-      size: 14,
-      color: _getPlatformColor(platform),
-    );
-  }
-
-  Color _getPlatformColor(String platform) {
-    switch (platform) {
-      case 'facebook':
-        return Colors.blue.shade800;
-      case 'instagram':
-        return Colors.pink.shade400;
-      case 'twitter':
-        return Colors.lightBlue.shade400;
-      case 'tiktok':
-        return Colors.black87;
-      default:
-        return Colors.grey.shade600;
-    }
   }
 
   String _formatDateTime(DateTime dateTime) {

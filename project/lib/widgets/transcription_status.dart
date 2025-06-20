@@ -1,11 +1,22 @@
 import 'package:flutter/material.dart';
 
+enum TranscriptionContext {
+  recording,
+  processing,
+  completed,
+  reviewReady,
+  confirmReady,
+  addMediaReady,
+}
+
 class TranscriptionStatus extends StatelessWidget {
   final String transcription;
   final bool isProcessing;
   final bool isRecording;
   final int recordingDuration;
   final int maxRecordingDuration;
+  final TranscriptionContext context;
+  final String? customMessage;
 
   const TranscriptionStatus({
     super.key,
@@ -14,6 +25,8 @@ class TranscriptionStatus extends StatelessWidget {
     this.isRecording = false,
     this.recordingDuration = 0,
     this.maxRecordingDuration = 30,
+    this.context = TranscriptionContext.recording,
+    this.customMessage,
   });
 
   @override
@@ -63,10 +76,13 @@ class TranscriptionStatus extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(width: 8),
-              ] else if (transcription.isNotEmpty) ...[
-                const Icon(
-                  Icons.check_circle,
-                  color: Color(0xFFFFD700),
+              ] else if (transcription.isNotEmpty ||
+                  this.context == TranscriptionContext.reviewReady ||
+                  this.context == TranscriptionContext.confirmReady ||
+                  this.context == TranscriptionContext.addMediaReady) ...[
+                Icon(
+                  _getContextIcon(),
+                  color: _getContextColor(),
                   size: 12,
                 ),
                 const SizedBox(width: 8),
@@ -75,9 +91,7 @@ class TranscriptionStatus extends StatelessWidget {
                 child: Text(
                   _getStatusText(),
                   style: TextStyle(
-                    color: isRecording
-                        ? const Color(0xFFFF0080)
-                        : const Color(0xFFFFD700),
+                    color: _getTextColor(),
                     fontSize: 12,
                     fontWeight: FontWeight.w600,
                   ),
@@ -131,15 +145,83 @@ class TranscriptionStatus extends StatelessWidget {
     );
   }
 
+  IconData _getContextIcon() {
+    switch (context) {
+      case TranscriptionContext.recording:
+        return Icons.mic;
+      case TranscriptionContext.processing:
+        return Icons.hourglass_empty;
+      case TranscriptionContext.completed:
+        return Icons.check_circle;
+      case TranscriptionContext.reviewReady:
+        return Icons.arrow_forward;
+      case TranscriptionContext.confirmReady:
+        return Icons.send;
+      case TranscriptionContext.addMediaReady:
+        return Icons.photo_library;
+    }
+  }
+
+  Color _getContextColor() {
+    switch (context) {
+      case TranscriptionContext.recording:
+        return const Color(0xFFFF0080);
+      case TranscriptionContext.processing:
+        return const Color(0xFFFFD700);
+      case TranscriptionContext.completed:
+      case TranscriptionContext.reviewReady:
+      case TranscriptionContext.confirmReady:
+        return const Color(0xFFFF0080);
+      case TranscriptionContext.addMediaReady:
+        return const Color(0xFF4CAF50);
+    }
+  }
+
+  Color _getTextColor() {
+    if (isRecording) {
+      return const Color(0xFFFF0080);
+    } else if (isProcessing) {
+      return const Color(0xFFFFD700);
+    } else {
+      return _getContextColor();
+    }
+  }
+
   String _getStatusText() {
+    // Use custom message if provided
+    if (customMessage != null && customMessage!.isNotEmpty) {
+      return customMessage!;
+    }
+
+    // Default messages based on state and context
     if (isRecording) {
       return 'Recording your voice command...';
     } else if (isProcessing) {
       return 'Processing your voice command...';
     } else if (transcription.isNotEmpty) {
-      return 'What you said:';
+      switch (context) {
+        case TranscriptionContext.completed:
+          return 'What you said:';
+        case TranscriptionContext.reviewReady:
+          return 'Ready to review your post:';
+        case TranscriptionContext.confirmReady:
+          return 'Ready to confirm and post:';
+        case TranscriptionContext.addMediaReady:
+          return 'Ready to add media:';
+        default:
+          return 'What you said:';
+      }
     } else {
-      return 'Tap and hold the mic to start recording';
+      switch (context) {
+        case TranscriptionContext.reviewReady:
+          return 'Tap the button below to review your post';
+        case TranscriptionContext.confirmReady:
+          return 'Tap the button below to confirm and post';
+        case TranscriptionContext.addMediaReady:
+          return 'Tap the button below to add media';
+        default:
+          return 'Tap and hold the button below to start recording';
+      }
     }
   }
 }

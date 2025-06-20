@@ -37,14 +37,25 @@ class PostPreview extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Header with platforms (compact for square layout)
-            _buildPlatformsHeader(context),
-
-            // Media preview if available - now takes more space in square format
+            // Media preview if available - now takes more space without platform header
             if (action!.content.media.isNotEmpty)
               Expanded(
                 flex: 3,
-                child: _buildMediaPreview(context),
+                child: Container(
+                  decoration: const BoxDecoration(
+                    borderRadius: BorderRadius.only(
+                      topLeft: Radius.circular(16),
+                      topRight: Radius.circular(16),
+                    ),
+                  ),
+                  child: ClipRRect(
+                    borderRadius: const BorderRadius.only(
+                      topLeft: Radius.circular(16),
+                      topRight: Radius.circular(16),
+                    ),
+                    child: _buildMediaPreview(context),
+                  ),
+                ),
               ),
 
             // Content area - adjusts based on media presence
@@ -99,100 +110,42 @@ class PostPreview extends StatelessWidget {
     );
   }
 
-  Widget _buildPlatformsHeader(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: Colors.grey.shade50,
-        borderRadius: const BorderRadius.only(
-          topLeft: Radius.circular(16),
-          topRight: Radius.circular(16),
-        ),
-      ),
-      child: Row(
-        children: [
-          Icon(
-            Icons.share,
-            color: Colors.grey.shade600,
-            size: 14,
-          ),
-          const SizedBox(width: 6),
-          Text(
-            'Posting to: ',
-            style: TextStyle(
-              color: Colors.grey.shade600,
-              fontSize: 11,
-              fontWeight: FontWeight.w500,
-            ),
-          ),
-          Expanded(
-            child: Wrap(
-              spacing: 3,
-              children: action!.platforms.map((platform) {
-                return Chip(
-                  label: Text(
-                    platform.substring(0, 1).toUpperCase() +
-                        platform.substring(1),
-                    style: const TextStyle(fontSize: 9),
-                  ),
-                  backgroundColor:
-                      _getPlatformColor(platform).withValues(alpha: 0.1),
-                  side: BorderSide(color: _getPlatformColor(platform)),
-                  padding: EdgeInsets.zero,
-                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                );
-              }).toList(),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
   Widget _buildMediaPreview(BuildContext context) {
     final mediaItem = action!.content.media.first;
     final isVideo = mediaItem.mimeType.startsWith('video/');
 
-    return Container(
-      width: double.infinity,
-      decoration: BoxDecoration(
-        color: Colors.grey.shade100,
-      ),
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          // Media placeholder or actual image
-          if (mediaItem.fileUri.isNotEmpty &&
-              mediaItem.fileUri.startsWith('file://'))
-            ClipRRect(
-              child: Image.file(
-                File(Uri.parse(mediaItem.fileUri).path),
-                fit: BoxFit.cover, // Maintains square aspect ratio
-                errorBuilder: (context, error, stackTrace) {
-                  return _buildMediaPlaceholder(isVideo);
-                },
-              ),
-            )
-          else
-            _buildMediaPlaceholder(isVideo),
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        // Media placeholder or actual image
+        if (mediaItem.fileUri.isNotEmpty &&
+            mediaItem.fileUri.startsWith('file://'))
+          Image.file(
+            File(Uri.parse(mediaItem.fileUri).path),
+            fit: BoxFit.cover, // Maintains square aspect ratio
+            errorBuilder: (context, error, stackTrace) {
+              return _buildMediaPlaceholder(isVideo);
+            },
+          )
+        else
+          _buildMediaPlaceholder(isVideo),
 
-          // Video play button overlay
-          if (isVideo)
-            const Center(
-              child: Icon(
-                Icons.play_circle_fill,
-                color: Colors.white,
-                size: 48,
-                shadows: [
-                  Shadow(
-                    blurRadius: 10.0,
-                    color: Colors.black54,
-                  ),
-                ],
-              ),
+        // Video play button overlay
+        if (isVideo)
+          const Center(
+            child: Icon(
+              Icons.play_circle_fill,
+              color: Colors.white,
+              size: 48,
+              shadows: [
+                Shadow(
+                  blurRadius: 10.0,
+                  color: Colors.black54,
+                ),
+              ],
             ),
-        ],
-      ),
+          ),
+      ],
     );
   }
 

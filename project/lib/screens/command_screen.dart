@@ -15,7 +15,9 @@ import '../services/media_coordinator.dart';
 import '../widgets/mic_button.dart';
 import '../widgets/social_icon.dart';
 import '../widgets/post_preview.dart';
+import '../widgets/post_content_box.dart';
 import '../widgets/transcription_status.dart';
+import '../widgets/unified_action_button.dart';
 import '../widgets/directory_selector.dart';
 import '../screens/media_selection_screen.dart';
 import '../screens/review_post_screen.dart';
@@ -1329,9 +1331,6 @@ class _CommandScreenState extends State<CommandScreen>
             child: SafeArea(
               child: Stack(
                 children: [
-                  // Background floating particles effect
-                  _buildFloatingParticles(),
-
                   // Main content
                   _buildMainContent(),
 
@@ -1351,20 +1350,6 @@ class _CommandScreenState extends State<CommandScreen>
                 ],
               ),
             ),
-          );
-        },
-      ),
-    );
-  }
-
-  Widget _buildFloatingParticles() {
-    return Positioned.fill(
-      child: AnimatedBuilder(
-        animation: _backgroundAnimation,
-        builder: (context, child) {
-          return CustomPaint(
-            painter: ParticlesPainter(_backgroundAnimation.value),
-            size: Size.infinite,
           );
         },
       ),
@@ -1415,26 +1400,21 @@ class _CommandScreenState extends State<CommandScreen>
               ),
             ),
 
-            // Middle section - Post Preview (Instagram-square-style)
+            // Middle section - Post Preview with ReviewPostScreen-style content
             SizedBox(
               height: middleSectionHeight,
               child: Container(
                 padding:
                     const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
                 child: Center(
-                  child: AspectRatio(
-                    aspectRatio: 1.0, // Instagram square aspect ratio
-                    child: Container(
-                      constraints: BoxConstraints(
-                        maxWidth: constraints.maxWidth * 0.85,
-                        maxHeight: middleSectionHeight * 0.9,
-                      ),
-                      child: PostPreview(
-                        action: _currentAction,
-                        onReviewMedia: _navigateToMediaSelection,
-                        onReviewPost: _navigateToReviewPost,
-                      ),
+                  child: Container(
+                    constraints: BoxConstraints(
+                      maxWidth: constraints.maxWidth * 0.9,
+                      maxHeight: middleSectionHeight * 0.95,
                     ),
+                    child: _currentAction != null
+                        ? _buildReviewStyleContent(context)
+                        : _buildEmptyPostPreview(context),
                   ),
                 ),
               ),
@@ -1462,6 +1442,7 @@ class _CommandScreenState extends State<CommandScreen>
                                 _recordingState == RecordingState.recording,
                             recordingDuration: _recordingDuration,
                             maxRecordingDuration: _maxRecordingDuration,
+                            context: _getTranscriptionContext(),
                           ),
                         ),
                       ),
@@ -1469,7 +1450,7 @@ class _CommandScreenState extends State<CommandScreen>
                   else
                     const Expanded(flex: 2, child: SizedBox()),
 
-                  // Recording area (lower part of bottom section) - timer removed
+                  // Unified action button area (lower part of bottom section)
                   Expanded(
                     flex: 3,
                     child: SafeArea(
@@ -1478,11 +1459,13 @@ class _CommandScreenState extends State<CommandScreen>
                         child: SizedBox(
                           width: bottomSectionHeight * 0.6,
                           height: bottomSectionHeight * 0.6,
-                          child: MicButton(
-                            state: _recordingState,
+                          child: UnifiedActionButton(
+                            state: _getUnifiedButtonState(),
                             amplitude: normalizedAmplitude,
                             onRecordStart: _startRecording,
                             onRecordStop: _stopRecording,
+                            onReviewPost: _navigateToReviewPost,
+                            onAddMedia: _navigateToMediaSelection,
                           ),
                         ),
                       ),
@@ -1496,29 +1479,303 @@ class _CommandScreenState extends State<CommandScreen>
       },
     );
   }
-}
 
-class ParticlesPainter extends CustomPainter {
-  final double animationValue;
+  Widget _buildReviewStyleContent(BuildContext context) {
+    return Column(
+      children: [
+        // Main content area (flexible) - removed redundant platform indicators
+        Expanded(
+          child: SingleChildScrollView(
+            physics: const BouncingScrollPhysics(),
+            child: Column(
+              children: [
+                const SizedBox(height: 16),
 
-  ParticlesPainter(this.animationValue);
+                // Media preview (if available)
+                if (_currentAction!.content.media.isNotEmpty) ...[
+                  _buildMediaPreview(context),
+                  const SizedBox(height: 16),
+                ],
 
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = const Color(0xFFFF0080).withValues(alpha: 0.1);
+                // Post content box (main text/hashtags)
+                PostContentBox(
+                  action: _currentAction!,
+                  onEditText: null, // Disable editing in command screen
+                  onVoiceEdit: null, // Disable voice editing in command screen
+                ),
 
-    const particleCount = 15;
-    for (int i = 0; i < particleCount; i++) {
-      final x = (size.width / particleCount) * i;
-      final y = size.height * 0.3 +
-          (size.height * 0.4 * ((animationValue + i * 0.1) % 1.0));
+                const SizedBox(height: 16),
+              ],
+            ),
+          ),
+        ),
+        // Action buttons removed - now handled by UnifiedActionButton
+      ],
+    );
+  }
 
-      final radius = 2.0 + (animationValue * 3.0);
-      canvas.drawCircle(Offset(x, y), radius, paint);
+  Widget _buildEmptyPostPreview(BuildContext context) {
+    return Container(
+      width: double.infinity, // Full width, edge to edge
+      height: 250, // Consistent height with media preview
+      decoration: BoxDecoration(
+        color:
+            Colors.white.withValues(alpha: 0.1), // Dark translucent background
+        border: Border.all(
+          color: Colors.white.withValues(alpha: 0.3),
+          width: 1,
+        ),
+      ),
+      child: const Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.post_add,
+              color: Colors.white,
+              size: 48,
+            ),
+            SizedBox(height: 16),
+            Text(
+              'Your post preview will appear here',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 16,
+                fontWeight: FontWeight.w500,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            SizedBox(height: 8),
+            Text(
+              'Start recording to create your post',
+              style: TextStyle(
+                color: Colors.white70,
+                fontSize: 14,
+              ),
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMediaPreview(BuildContext context) {
+    if (_currentAction!.content.media.isEmpty) return const SizedBox.shrink();
+
+    final mediaItem = _currentAction!.content.media.first;
+    final isVideo = mediaItem.mimeType.startsWith('video/');
+
+    return Container(
+      width: double.infinity, // Full width, edge to edge
+      height: 250, // Increased height to match ReviewPostScreen
+      decoration: BoxDecoration(
+        color: Colors.white,
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.1),
+            blurRadius: 20,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          isVideo
+              ? Container(
+                  color: Colors.grey.shade200,
+                  child: const Center(
+                    child: Icon(
+                      Icons.videocam,
+                      color: Colors.grey,
+                      size: 40,
+                    ),
+                  ),
+                )
+              : Image.file(
+                  File(Uri.parse(mediaItem.fileUri).path),
+                  fit: BoxFit.cover,
+                  errorBuilder: (context, error, stackTrace) {
+                    return Container(
+                      color: Colors.grey.shade200,
+                      child: const Center(
+                        child: Icon(
+                          Icons.image,
+                          color: Colors.grey,
+                          size: 40,
+                        ),
+                      ),
+                    );
+                  },
+                ),
+
+          // Media info overlay
+          Positioned(
+            bottom: 0,
+            left: 0,
+            right: 0,
+            child: Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.bottomCenter,
+                  end: Alignment.topCenter,
+                  colors: [
+                    Colors.black.withValues(alpha: 0.7),
+                    Colors.transparent,
+                  ],
+                ),
+              ),
+              child: Text(
+                '${mediaItem.deviceMetadata.width} × ${mediaItem.deviceMetadata.height}',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildActionButtons(BuildContext context) {
+    final hasMedia = _currentAction!.content.media.isNotEmpty;
+    final hasMediaQuery = _currentAction!.mediaQuery?.isNotEmpty == true;
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.3),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Main action button
+          SizedBox(
+            width: double.infinity,
+            height: 48,
+            child: ElevatedButton.icon(
+              icon: const Icon(Icons.send, color: Colors.white, size: 18),
+              label: const Text(
+                'Review Post',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w600,
+                  fontSize: 16,
+                ),
+              ),
+              onPressed: _navigateToReviewPost,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFFFF0080),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                elevation: 2,
+              ),
+            ),
+          ),
+
+          // Secondary button (if needed)
+          if (!hasMedia && hasMediaQuery) ...[
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              height: 40,
+              child: OutlinedButton.icon(
+                icon: const Icon(Icons.photo_library, size: 16),
+                label: const Text(
+                  'Add Media',
+                  style: TextStyle(fontWeight: FontWeight.w500, fontSize: 14),
+                ),
+                onPressed: _navigateToMediaSelection,
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: Colors.white,
+                  side: const BorderSide(color: Colors.white),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Color _getPlatformColor(String platform) {
+    switch (platform) {
+      case 'facebook':
+        return Colors.blue.shade700;
+      case 'instagram':
+        return Colors.pink.shade400;
+      case 'twitter':
+        return Colors.lightBlue.shade400;
+      case 'tiktok':
+        return Colors.black87;
+      default:
+        return Colors.grey.shade600;
     }
   }
 
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => true;
+  Widget _getPlatformIcon(String platform) {
+    switch (platform) {
+      case 'facebook':
+        return const Icon(Icons.facebook, color: Colors.white, size: 16);
+      case 'instagram':
+        return const Icon(Icons.camera_alt, color: Colors.white, size: 16);
+      case 'twitter':
+        return const Icon(Icons.alternate_email, color: Colors.white, size: 16);
+      case 'tiktok':
+        return const Icon(Icons.music_note, color: Colors.white, size: 16);
+      default:
+        return const Icon(Icons.share, color: Colors.white, size: 16);
+    }
+  }
+
+  UnifiedButtonState _getUnifiedButtonState() {
+    switch (_recordingState) {
+      case RecordingState.idle:
+        return UnifiedButtonState.idle;
+      case RecordingState.recording:
+        return UnifiedButtonState.recording;
+      case RecordingState.processing:
+        return UnifiedButtonState.processing;
+      case RecordingState.ready:
+        // Check if we need media selection
+        final hasMedia = _currentAction!.content.media.isNotEmpty;
+        final hasMediaQuery = _currentAction!.mediaQuery?.isNotEmpty == true;
+
+        if (!hasMedia && hasMediaQuery) {
+          return UnifiedButtonState.addMedia;
+        }
+        // When transcription is ready and media is available, show review post button
+        return UnifiedButtonState.reviewPost;
+    }
+  }
+
+  TranscriptionContext _getTranscriptionContext() {
+    switch (_recordingState) {
+      case RecordingState.idle:
+        return TranscriptionContext.recording;
+      case RecordingState.recording:
+        return TranscriptionContext.recording;
+      case RecordingState.processing:
+        return TranscriptionContext.processing;
+      case RecordingState.ready:
+        // Check if we need media selection
+        final hasMedia = _currentAction!.content.media.isNotEmpty;
+        final hasMediaQuery = _currentAction!.mediaQuery?.isNotEmpty == true;
+
+        if (!hasMedia && hasMediaQuery) {
+          return TranscriptionContext.addMediaReady;
+        }
+        return TranscriptionContext.reviewReady;
+    }
+  }
 }

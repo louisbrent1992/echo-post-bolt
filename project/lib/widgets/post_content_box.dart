@@ -39,18 +39,17 @@ class PostContentBox extends StatelessWidget {
     }
 
     return Container(
-      width: MediaQuery.of(context).size.width * 0.9,
+      width: double.infinity, // Full width, edge to edge
       constraints: const BoxConstraints(
         minHeight: 120,
         maxHeight: 300,
       ),
-      margin: const EdgeInsets.symmetric(horizontal: 18),
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(18),
+        // Sleek dark translucent background
+        color: Colors.black.withValues(alpha: 0.7),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha: 0.1),
+            color: Colors.black.withValues(alpha: 0.3),
             blurRadius: 24,
             offset: const Offset(0, 12),
           ),
@@ -83,7 +82,7 @@ class PostContentBox extends StatelessWidget {
             children: [
               Icon(
                 Icons.edit_note,
-                color: Colors.grey.shade600,
+                color: Colors.white70,
                 size: 16,
               ),
               const SizedBox(width: 6),
@@ -92,7 +91,7 @@ class PostContentBox extends StatelessWidget {
                 style: TextStyle(
                   fontSize: 12,
                   fontWeight: FontWeight.w600,
-                  color: Colors.grey.shade600,
+                  color: Colors.white70,
                   letterSpacing: 0.5,
                 ),
               ),
@@ -120,7 +119,7 @@ class PostContentBox extends StatelessWidget {
                 padding: EdgeInsets.zero,
               ),
               IconButton(
-                icon: const Icon(Icons.edit, size: 16),
+                icon: const Icon(Icons.edit, size: 16, color: Colors.white70),
                 onPressed: onEditText,
                 tooltip: 'Edit caption',
                 constraints: const BoxConstraints(
@@ -187,7 +186,7 @@ class PostContentBox extends StatelessWidget {
                 style: const TextStyle(
                   fontSize: 17,
                   height: 1.4,
-                  color: Colors.black87,
+                  color: Colors.white,
                   fontWeight: FontWeight.w400,
                 ),
               ),
@@ -211,24 +210,25 @@ class PostContentBox extends StatelessWidget {
             Container(
               padding: const EdgeInsets.all(15),
               decoration: BoxDecoration(
-                color: Colors.grey.shade50,
+                color: Colors.white
+                    .withValues(alpha: 0.1), // Dark translucent background
                 borderRadius: BorderRadius.circular(12),
                 border: Border.all(
-                  color: Colors.grey.shade200,
+                  color: Colors.white.withValues(alpha: 0.2), // Light border
                 ),
               ),
               child: Column(
                 children: [
                   Icon(
                     Icons.text_fields,
-                    color: Colors.grey.shade400,
+                    color: Colors.white60, // White icon
                     size: 24,
                   ),
                   const SizedBox(height: 9),
                   Text(
                     'No caption or hashtags yet',
                     style: TextStyle(
-                      color: Colors.grey.shade600,
+                      color: Colors.white, // White text
                       fontSize: 14,
                       fontWeight: FontWeight.w500,
                     ),
@@ -237,7 +237,7 @@ class PostContentBox extends StatelessWidget {
                   Text(
                     'Use the buttons above to add content',
                     style: TextStyle(
-                      color: Colors.grey.shade500,
+                      color: Colors.white70, // Light white text
                       fontSize: 12,
                     ),
                   ),
