@@ -156,14 +156,58 @@ class AIService {
     return repaired;
   }
 
-  Future<SocialAction> processVoiceCommand(String transcription) async {
+  Future<SocialAction> processVoiceCommand(
+    String transcription, {
+    List<MediaItem>? preSelectedMedia,
+  }) async {
     if (kDebugMode) {
       print('🎯 Processing voice command: "$transcription"');
+      if (preSelectedMedia != null && preSelectedMedia.isNotEmpty) {
+        print('📎 With ${preSelectedMedia.length} pre-selected media items');
+      }
     }
 
     try {
       // Get media context for the prompt
-      final mediaContext = _mediaCoordinator?.getMediaContextForAi();
+      var mediaContext = _mediaCoordinator?.getMediaContextForAi() ?? {};
+
+      // If pre-selected media is provided, add it to the structured media context
+      if (preSelectedMedia != null && preSelectedMedia.isNotEmpty) {
+        // Convert pre-selected media to the format expected by ChatGPT
+        final preSelectedMediaData = preSelectedMedia.map((media) {
+          return {
+            'file_uri': media.fileUri,
+            'file_name': media.fileUri.split('/').last,
+            'mime_type': media.mimeType,
+            'timestamp': media.deviceMetadata.creationTime,
+            'device_metadata': {
+              'creation_time': media.deviceMetadata.creationTime,
+              'latitude': media.deviceMetadata.latitude,
+              'longitude': media.deviceMetadata.longitude,
+              'orientation': media.deviceMetadata.orientation,
+              'width': media.deviceMetadata.width,
+              'height': media.deviceMetadata.height,
+              'file_size_bytes': media.deviceMetadata.fileSizeBytes,
+              'duration': media.deviceMetadata.duration,
+              'bitrate': media.deviceMetadata.bitrate,
+              'sampling_rate': media.deviceMetadata.samplingRate,
+              'frame_rate': media.deviceMetadata.frameRate,
+            },
+            'pre_selected': true, // Mark as pre-selected for ChatGPT
+          };
+        }).toList();
+
+        // Add pre-selected media to the context with a clear indicator
+        mediaContext = {
+          ...mediaContext,
+          'pre_selected_media': preSelectedMediaData,
+        };
+
+        if (kDebugMode) {
+          print(
+              '📎 Added ${preSelectedMediaData.length} pre-selected media items to structured context');
+        }
+      }
 
       final messages = [
         {
@@ -173,45 +217,106 @@ You are a JSON generator for the EchoPost app.
 
 Your task is to generate a complete SocialAction object, formatted as JSON. This object will be used by the app to preview and post social media content based on a spoken command and available device media.
 
-You will receive two fields from the user:
+You will receive these fields from the user:
 - "transcription": a string containing the spoken command
-- "media_context": a list of media metadata representing local image, video, or audio files
+- "media_context": an object containing available media files from the user's device, with recent_media sorted by creation time (newest first)
+- "pre_selected_media": (optional) media items that the user has already selected before recording
 
-You must:
-1. Interpret the transcription as an intent to create a social post. Extract any spoken content, hashtags, mentions, and platform names.
-2. If the user specifies post text, use it as content.text. **If no post text is provided, generate an appropriate caption based on the available media_context. This text must be relevant, engaging, and accompanied by suitable hashtags. Do not leave content.text null or empty. This applies across all platforms.**
-3. Extract any media references from the transcription (e.g., "post the sunset photo"), match against media_context, and include selected items in content.media.
-4. If media is likely required but cannot be matched exactly, set media_query with appropriate search parameters:
-   - directory_path: The most relevant directory based on the user's request
-   - search_terms: Keywords from the user's description (e.g., ["sunset", "beach"])
-   - date_range: If time is mentioned (e.g., "from yesterday")
-   - media_types: Required media types (e.g., ["image", "video"])
-   - location_query: If location is mentioned
-5. Always return all platform_data keys in the order: facebook, instagram, twitter, tiktok.
-6. Each platform object must include `"post_here": true` or `false`.
-7. If a platform is not used, still return its object with `"post_here": false` and all other internal fields set to null or defaults.
+**CRITICAL MEDIA SELECTION RULES:**
 
-Return ONLY a valid JSON object. No extra commentary or explanation.
+1. **PRIORITY ORDER FOR MEDIA SELECTION:**
+   a) If pre_selected_media is provided, ALWAYS include these items in content.media array - these are user's explicit choices
+   b) If transcription references specific media (e.g., "last picture", "recent photo", "newest image", "latest video"), DIRECTLY select from media_context.recent_media array
+   c) Only create media_query if no suitable media is found in the context AND media is clearly needed
 
-IMPORTANT: Use the exact field names shown below (snake_case, not camelCase).
+2. **DIRECT MEDIA REFERENCE HANDLING:**
+   When the user says phrases like:
+   - "post my last picture" → Select media_context.recent_media[0] (most recent)
+   - "share my recent photo" → Select media_context.recent_media[0] (most recent)  
+   - "upload my newest image" → Select media_context.recent_media[0] (most recent)
+   - "post the latest video" → Select first video from media_context.recent_media
+   - "share my last 3 photos" → Select first 3 images from media_context.recent_media
 
-EXAMPLE with media_query:
+3. **MEDIA CONTEXT STRUCTURE:**
+   The media_context.recent_media array contains objects with:
+   - file_uri: Complete file path for the media
+   - file_name: Just the filename 
+   - mime_type: Media type (image/jpeg, video/mp4, etc.)
+   - timestamp: Creation date/time (sorted newest first)
+   - directory: Source directory path
+   - device_metadata: Width, height, file size, etc.
+
+4. **CONTENT.MEDIA ARRAY FORMAT:**
+   When selecting media from context, create MediaItem objects like this:
+   ```json
+   {
+     "file_uri": "file:///storage/emulated/0/DCIM/Camera/IMG_20241219_143022.jpg",
+     "mime_type": "image/jpeg",
+     "device_metadata": {
+       "creation_time": "2024-12-19T14:30:22Z",
+       "width": 3024,
+       "height": 4032,
+       "file_size_bytes": 2847293,
+       "latitude": null,
+       "longitude": null,
+       "orientation": 1,
+       "duration": 0,
+       "bitrate": null,
+       "sampling_rate": null,
+       "frame_rate": null
+     }
+   }
+   ```
+
+5. **TEXT GENERATION:**
+   - If user specifies post text, use it as content.text
+   - If no text provided, generate engaging caption based on selected media or context
+   - Never leave content.text empty - always provide meaningful text with hashtags
+
+6. **MEDIA_QUERY FALLBACK:**
+   Only create media_query when:
+   - User requests specific media that's not in the context (e.g., "sunset photos from last week")
+   - No media context is provided but media is clearly needed
+   - User requests broad search (e.g., "photos with my dog")
+
+**EXAMPLE WITH DIRECT MEDIA SELECTION:**
+User says: "post my last picture"
+If media_context.recent_media[0] exists, select it directly:
+
+```json
 {
-  "action_id": "echo_1721407200000",
-  "created_at": "2025-06-19T15:30:00Z",
-  "platforms": ["instagram", "twitter"],
+  "action_id": "echo_1734624622000",
+  "created_at": "2024-12-19T14:30:22Z",
+  "platforms": ["instagram"],
   "content": {
-    "text": "A perfect evening by the lake.",
-    "hashtags": ["sunset", "nature"],
+    "text": "Capturing the moment ✨",
+    "hashtags": ["photography", "memories"],
     "mentions": [],
     "link": null,
-    "media": []
+    "media": [
+      {
+        "file_uri": "file:///storage/emulated/0/DCIM/Camera/IMG_20241219_143022.jpg",
+        "mime_type": "image/jpeg",
+        "device_metadata": {
+          "creation_time": "2024-12-19T14:30:22Z",
+          "width": 3024,
+          "height": 4032,
+          "file_size_bytes": 2847293,
+          "latitude": null,
+          "longitude": null,
+          "orientation": 1,
+          "duration": 0,
+          "bitrate": null,
+          "sampling_rate": null,
+          "frame_rate": null
+        }
+      }
+    ]
   },
   "options": {
     "schedule": "now",
     "visibility": {
-      "instagram": "public",
-      "twitter": "public"
+      "instagram": "public"
     },
     "location_tag": null,
     "reply_to_post_id": null
@@ -235,18 +340,18 @@ EXAMPLE with media_query:
       "carousel": null,
       "ig_user_id": "",
       "media_type": "image",
-      "media_file_uri": "file:///storage/emulated/0/DCIM/Camera/IMG_1234.jpg",
+      "media_file_uri": "file:///storage/emulated/0/DCIM/Camera/IMG_20241219_143022.jpg",
       "video_thumbnail_uri": null,
       "video_file_uri": null,
       "audio_file_uri": null,
       "scheduled_time": null
     },
     "twitter": {
-      "post_here": true,
-      "alt_texts": ["Sunset by the lake"],
+      "post_here": false,
+      "alt_texts": [],
       "tweet_mode": "extended",
-      "media_type": "image",
-      "media_file_uri": "file:///storage/emulated/0/DCIM/Camera/IMG_1234.jpg",
+      "media_type": null,
+      "media_file_uri": null,
       "media_duration": 0,
       "tweet_link": null,
       "scheduled_time": null
@@ -267,7 +372,7 @@ EXAMPLE with media_query:
   "internal": {
     "retry_count": 0,
     "ai_generated": true,
-    "original_transcription": "Post the sunset photo from yesterday to Instagram and Twitter with the caption 'A perfect evening by the lake.'",
+    "original_transcription": "post my last picture",
     "user_preferences": {
       "default_platforms": [],
       "default_hashtags": []
@@ -279,17 +384,17 @@ EXAMPLE with media_query:
     },
     "fallback_reason": null
   },
-  "media_query": {
-    "directory_path": "/storage/emulated/0/DCIM/Camera",
-    "search_terms": ["sunset", "lake", "evening"],
-    "date_range": {
-      "start_date": "2025-06-18T00:00:00Z",
-      "end_date": "2025-06-18T23:59:59Z"
-    },
-    "media_types": ["image"],
-    "location_query": null
-  }
+  "media_query": null
 }
+```
+
+**CRITICAL REQUIREMENTS:**
+- Always return complete, valid JSON with ALL required fields
+- Use exact field names (snake_case, not camelCase)
+- When media context is available and user references it, SELECT from it directly
+- Only create media_query as absolute last resort
+- Never leave content.media empty if suitable media exists in context
+- Always include all platform_data objects (facebook, instagram, twitter, tiktok) even if post_here is false
 '''
         },
         {

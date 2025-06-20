@@ -1039,30 +1039,44 @@ class _CommandScreenState extends State<CommandScreen>
         print('🚀 Calling AIService.processVoiceCommand...');
         if (_hasPreSelectedMedia) {
           print(
-              '📎 Including ${_preSelectedMedia.length} pre-selected media items in context');
+              '📎 Including ${_preSelectedMedia.length} pre-selected media items in structured context');
+          for (final media in _preSelectedMedia) {
+            final isVideo = media.mimeType.startsWith('video/');
+            final type = isVideo ? 'video' : 'image';
+            print(
+                '   - $type: ${media.fileUri} (${media.deviceMetadata.width}x${media.deviceMetadata.height})');
+          }
         }
       }
 
       // Enhanced transcription with media context if pre-selected media exists
       String enhancedTranscription = transcription;
       if (_hasPreSelectedMedia) {
-        final mediaDescriptions = _preSelectedMedia.map((media) {
-          final isVideo = media.mimeType.startsWith('video/');
-          final type = isVideo ? 'video' : 'image';
-          return '$type (${media.deviceMetadata.width}x${media.deviceMetadata.height})';
-        }).join(', ');
-
-        enhancedTranscription = '''$transcription
-
-MEDIA_CONTEXT: User has pre-selected the following media: $mediaDescriptions. Please include these in the final post structure by setting the media array with the existing media items.''';
+        // Instead of appending media context to transcription, we'll pass it through
+        // the AI service's structured media context. This prevents ChatGPT from
+        // receiving conflicting media information that causes incomplete JSON.
 
         if (kDebugMode) {
           print(
-              '📝 Enhanced transcription with media context: "$enhancedTranscription"');
+              '📎 Including ${_preSelectedMedia.length} pre-selected media items in structured context');
+          for (final media in _preSelectedMedia) {
+            final isVideo = media.mimeType.startsWith('video/');
+            final type = isVideo ? 'video' : 'image';
+            print(
+                '   - $type: ${media.fileUri} (${media.deviceMetadata.width}x${media.deviceMetadata.height})');
+          }
         }
+
+        // Pass pre-selected media through AI service's structured context
+        // The AI service will handle this properly without conflicting with transcription
+        enhancedTranscription =
+            transcription; // Keep original transcription clean
       }
 
-      final action = await aiService.processVoiceCommand(enhancedTranscription);
+      final action = await aiService.processVoiceCommand(
+        enhancedTranscription,
+        preSelectedMedia: _hasPreSelectedMedia ? _preSelectedMedia : null,
+      );
 
       if (kDebugMode) {
         print('✅ Received SocialAction from AI service');
@@ -1607,19 +1621,23 @@ MEDIA_CONTEXT: User has pre-selected the following media: $mediaDescriptions. Pl
           width: double.infinity, // Full width
           height: 250, // Same height as ReviewPostScreen
           decoration: BoxDecoration(
-            color: Colors.grey.shade100,
+            color: Colors.grey.shade900, // Darker background to match theme
+            borderRadius: BorderRadius.circular(12),
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withValues(alpha: 0.1),
+                color: Colors.black.withValues(alpha: 0.3),
                 blurRadius: 20,
                 offset: const Offset(0, 8),
               ),
             ],
           ),
-          child: (_currentAction?.content.media.isNotEmpty == true) ||
-                  _hasPreSelectedMedia
-              ? _buildMediaPreview(context)
-              : _buildEmptyMediaPlaceholder(),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(12),
+            child: (_currentAction?.content.media.isNotEmpty == true) ||
+                    _hasPreSelectedMedia
+                ? _buildMediaPreview(context)
+                : _buildEmptyMediaPlaceholder(),
+          ),
         ),
 
         const SizedBox(height: _spacing2),
@@ -1639,32 +1657,61 @@ MEDIA_CONTEXT: User has pre-selected the following media: $mediaDescriptions. Pl
 
   Widget _buildEmptyMediaPlaceholder() {
     return Container(
-      color: Colors.grey.shade200,
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            const Color(0xFF2A2A2A), // Lighter gray for better contrast
+            const Color(0xFF1F1F1F), // Slightly darker for subtle gradient
+          ],
+        ),
+        border: Border.all(
+          color: Colors.white.withValues(alpha: 0.15),
+          width: 1,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.2),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
       child: Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(
-              Icons.image,
-              color: Colors.grey.shade400,
-              size: 48,
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.12),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(
+                Icons.image_outlined,
+                color: Colors.white.withValues(alpha: 0.8),
+                size: 48,
+              ),
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 16),
             Text(
               'Your image will appear here',
               style: TextStyle(
-                color: Colors.grey.shade600,
+                color: Colors.white.withValues(alpha: 0.95),
                 fontSize: 16,
                 fontWeight: FontWeight.w500,
               ),
             ),
-            const SizedBox(height: 6),
+            const SizedBox(height: 8),
             Text(
               'Select media first, then record your voice command',
               style: TextStyle(
-                color: Colors.grey.shade500,
+                color: Colors.white.withValues(alpha: 0.7),
                 fontSize: 12,
+                height: 1.3,
               ),
+              textAlign: TextAlign.center,
             ),
           ],
         ),
@@ -1689,22 +1736,18 @@ MEDIA_CONTEXT: User has pre-selected the following media: $mediaDescriptions. Pl
     return Container(
       width: double.infinity, // Full width, edge to edge
       height: 250, // Increased height to match ReviewPostScreen
-      decoration: BoxDecoration(
-        color: Colors.white,
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.1),
-            blurRadius: 20,
-            offset: const Offset(0, 8),
-          ),
-        ],
+      decoration: const BoxDecoration(
+        color: Colors.transparent, // Remove white background
       ),
       child: Stack(
         fit: StackFit.expand,
         children: [
           isVideo
               ? Container(
-                  color: Colors.grey.shade200,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF2A2A2A),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
                   child: const Center(
                     child: Icon(
                       Icons.videocam,
@@ -1713,21 +1756,27 @@ MEDIA_CONTEXT: User has pre-selected the following media: $mediaDescriptions. Pl
                     ),
                   ),
                 )
-              : Image.file(
-                  File(Uri.parse(mediaItem.fileUri).path),
-                  fit: BoxFit.cover,
-                  errorBuilder: (context, error, stackTrace) {
-                    return Container(
-                      color: Colors.grey.shade200,
-                      child: const Center(
-                        child: Icon(
-                          Icons.image,
-                          color: Colors.grey,
-                          size: 40,
+              : ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: Image.file(
+                    File(Uri.parse(mediaItem.fileUri).path),
+                    fit: BoxFit.cover,
+                    errorBuilder: (context, error, stackTrace) {
+                      return Container(
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF2A2A2A),
+                          borderRadius: BorderRadius.circular(12),
                         ),
-                      ),
-                    );
-                  },
+                        child: const Center(
+                          child: Icon(
+                            Icons.image,
+                            color: Colors.grey,
+                            size: 40,
+                          ),
+                        ),
+                      );
+                    },
+                  ),
                 ),
 
           // Media info overlay
@@ -1738,6 +1787,10 @@ MEDIA_CONTEXT: User has pre-selected the following media: $mediaDescriptions. Pl
             child: Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
+                borderRadius: const BorderRadius.only(
+                  bottomLeft: Radius.circular(12),
+                  bottomRight: Radius.circular(12),
+                ),
                 gradient: LinearGradient(
                   begin: Alignment.bottomCenter,
                   end: Alignment.topCenter,

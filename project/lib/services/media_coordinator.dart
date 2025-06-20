@@ -8,6 +8,7 @@ import 'directory_service.dart';
 import 'media_metadata_service.dart';
 import 'media_search_service.dart';
 import 'firestore_service.dart';
+import 'app_settings_service.dart';
 
 /// Coordinates all media-related operations across the app.
 /// This service acts as the single entry point for all media operations,
@@ -18,6 +19,7 @@ class MediaCoordinator extends ChangeNotifier {
   late final DirectoryService _directoryService;
   late final MediaMetadataService _metadataService;
   late final MediaSearchService _mediaSearchService;
+  late final AppSettingsService _appSettingsService;
 
   bool _isInitialized = false;
   bool _isInitializing = false;
@@ -59,20 +61,27 @@ class MediaCoordinator extends ChangeNotifier {
       _metadataService = MediaMetadataService();
       _photoManager = PhotoManagerService();
       _mediaSearchService = MediaSearchService();
+      _appSettingsService = AppSettingsService();
 
-      // Step 2: Initialize DirectoryService first (no dependencies)
+      // Step 2: Initialize AppSettingsService first (no dependencies)
+      if (kDebugMode) {
+        print('🔧 MediaCoordinator: Initializing AppSettingsService...');
+      }
+      await _appSettingsService.initialize();
+
+      // Step 3: Initialize DirectoryService (no dependencies)
       if (kDebugMode) {
         print('📁 MediaCoordinator: Initializing DirectoryService...');
       }
       await _directoryService.initialize();
 
-      // Step 3: Initialize MediaMetadataService with DirectoryService
+      // Step 4: Initialize MediaMetadataService with DirectoryService and AppSettingsService
       if (kDebugMode) {
         print('📊 MediaCoordinator: Initializing MediaMetadataService...');
       }
-      await _metadataService.initialize(_directoryService);
+      await _metadataService.initialize(_directoryService, _appSettingsService);
 
-      // Step 4: Initialize PhotoManagerService (request permissions first)
+      // Step 5: Initialize PhotoManagerService (request permissions first)
       if (kDebugMode) {
         print('📷 MediaCoordinator: Requesting photo permissions...');
       }
@@ -90,7 +99,7 @@ class MediaCoordinator extends ChangeNotifier {
         }
       }
 
-      // Step 5: Initialize MediaSearchService
+      // Step 6: Initialize MediaSearchService
       if (kDebugMode) {
         print('🔍 MediaCoordinator: Initializing MediaSearchService...');
       }
@@ -106,6 +115,7 @@ class MediaCoordinator extends ChangeNotifier {
       if (kDebugMode) {
         print(
             '✅ MediaCoordinator: All media services initialized successfully!');
+        print('   - AppSettingsService: ✅');
         print('   - DirectoryService: ✅');
         print('   - MediaMetadataService: ✅');
         print('   - PhotoManagerService: ✅');
@@ -158,6 +168,16 @@ class MediaCoordinator extends ChangeNotifier {
           'MediaCoordinator not initialized. Call initialize() first.');
     }
     return _mediaSearchService;
+  }
+
+  /// Provides access to the AppSettingsService
+  /// Only available after initialization
+  AppSettingsService get appSettingsService {
+    if (!_isInitialized) {
+      throw StateError(
+          'MediaCoordinator not initialized. Call initialize() first.');
+    }
+    return _appSettingsService;
   }
 
   /// Retrieves media assets based on a semantic query and filters
@@ -245,6 +265,8 @@ class MediaCoordinator extends ChangeNotifier {
     try {
       final normalizedUri = normalizeMediaURI(uri);
       final file = File(Uri.parse(normalizedUri).path);
+
+      // Check if file exists
       if (!await file.exists()) {
         if (kDebugMode) {
           print(
@@ -253,21 +275,212 @@ class MediaCoordinator extends ChangeNotifier {
         return false;
       }
 
-      // Check if file is readable
+      // Check if file is readable and has valid size
       try {
-        await file.length();
-        return true;
+        final fileSize = await file.length();
+        if (fileSize == 0) {
+          if (kDebugMode) {
+            print('❌ MediaCoordinator: Media file is empty: $normalizedUri');
+          }
+          return false;
+        }
       } catch (e) {
         if (kDebugMode) {
           print('❌ MediaCoordinator: Media file is not accessible: $e');
         }
         return false;
       }
+
+      // Validate MIME type and format support
+      final mimeType = _getMimeTypeFromPath(file.path);
+      if (!_isSupportedMediaType(mimeType)) {
+        if (kDebugMode) {
+          print(
+              '❌ MediaCoordinator: Unsupported media type: $mimeType for file: $normalizedUri');
+        }
+        return false;
+      }
+
+      // For images, try to validate that the file can actually be read as an image
+      if (mimeType.startsWith('image/')) {
+        try {
+          // Try to read a small portion of the file to validate it's not corrupted
+          final bytes = await file.readAsBytes();
+          if (bytes.isEmpty) {
+            if (kDebugMode) {
+              print(
+                  '❌ MediaCoordinator: Image file appears to be corrupted: $normalizedUri');
+            }
+            return false;
+          }
+
+          // Basic image format validation by checking file headers
+          if (!_hasValidImageHeader(bytes, mimeType)) {
+            if (kDebugMode) {
+              print(
+                  '❌ MediaCoordinator: Invalid image file header: $normalizedUri');
+            }
+            return false;
+          }
+        } catch (e) {
+          if (kDebugMode) {
+            print(
+                '❌ MediaCoordinator: Cannot read image file: $normalizedUri - $e');
+          }
+          return false;
+        }
+      }
+
+      return true;
     } catch (e) {
       if (kDebugMode) {
         print('❌ MediaCoordinator: Error validating media URI: $e');
       }
       return false;
+    }
+  }
+
+  /// Determines MIME type from file path/extension
+  String _getMimeTypeFromPath(String path) {
+    final extension = path.toLowerCase().split('.').last;
+
+    // Supported image formats
+    const imageMimeTypes = {
+      'jpg': 'image/jpeg',
+      'jpeg': 'image/jpeg',
+      'png': 'image/png',
+      'gif': 'image/gif',
+      'bmp': 'image/bmp',
+      'webp': 'image/webp',
+      'heic': 'image/heic',
+      'heif': 'image/heif',
+      'tiff': 'image/tiff',
+      'tif': 'image/tiff',
+    };
+
+    // Supported video formats
+    const videoMimeTypes = {
+      'mp4': 'video/mp4',
+      'mov': 'video/quicktime',
+      'avi': 'video/x-msvideo',
+      'mkv': 'video/x-matroska',
+      'webm': 'video/webm',
+      'm4v': 'video/x-m4v',
+      '3gp': 'video/3gpp',
+      'flv': 'video/x-flv',
+      'wmv': 'video/x-ms-wmv',
+      'mpg': 'video/mpeg',
+      'mpeg': 'video/mpeg',
+    };
+
+    // Check image formats first
+    if (imageMimeTypes.containsKey(extension)) {
+      return imageMimeTypes[extension]!;
+    }
+
+    // Check video formats
+    if (videoMimeTypes.containsKey(extension)) {
+      return videoMimeTypes[extension]!;
+    }
+
+    // Unsupported format
+    return 'application/octet-stream';
+  }
+
+  /// Checks if a MIME type is supported for display
+  bool _isSupportedMediaType(String mimeType) {
+    // Supported image types that Flutter can display
+    const supportedImageTypes = {
+      'image/jpeg',
+      'image/png',
+      'image/gif',
+      'image/bmp',
+      'image/webp',
+      'image/heic',
+      'image/heif',
+      'image/tiff',
+    };
+
+    // Supported video types (for preview thumbnails)
+    const supportedVideoTypes = {
+      'video/mp4',
+      'video/quicktime',
+      'video/x-msvideo',
+      'video/x-matroska',
+      'video/webm',
+      'video/x-m4v',
+      'video/3gpp',
+      'video/x-flv',
+      'video/x-ms-wmv',
+      'video/mpeg',
+    };
+
+    return supportedImageTypes.contains(mimeType) ||
+        supportedVideoTypes.contains(mimeType);
+  }
+
+  /// Validates image file headers to ensure they match the expected format
+  bool _hasValidImageHeader(List<int> bytes, String mimeType) {
+    if (bytes.length < 8) return false;
+
+    switch (mimeType) {
+      case 'image/jpeg':
+        // JPEG files start with FF D8 FF
+        return bytes[0] == 0xFF && bytes[1] == 0xD8 && bytes[2] == 0xFF;
+
+      case 'image/png':
+        // PNG files start with 89 50 4E 47 0D 0A 1A 0A
+        return bytes.length >= 8 &&
+            bytes[0] == 0x89 &&
+            bytes[1] == 0x50 &&
+            bytes[2] == 0x4E &&
+            bytes[3] == 0x47 &&
+            bytes[4] == 0x0D &&
+            bytes[5] == 0x0A &&
+            bytes[6] == 0x1A &&
+            bytes[7] == 0x0A;
+
+      case 'image/gif':
+        // GIF files start with "GIF87a" or "GIF89a"
+        return bytes.length >= 6 &&
+            bytes[0] == 0x47 &&
+            bytes[1] == 0x49 &&
+            bytes[2] == 0x46 &&
+            bytes[3] == 0x38 &&
+            (bytes[4] == 0x37 || bytes[4] == 0x39) &&
+            bytes[5] == 0x61;
+
+      case 'image/bmp':
+        // BMP files start with "BM"
+        return bytes[0] == 0x42 && bytes[1] == 0x4D;
+
+      case 'image/webp':
+        // WebP files start with "RIFF" and have "WEBP" at position 8
+        return bytes.length >= 12 &&
+            bytes[0] == 0x52 &&
+            bytes[1] == 0x49 &&
+            bytes[2] == 0x46 &&
+            bytes[3] == 0x46 &&
+            bytes[8] == 0x57 &&
+            bytes[9] == 0x45 &&
+            bytes[10] == 0x42 &&
+            bytes[11] == 0x50;
+
+      case 'image/tiff':
+        // TIFF files start with "II*\0" (little-endian) or "MM\0*" (big-endian)
+        return (bytes[0] == 0x49 &&
+                bytes[1] == 0x49 &&
+                bytes[2] == 0x2A &&
+                bytes[3] == 0x00) ||
+            (bytes[0] == 0x4D &&
+                bytes[1] == 0x4D &&
+                bytes[2] == 0x00 &&
+                bytes[3] == 0x2A);
+
+      default:
+        // For HEIC/HEIF and other formats, just check that it's not empty
+        // More sophisticated validation would require additional libraries
+        return true;
     }
   }
 

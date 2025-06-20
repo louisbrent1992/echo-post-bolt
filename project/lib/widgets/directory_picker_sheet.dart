@@ -136,9 +136,9 @@ class DirectoryPickerSheet extends StatelessWidget {
                 ),
                 const SizedBox(height: 16),
                 ElevatedButton.icon(
-                  onPressed: () {
+                  onPressed: () async {
                     Navigator.pop(context);
-                    _showManualEntryDialog(context);
+                    await _showManualEntryDialog(context);
                   },
                   icon: const Icon(Icons.edit),
                   label: const Text('Enter Custom Path'),
@@ -243,8 +243,7 @@ class DirectoryPickerSheet extends StatelessWidget {
               final name = nameController.text.trim();
               final path = pathController.text.trim();
               if (name.isNotEmpty && path.isNotEmpty) {
-                Navigator.pop(context);
-                onDirectorySelected(name, path);
+                Navigator.pop(context, {'name': name, 'path': path});
               }
             },
             style: ElevatedButton.styleFrom(
@@ -257,7 +256,8 @@ class DirectoryPickerSheet extends StatelessWidget {
       ),
     );
 
-    if (result != null) {
+    // Only call the callback if we got a valid result
+    if (result != null && result['name'] != null && result['path'] != null) {
       onDirectorySelected(result['name']!, result['path']!);
     }
   }

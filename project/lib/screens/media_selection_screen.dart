@@ -6,7 +6,7 @@ import 'package:flutter/foundation.dart';
 import '../models/social_action.dart';
 import '../services/media_coordinator.dart';
 import '../services/firestore_service.dart';
-import '../widgets/social_icon.dart';
+import '../screens/directory_selection_screen.dart';
 
 class MediaSelectionScreen extends StatefulWidget {
   final SocialAction action;
@@ -82,8 +82,14 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
           widget.action.content.media.first.fileUri.isNotEmpty) {
         final mediaItem = widget.action.content.media.first;
         if (await _mediaCoordinator.validateMediaURI(mediaItem.fileUri)) {
-          // Instead of setting _selectedMedia and returning (which shows single preview),
-          // we'll populate _mediaCandidates to show the grid view
+          // Get media candidates from query first
+          final additionalCandidates = await _mediaCoordinator.getMediaForQuery(
+            '', // Empty search to get recent media
+            dateRange: null,
+            mediaTypes: null,
+          );
+
+          // Create existing media candidate
           final existingMediaAsCandidate = {
             'id': 'current',
             'file_uri': mediaItem.fileUri,
@@ -98,23 +104,28 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
             }
           };
 
-          // Get additional media candidates to show in grid
-          final additionalCandidates = await _mediaCoordinator.getMediaForQuery(
-            '', // Empty search to get recent media
-            dateRange: null,
-            mediaTypes: null,
-          );
+          // Deduplicate: check if existing media is already in additional candidates
+          final existingUri = mediaItem.fileUri;
+          final deduplicatedCandidates = additionalCandidates
+              .where((candidate) => candidate['file_uri'] != existingUri)
+              .toList();
 
           setState(() {
-            // Add current media as first item, then additional candidates
+            // Add current media as first item, then deduplicated additional candidates
             _mediaCandidates = [
               existingMediaAsCandidate,
-              ...additionalCandidates
+              ...deduplicatedCandidates
             ];
             _selectedMedia =
                 existingMediaAsCandidate; // Pre-select the current media
             _isLoading = false;
           });
+
+          if (kDebugMode) {
+            print(
+                '🔍 MediaSelectionScreen: Loaded ${_mediaCandidates.length} candidates (${deduplicatedCandidates.length} additional + 1 existing)');
+          }
+
           return;
         }
       }
@@ -214,30 +225,6 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
     }
   }
 
-  void _togglePlatform(String platform) {
-    // Update the action's platforms when toggled
-    final updatedPlatforms = List<String>.from(widget.action.platforms);
-    if (updatedPlatforms.contains(platform)) {
-      updatedPlatforms.remove(platform);
-    } else {
-      updatedPlatforms.add(platform);
-    }
-
-    // Note: In a real implementation, you might want to update the parent
-    // or use a callback to notify about platform changes
-    // For now, we'll just show a snackbar to indicate the change
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(updatedPlatforms.contains(platform)
-              ? '$platform added to selection'
-              : '$platform removed from selection'),
-          duration: const Duration(seconds: 1),
-        ),
-      );
-    }
-  }
-
   Future<void> _confirmSelection() async {
     if (_selectedMedia == null) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -333,12 +320,20 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor:
+          Colors.transparent, // Make scaffold transparent for gradient
       appBar: AppBar(
-        title: const Text('Select Media'),
+        title:
+            const Text('Select Media', style: TextStyle(color: Colors.white)),
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        iconTheme: const IconThemeData(color: Colors.white),
         actions: [
           IconButton(
-            icon:
-                Icon(_showFilters ? Icons.filter_list_off : Icons.filter_list),
+            icon: Icon(
+              _showFilters ? Icons.filter_list_off : Icons.filter_list,
+              color: Colors.white,
+            ),
             onPressed: () {
               setState(() {
                 _showFilters = !_showFilters;
@@ -347,141 +342,137 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
           ),
         ],
       ),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : Column(
-              children: [
-                // Social media icons section at the top
-                LayoutBuilder(
-                  builder: (context, constraints) {
-                    final screenHeight = MediaQuery.of(context).size.height;
-                    final maxIconHeight =
-                        screenHeight * 0.1; // 1/10th of screen height
-
-                    return Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 20, vertical: 8),
-                      decoration: BoxDecoration(
-                        color: Colors.black.withAlpha((0.05 * 255).round()),
-                        border: Border(
-                          bottom: BorderSide(
-                            color: Colors.grey.withAlpha((0.2 * 255).round()),
-                            width: 0.5,
+      body: Container(
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [
+              Colors.black,
+              Color(0xFF1A1A1A),
+            ],
+          ),
+        ),
+        child: SafeArea(
+          child: _isLoading
+              ? const Center(
+                  child: CircularProgressIndicator(color: Color(0xFFFF0080)))
+              : Column(
+                  children: [
+                    // Dynamic query status display (only show if actively searching)
+                    if (_searchTerms.isNotEmpty && _mediaCandidates.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.all(16.0),
+                        child: Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.6),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                              color: Colors.white.withValues(alpha: 0.2),
+                            ),
+                          ),
+                          child: Row(
+                            children: [
+                              const Icon(
+                                Icons.search,
+                                color: Color(0xFFFF0080),
+                                size: 18,
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  'Found ${_mediaCandidates.length} result${_mediaCandidates.length == 1 ? '' : 's'} for "${_searchTerms.join(', ')}"',
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                              ),
+                            ],
                           ),
                         ),
                       ),
-                      child: SocialIconsRow(
-                        selectedPlatforms: widget.action.platforms,
-                        onPlatformToggle: _togglePlatform,
-                        maxHeight: maxIconHeight,
-                      ),
-                    );
-                  },
-                ),
 
-                // Dynamic query status display (only show if actively searching)
-                if (_searchTerms.isNotEmpty && _mediaCandidates.isNotEmpty)
-                  Padding(
-                    padding: const EdgeInsets.all(16.0),
-                    child: Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: Theme.of(context)
-                            .colorScheme
-                            .surfaceContainerHighest,
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Row(
-                        children: [
-                          Icon(
-                            Icons.search,
-                            color: Theme.of(context).colorScheme.primary,
-                            size: 18,
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              'Found ${_mediaCandidates.length} result${_mediaCandidates.length == 1 ? '' : 's'} for "${_searchTerms.join(', ')}"',
-                              style: TextStyle(
-                                fontWeight: FontWeight.bold,
-                                color: Theme.of(context).colorScheme.onSurface,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
+                    // Source indicator
+                    _buildSourceIndicator(),
 
-                // Source indicator
-                _buildSourceIndicator(),
+                    // Filters section (collapsible)
+                    if (_showFilters) _buildFiltersSection(),
 
-                // Filters section (collapsible)
-                if (_showFilters) _buildFiltersSection(),
-
-                // Media grid - always show grid when we have candidates
-                Expanded(
-                  child: _mediaCandidates.isNotEmpty
-                      ? _buildMediaGrid() // Always show grid when we have candidates
-                      : _selectedMedia != null
-                          ? _buildSingleMediaPreview() // Only show single preview as fallback
-                          : Center(
-                              child: Column(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  Icon(
-                                    Icons.photo_library_outlined,
-                                    size: 64,
-                                    color:
-                                        Theme.of(context).colorScheme.outline,
-                                  ),
-                                  const SizedBox(height: 16),
-                                  Text(
-                                    'No media available',
-                                    style:
-                                        Theme.of(context).textTheme.titleMedium,
-                                  ),
-                                  const SizedBox(height: 8),
-                                  Text(
-                                    'Try enabling custom directories or adjusting filters',
-                                    style: Theme.of(context)
-                                        .textTheme
-                                        .bodyMedium
-                                        ?.copyWith(
-                                          color: Theme.of(context)
-                                              .colorScheme
-                                              .outline,
+                    // Media grid - always show grid when we have candidates
+                    Expanded(
+                      child: _mediaCandidates.isNotEmpty
+                          ? _buildMediaGrid() // Always show grid when we have candidates
+                          : _selectedMedia != null
+                              ? _buildSingleMediaPreview() // Only show single preview as fallback
+                              : Center(
+                                  child: Column(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: [
+                                      Icon(
+                                        Icons.photo_library_outlined,
+                                        size: 64,
+                                        color:
+                                            Colors.white.withValues(alpha: 0.6),
+                                      ),
+                                      const SizedBox(height: 16),
+                                      const Text(
+                                        'No media available',
+                                        style: TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 18,
+                                          fontWeight: FontWeight.w600,
                                         ),
-                                    textAlign: TextAlign.center,
+                                      ),
+                                      const SizedBox(height: 8),
+                                      Text(
+                                        'Try enabling custom directories or adjusting filters',
+                                        style: TextStyle(
+                                          color: Colors.white
+                                              .withValues(alpha: 0.7),
+                                          fontSize: 14,
+                                        ),
+                                        textAlign: TextAlign.center,
+                                      ),
+                                    ],
                                   ),
-                                ],
+                                ),
+                    ),
+
+                    // Confirm button
+                    SafeArea(
+                      child: Padding(
+                        padding: const EdgeInsets.all(16.0),
+                        child: SizedBox(
+                          width: double.infinity,
+                          child: ElevatedButton(
+                            onPressed: _selectedMedia != null
+                                ? _confirmSelection
+                                : null,
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: const Color(0xFFFF0080),
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(vertical: 16),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
                               ),
                             ),
-                ),
-
-                // Confirm button
-                SafeArea(
-                  child: Padding(
-                    padding: const EdgeInsets.all(16.0),
-                    child: SizedBox(
-                      width: double.infinity,
-                      child: ElevatedButton(
-                        onPressed:
-                            _selectedMedia != null ? _confirmSelection : null,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor:
-                              Theme.of(context).colorScheme.primary,
-                          foregroundColor:
-                              Theme.of(context).colorScheme.onPrimary,
-                          padding: const EdgeInsets.symmetric(vertical: 16),
+                            child: const Text(
+                              'Confirm Selection',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
                         ),
-                        child: const Text('Confirm Selection'),
                       ),
                     ),
-                  ),
+                  ],
                 ),
-              ],
-            ),
+        ),
+      ),
     );
   }
 
@@ -489,55 +480,112 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
     final isCustomEnabled = _mediaCoordinator.isCustomDirectoriesEnabled;
     final enabledCount = _mediaCoordinator.enabledDirectories.length;
 
-    return Container(
-      margin: const EdgeInsets.all(16),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      decoration: BoxDecoration(
-        color: isCustomEnabled
-            ? const Color(0xFFFF0080).withAlpha((0.1 * 255).round())
-            : Colors.grey.withAlpha((0.1 * 255).round()),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(
+    return GestureDetector(
+      onTap: _navigateToDirectorySelection,
+      child: Container(
+        margin: const EdgeInsets.all(16),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
           color: isCustomEnabled
-              ? const Color(0xFFFF0080).withAlpha((0.3 * 255).round())
-              : Colors.grey.withAlpha((0.3 * 255).round()),
+              ? const Color(0xFFFF0080).withValues(alpha: 0.1)
+              : Colors.grey.withValues(alpha: 0.1),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: isCustomEnabled
+                ? const Color(0xFFFF0080).withValues(alpha: 0.3)
+                : Colors.grey.withValues(alpha: 0.3),
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              isCustomEnabled ? Icons.folder_open : Icons.photo_library,
+              size: 16,
+              color: isCustomEnabled ? const Color(0xFFFF0080) : Colors.white,
+            ),
+            const SizedBox(width: 8),
+            Text(
+              isCustomEnabled
+                  ? 'Searching $enabledCount custom director${enabledCount == 1 ? 'y' : 'ies'}'
+                  : 'Searching photo albums',
+              style: TextStyle(
+                color: isCustomEnabled ? const Color(0xFFFF0080) : Colors.white,
+                fontSize: 12,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Icon(
+              Icons.edit,
+              size: 14,
+              color: isCustomEnabled ? const Color(0xFFFF0080) : Colors.white,
+            ),
+          ],
         ),
       ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(
-            isCustomEnabled ? Icons.folder_open : Icons.photo_library,
-            size: 16,
-            color: isCustomEnabled ? const Color(0xFFFF0080) : Colors.grey,
-          ),
-          const SizedBox(width: 8),
-          Text(
-            isCustomEnabled
-                ? 'Searching $enabledCount custom directories'
-                : 'Searching photo albums',
-            style: TextStyle(
-              color: isCustomEnabled ? const Color(0xFFFF0080) : Colors.grey,
-              fontSize: 12,
-              fontWeight: FontWeight.w500,
-            ),
-          ),
-        ],
-      ),
     );
+  }
+
+  /// Navigate to directory selection screen and refresh media when returning
+  Future<void> _navigateToDirectorySelection() async {
+    try {
+      final result = await Navigator.push<bool>(
+        context,
+        MaterialPageRoute(
+          builder: (context) => const DirectorySelectionScreen(),
+        ),
+      );
+
+      // If directories were changed, refresh the media grid
+      // Note: result will be true if changes were made, false if no changes, or null if cancelled
+      if (result == true) {
+        if (kDebugMode) {
+          print(
+              '🔄 MediaSelectionScreen: Refreshing media after directory changes');
+        }
+
+        // Clear current media and reload
+        setState(() {
+          _isLoading = true;
+          _mediaCandidates.clear();
+          _selectedMedia = null;
+        });
+
+        // Re-initialize the screen with new directory settings
+        await _initializeScreen();
+      } else {
+        if (kDebugMode) {
+          print(
+              '🔄 MediaSelectionScreen: No directory changes detected, keeping current media');
+        }
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        print(
+            '❌ MediaSelectionScreen: Error navigating to directory selection: $e');
+      }
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to open directory selection: $e'),
+            backgroundColor: Colors.red.withValues(alpha: 0.8),
+          ),
+        );
+      }
+    }
   }
 
   Widget _buildFiltersSection() {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surface,
+        color: Colors.black.withValues(alpha: 0.6),
         border: Border(
           bottom: BorderSide(
-            color: Theme.of(context)
-                .colorScheme
-                .outline
-                .withAlpha((0.1 * 255).round()),
+            color: Colors.white.withValues(alpha: 0.2),
+            width: 0.5,
           ),
         ),
       ),
@@ -547,25 +595,45 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
           // Search field
           Row(
             children: [
-              Icon(
+              const Icon(
                 Icons.search,
                 size: 18,
-                color: Theme.of(context).colorScheme.primary,
+                color: Color(0xFFFF0080),
               ),
               const SizedBox(width: 8),
-              Text(
+              const Text(
                 'Search:',
-                style: Theme.of(context).textTheme.bodyMedium,
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500,
+                ),
               ),
               const SizedBox(width: 8),
               Expanded(
                 child: TextField(
                   controller: _searchController,
+                  style: const TextStyle(color: Colors.white),
                   decoration: InputDecoration(
                     hintText: 'Enter search terms...',
+                    hintStyle:
+                        TextStyle(color: Colors.white.withValues(alpha: 0.6)),
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(8),
+                      borderSide: BorderSide(
+                          color: Colors.white.withValues(alpha: 0.3)),
                     ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: BorderSide(
+                          color: Colors.white.withValues(alpha: 0.3)),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: const BorderSide(color: Color(0xFFFF0080)),
+                    ),
+                    filled: true,
+                    fillColor: Colors.white.withValues(alpha: 0.1),
                     contentPadding: const EdgeInsets.symmetric(
                       horizontal: 12,
                       vertical: 8,
@@ -574,10 +642,14 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
                         ? const SizedBox(
                             width: 16,
                             height: 16,
-                            child: CircularProgressIndicator(strokeWidth: 2),
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Color(0xFFFF0080),
+                            ),
                           )
                         : IconButton(
-                            icon: const Icon(Icons.search),
+                            icon: const Icon(Icons.search,
+                                color: Color(0xFFFF0080)),
                             onPressed: () {
                               setState(() {
                                 _searchTerms = _searchController.text
@@ -618,15 +690,19 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
           // Date range filter
           Row(
             children: [
-              Icon(
+              const Icon(
                 Icons.calendar_today,
                 size: 18,
-                color: Theme.of(context).colorScheme.primary,
+                color: Color(0xFFFF0080),
               ),
               const SizedBox(width: 8),
-              Text(
+              const Text(
                 'Date Range:',
-                style: Theme.of(context).textTheme.bodyMedium,
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500,
+                ),
               ),
               const SizedBox(width: 8),
               TextButton(
@@ -647,11 +723,12 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
                   _dateRange != null
                       ? '${_dateRange!.start.toString().split(' ')[0]} - ${_dateRange!.end.toString().split(' ')[0]}'
                       : 'Select dates',
+                  style: const TextStyle(color: Color(0xFFFF0080)),
                 ),
               ),
               if (_dateRange != null)
                 IconButton(
-                  icon: const Icon(Icons.clear, size: 16),
+                  icon: const Icon(Icons.clear, size: 16, color: Colors.white),
                   onPressed: () {
                     setState(() {
                       _dateRange = null;
@@ -664,20 +741,32 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
           // Media type filter
           Row(
             children: [
-              Icon(
+              const Icon(
                 Icons.perm_media,
                 size: 18,
-                color: Theme.of(context).colorScheme.primary,
+                color: Color(0xFFFF0080),
               ),
               const SizedBox(width: 8),
-              Text(
+              const Text(
                 'Media Type:',
-                style: Theme.of(context).textTheme.bodyMedium,
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500,
+                ),
               ),
               const SizedBox(width: 8),
               ChoiceChip(
                 label: const Text('Photos'),
+                labelStyle: TextStyle(
+                  color: _mediaType == 'photo'
+                      ? Colors.white
+                      : Colors.white.withValues(alpha: 0.7),
+                ),
                 selected: _mediaType == 'photo',
+                selectedColor: const Color(0xFFFF0080),
+                backgroundColor: Colors.white.withValues(alpha: 0.1),
+                side: BorderSide(color: Colors.white.withValues(alpha: 0.3)),
                 onSelected: (selected) {
                   setState(() {
                     _mediaType = selected ? 'photo' : null;
@@ -687,7 +776,15 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
               const SizedBox(width: 8),
               ChoiceChip(
                 label: const Text('Videos'),
+                labelStyle: TextStyle(
+                  color: _mediaType == 'video'
+                      ? Colors.white
+                      : Colors.white.withValues(alpha: 0.7),
+                ),
                 selected: _mediaType == 'video',
+                selectedColor: const Color(0xFFFF0080),
+                backgroundColor: Colors.white.withValues(alpha: 0.1),
+                side: BorderSide(color: Colors.white.withValues(alpha: 0.3)),
                 onSelected: (selected) {
                   setState(() {
                     _mediaType = selected ? 'video' : null;
@@ -703,7 +800,21 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
             width: double.infinity,
             child: ElevatedButton(
               onPressed: _applyFilters,
-              child: const Text('Apply Filters'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFFFF0080),
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+              ),
+              child: const Text(
+                'Apply Filters',
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
             ),
           ),
         ],
@@ -717,16 +828,20 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
 
     return Column(
       children: [
-        // Instagram-like post preview
+        // Instagram-like post preview with dark theme
         Expanded(
           child: Container(
             margin: const EdgeInsets.all(16),
             decoration: BoxDecoration(
-              color: Colors.white,
+              color: Colors.black.withValues(alpha: 0.8),
               borderRadius: BorderRadius.circular(16),
+              border: Border.all(
+                color: Colors.white.withValues(alpha: 0.2),
+                width: 1,
+              ),
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withAlpha((0.1 * 255).round()),
+                  color: Colors.black.withValues(alpha: 0.3),
                   blurRadius: 20,
                   offset: const Offset(0, 10),
                 ),
@@ -751,7 +866,7 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
                           fit: BoxFit.cover,
                           errorBuilder: (context, error, stackTrace) {
                             return Container(
-                              color: Colors.grey.shade300,
+                              color: Colors.grey.shade800,
                               child: Center(
                                 child: Column(
                                   mainAxisAlignment: MainAxisAlignment.center,
@@ -760,14 +875,16 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
                                       isVideo
                                           ? Icons.videocam_off
                                           : Icons.broken_image,
-                                      color: Colors.grey.shade600,
+                                      color:
+                                          Colors.white.withValues(alpha: 0.6),
                                       size: 48,
                                     ),
                                     const SizedBox(height: 8),
                                     Text(
                                       'Failed to load ${isVideo ? 'video' : 'image'}',
                                       style: TextStyle(
-                                        color: Colors.grey.shade600,
+                                        color:
+                                            Colors.white.withValues(alpha: 0.7),
                                         fontSize: 14,
                                       ),
                                     ),
@@ -815,7 +932,7 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
                                 style: const TextStyle(
                                   fontSize: 16,
                                   height: 1.4,
-                                  color: Colors.black87,
+                                  color: Colors.white,
                                 ),
                               ),
                             ),
@@ -835,11 +952,11 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
                                     horizontal: 8, vertical: 4),
                                 decoration: BoxDecoration(
                                   color: const Color(0xFFFF0080)
-                                      .withAlpha((0.1 * 255).round()),
+                                      .withValues(alpha: 0.2),
                                   borderRadius: BorderRadius.circular(12),
                                   border: Border.all(
                                     color: const Color(0xFFFF0080)
-                                        .withAlpha((0.3 * 255).round()),
+                                        .withValues(alpha: 0.5),
                                   ),
                                 ),
                                 child: Text(
@@ -863,12 +980,10 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
                               child: Container(
                                 padding: const EdgeInsets.all(16),
                                 decoration: BoxDecoration(
-                                  color: Colors.orange
-                                      .withAlpha((0.1 * 255).round()),
+                                  color: Colors.orange.withValues(alpha: 0.2),
                                   borderRadius: BorderRadius.circular(8),
                                   border: Border.all(
-                                    color: Colors.orange
-                                        .withAlpha((0.3 * 255).round()),
+                                    color: Colors.orange.withValues(alpha: 0.5),
                                   ),
                                 ),
                                 child: Row(
@@ -876,7 +991,7 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
                                   children: [
                                     Icon(
                                       Icons.edit,
-                                      color: Colors.orange.shade700,
+                                      color: Colors.orange.shade300,
                                       size: 20,
                                     ),
                                     const SizedBox(width: 8),
@@ -884,7 +999,7 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
                                       child: Text(
                                         'Add caption on review page',
                                         style: TextStyle(
-                                          color: Colors.orange.shade700,
+                                          color: Colors.orange.shade300,
                                           fontSize: 14,
                                         ),
                                       ),

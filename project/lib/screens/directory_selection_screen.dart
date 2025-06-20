@@ -17,6 +17,7 @@ class _DirectorySelectionScreenState extends State<DirectorySelectionScreen> {
   MediaCoordinator? _mediaCoordinator;
   bool _isLoading = true;
   bool _isCustomEnabled = false;
+  bool _hasChanges = false; // Track if any changes were made
 
   @override
   void initState() {
@@ -67,6 +68,7 @@ class _DirectorySelectionScreenState extends State<DirectorySelectionScreen> {
 
       setState(() {
         _isCustomEnabled = enabled;
+        _hasChanges = true; // Mark that changes were made
         _isLoading = false;
       });
     } catch (e) {
@@ -94,6 +96,7 @@ class _DirectorySelectionScreenState extends State<DirectorySelectionScreen> {
       setState(() {
         _directories =
             List<MediaDirectory>.from(_mediaCoordinator!.directories);
+        _hasChanges = true; // Mark that changes were made
         _isLoading = false;
       });
     } catch (e) {
@@ -142,6 +145,7 @@ class _DirectorySelectionScreenState extends State<DirectorySelectionScreen> {
         setState(() {
           _directories =
               List<MediaDirectory>.from(_mediaCoordinator!.directories);
+          _hasChanges = true; // Mark that changes were made
         });
       }
     } catch (e) {
@@ -191,6 +195,7 @@ class _DirectorySelectionScreenState extends State<DirectorySelectionScreen> {
       setState(() {
         _directories =
             List<MediaDirectory>.from(_mediaCoordinator!.directories);
+        _hasChanges = true; // Mark that changes were made
         _isLoading = false;
       });
     } catch (e) {
@@ -207,167 +212,176 @@ class _DirectorySelectionScreenState extends State<DirectorySelectionScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.black,
-      appBar: AppBar(
+    return WillPopScope(
+      onWillPop: () async {
+        // Return the result when navigating back
+        Navigator.of(context).pop(_hasChanges);
+        return false; // Prevent default pop behavior since we're handling it
+      },
+      child: Scaffold(
         backgroundColor: Colors.black,
-        foregroundColor: Colors.white,
-        title: const Text('Media Directories'),
-        actions: [
-          IconButton(
-            onPressed: _showDirectoryPicker,
-            icon: const Icon(Icons.add),
-            tooltip: 'Add Custom Directory',
-          ),
-        ],
-      ),
-      body: _isLoading
-          ? const Center(
-              child: CircularProgressIndicator(
-                color: Color(0xFFFF0080),
-              ),
-            )
-          : Column(
-              children: [
-                // Mode toggle section
-                Container(
-                  margin: const EdgeInsets.all(16),
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: 0.1),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(
-                      color: Colors.white.withValues(alpha: 0.2),
-                    ),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Row(
-                        children: [
-                          Icon(
-                            Icons.folder_open,
-                            color: Color(0xFFFF0080),
-                            size: 20,
-                          ),
-                          SizedBox(width: 8),
-                          Text(
-                            'Media Source',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 16,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 12),
-                      SwitchListTile(
-                        value: _isCustomEnabled,
-                        onChanged: _toggleCustomDirectories,
-                        title: const Text(
-                          'Use Custom Directories',
-                          style: TextStyle(color: Colors.white),
-                        ),
-                        subtitle: Text(
-                          _isCustomEnabled
-                              ? 'Scanning specific directories for media'
-                              : 'Using photo albums (recommended)',
-                          style: TextStyle(
-                            color: Colors.white.withValues(alpha: 0.7),
-                            fontSize: 12,
-                          ),
-                        ),
-                        activeColor: const Color(0xFFFF0080),
-                        contentPadding: EdgeInsets.zero,
-                      ),
-                    ],
-                  ),
+        appBar: AppBar(
+          backgroundColor: Colors.black,
+          foregroundColor: Colors.white,
+          title: const Text('Media Directories'),
+          actions: [
+            IconButton(
+              onPressed: _showDirectoryPicker,
+              icon: const Icon(Icons.add),
+              tooltip: 'Add Custom Directory',
+            ),
+          ],
+        ),
+        body: _isLoading
+            ? const Center(
+                child: CircularProgressIndicator(
+                  color: Color(0xFFFF0080),
                 ),
-
-                // Directories list
-                if (_isCustomEnabled) ...[
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: Row(
-                      children: [
-                        Icon(
-                          Icons.folder,
-                          color: Colors.white.withValues(alpha: 0.7),
-                          size: 18,
-                        ),
-                        const SizedBox(width: 8),
-                        Text(
-                          'Select Directories to Scan',
-                          style: TextStyle(
-                            color: Colors.white.withValues(alpha: 0.7),
-                            fontSize: 14,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                      ],
+              )
+            : Column(
+                children: [
+                  // Mode toggle section
+                  Container(
+                    margin: const EdgeInsets.all(16),
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: Colors.white.withValues(alpha: 0.2),
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 8),
-                  Expanded(
                     child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        // Existing directories list
-                        Expanded(
-                          child: ListView.builder(
-                            padding: const EdgeInsets.symmetric(horizontal: 16),
-                            itemCount: _directories.length,
-                            itemBuilder: (context, index) {
-                              final directory = _directories[index];
-                              return _buildDirectoryTile(directory);
-                            },
-                          ),
+                        const Row(
+                          children: [
+                            Icon(
+                              Icons.folder_open,
+                              color: Color(0xFFFF0080),
+                              size: 20,
+                            ),
+                            SizedBox(width: 8),
+                            Text(
+                              'Media Source',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 16,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
                         ),
-
-                        // Add Custom Directory section at the bottom
-                        _buildAddCustomDirectorySection(),
-                      ],
-                    ),
-                  ),
-                ] else ...[
-                  Expanded(
-                    child: Center(
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(
-                            Icons.photo_library,
-                            color: Colors.white.withValues(alpha: 0.4),
-                            size: 64,
+                        const SizedBox(height: 12),
+                        SwitchListTile(
+                          value: _isCustomEnabled,
+                          onChanged: _toggleCustomDirectories,
+                          title: const Text(
+                            'Use Custom Directories',
+                            style: TextStyle(color: Colors.white),
                           ),
-                          const SizedBox(height: 16),
-                          Text(
-                            'Album Mode Active',
+                          subtitle: Text(
+                            _isCustomEnabled
+                                ? 'Scanning specific directories for media'
+                                : 'Using photo albums (recommended)',
                             style: TextStyle(
                               color: Colors.white.withValues(alpha: 0.7),
-                              fontSize: 18,
+                              fontSize: 12,
+                            ),
+                          ),
+                          activeColor: const Color(0xFFFF0080),
+                          contentPadding: EdgeInsets.zero,
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  // Directories list
+                  if (_isCustomEnabled) ...[
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      child: Row(
+                        children: [
+                          Icon(
+                            Icons.folder,
+                            color: Colors.white.withValues(alpha: 0.7),
+                            size: 18,
+                          ),
+                          const SizedBox(width: 8),
+                          Text(
+                            'Select Directories to Scan',
+                            style: TextStyle(
+                              color: Colors.white.withValues(alpha: 0.7),
+                              fontSize: 14,
                               fontWeight: FontWeight.w500,
                             ),
                           ),
-                          const SizedBox(height: 8),
-                          Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 32),
-                            child: Text(
-                              'The app will use photo albums from your device\'s gallery. This is the recommended mode for most users.',
-                              textAlign: TextAlign.center,
-                              style: TextStyle(
-                                color: Colors.white.withValues(alpha: 0.5),
-                                fontSize: 14,
-                              ),
-                            ),
-                          ),
                         ],
                       ),
                     ),
-                  ),
+                    const SizedBox(height: 8),
+                    Expanded(
+                      child: Column(
+                        children: [
+                          // Existing directories list
+                          Expanded(
+                            child: ListView.builder(
+                              padding:
+                                  const EdgeInsets.symmetric(horizontal: 16),
+                              itemCount: _directories.length,
+                              itemBuilder: (context, index) {
+                                final directory = _directories[index];
+                                return _buildDirectoryTile(directory);
+                              },
+                            ),
+                          ),
+
+                          // Add Custom Directory section at the bottom
+                          _buildAddCustomDirectorySection(),
+                        ],
+                      ),
+                    ),
+                  ] else ...[
+                    Expanded(
+                      child: Center(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(
+                              Icons.photo_library,
+                              color: Colors.white.withValues(alpha: 0.4),
+                              size: 64,
+                            ),
+                            const SizedBox(height: 16),
+                            Text(
+                              'Album Mode Active',
+                              style: TextStyle(
+                                color: Colors.white.withValues(alpha: 0.7),
+                                fontSize: 18,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Padding(
+                              padding:
+                                  const EdgeInsets.symmetric(horizontal: 32),
+                              child: Text(
+                                'The app will use photo albums from your device\'s gallery. This is the recommended mode for most users.',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  color: Colors.white.withValues(alpha: 0.5),
+                                  fontSize: 14,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
                 ],
-              ],
-            ),
+              ),
+      ),
     );
   }
 

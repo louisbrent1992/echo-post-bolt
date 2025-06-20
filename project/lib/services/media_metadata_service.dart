@@ -4,8 +4,11 @@ import 'package:path/path.dart' as path;
 import 'package:path_provider/path_provider.dart';
 import 'package:exif/exif.dart';
 import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:crypto/crypto.dart';
 
 import 'directory_service.dart';
+import 'app_settings_service.dart';
 
 class MediaMetadataService extends ChangeNotifier {
   static const String _cacheFileName = 'media_metadata_cache.json';
@@ -15,19 +18,37 @@ class MediaMetadataService extends ChangeNotifier {
   DateTime? _lastCacheUpdate;
   bool _isInitialized = false;
   DirectoryService? _directoryService;
+  AppSettingsService? _appSettingsService;
 
   // Getters
   bool get isInitialized => _isInitialized;
   DateTime? get lastCacheUpdate => _lastCacheUpdate;
   Map<String, dynamic> get metadataCache => _metadataCache;
 
-  Future<void> initialize(DirectoryService directoryService) async {
+  /// Initialize the service with directory service and app settings service
+  Future<void> initialize(DirectoryService directoryService,
+      AppSettingsService appSettingsService) async {
     if (_isInitialized) return;
 
     _directoryService = directoryService;
+    _appSettingsService = appSettingsService;
+
+    // Ensure both services are initialized
+    if (!_directoryService!.isInitialized) {
+      await _directoryService!.initialize();
+    }
+    if (!_appSettingsService!.isInitialized) {
+      await _appSettingsService!.initialize();
+    }
+
     await _loadCache();
     _isInitialized = true;
-    notifyListeners();
+
+    if (kDebugMode) {
+      print('📊 MediaMetadataService initialized');
+      print(
+          '   Using AI Media Context Limit: ${_appSettingsService!.aiMediaContextLimit}');
+    }
   }
 
   Future<void> _loadCache() async {
@@ -145,25 +166,40 @@ class MediaMetadataService extends ChangeNotifier {
   }
 
   bool _isMediaFile(String extension) {
-    const mediaExtensions = {
-      '.jpg',
-      '.jpeg',
-      '.png',
-      '.gif',
-      '.bmp',
-      '.webp',
-      '.heic',
-      '.heif',
-      '.mp4',
-      '.mov',
-      '.avi',
-      '.mkv',
-      '.webm',
-      '.m4v',
-      '.3gp',
-      '.flv'
+    // Remove leading dot and convert to lowercase
+    final ext = extension.toLowerCase().replaceFirst('.', '');
+
+    // Supported image formats that Flutter can display
+    const supportedImageExtensions = {
+      'jpg',
+      'jpeg',
+      'png',
+      'gif',
+      'bmp',
+      'webp',
+      'heic',
+      'heif',
+      'tiff',
+      'tif'
     };
-    return mediaExtensions.contains(extension);
+
+    // Supported video formats
+    const supportedVideoExtensions = {
+      'mp4',
+      'mov',
+      'avi',
+      'mkv',
+      'webm',
+      'm4v',
+      '3gp',
+      'flv',
+      'wmv',
+      'mpg',
+      'mpeg'
+    };
+
+    return supportedImageExtensions.contains(ext) ||
+        supportedVideoExtensions.contains(ext);
   }
 
   Future<Map<String, dynamic>?> _extractMediaMetadata(File file) async {
@@ -290,7 +326,35 @@ class MediaMetadataService extends ChangeNotifier {
           'MediaMetadataService not initialized. Call initialize() first.');
     }
 
+    if (_appSettingsService == null) {
+      throw StateError(
+          'MediaMetadataService not initialized with AppSettingsService. Call initialize() first.');
+    }
+
+    // Check if AI media context is enabled
+    if (!_appSettingsService!.aiMediaContextEnabled) {
+      if (kDebugMode) {
+        print('🔇 AI Media Context disabled, returning empty context');
+      }
+      return {
+        'media_context': {
+          'recent_media': [],
+          'directories': [],
+          'total_count': 0,
+          'summary': {
+            'total_directories': 0,
+            'total_files': 0,
+            'date_range': null,
+            'media_types_available': <String>[]
+          }
+        }
+      };
+    }
+
     try {
+      // Get the configurable limit from settings
+      final contextLimit = _appSettingsService!.aiMediaContextLimit;
+
       // Get all enabled directories
       final directories = _directoryService!.enabledDirectories;
       final mediaItems = _metadataCache['media_items'] ?? {};
@@ -299,15 +363,105 @@ class MediaMetadataService extends ChangeNotifier {
       final mediaByLocation = _metadataCache['media_by_location'] ?? {};
       final directoriesInfo = _metadataCache['directories'] ?? {};
 
-      // Get directory information with detailed stats
+      // Use Map for automatic deduplication by media ID (same logic as Media Selection screen)
+      final Map<String, Map<String, dynamic>> uniqueMediaItems = {};
+      int totalProcessed = 0;
+
+      if (kDebugMode) {
+        print(
+            '🔍 MediaMetadataService: Building AI context with limit: $contextLimit');
+        print(
+            '🔍 MediaMetadataService: Found ${directories.length} enabled directories to search');
+      }
+
+      // Process each directory and deduplicate media items
+      for (final directory in directories) {
+        final dirPath = directory.path;
+        final dirInfo = directoriesInfo[dirPath] ?? {};
+        final mediaList =
+            (mediaByFolder[dirPath] as List<dynamic>?)?.cast<String>() ??
+                <String>[];
+
+        if (kDebugMode) {
+          print(
+              '🔍 MediaMetadataService: Processing directory "${directory.displayName}" with ${mediaList.length} media items');
+        }
+
+        // Process media items from this directory
+        for (final mediaId in mediaList) {
+          // Stop if we've reached the limit
+          if (uniqueMediaItems.length >= contextLimit) {
+            if (kDebugMode) {
+              print(
+                  '🔍 MediaMetadataService: Reached context limit of $contextLimit, stopping');
+            }
+            break;
+          }
+
+          final item = mediaItems[mediaId];
+          if (item != null) {
+            // Use media ID as the key for deduplication
+            uniqueMediaItems[mediaId] = {
+              'file_uri': item['file_uri'],
+              'file_name': path.basename(item['file_uri']),
+              'mime_type': item['mime_type'],
+              'timestamp': item['creation_time'],
+              'directory': dirPath,
+              'device_metadata': {
+                'creation_time': item['creation_time'],
+                'latitude': item['latitude'],
+                'longitude': item['longitude'],
+                'orientation': item['orientation'] ?? 1,
+                'width': item['width'] ?? 0,
+                'height': item['height'] ?? 0,
+                'file_size_bytes': item['file_size_bytes'] ?? 0,
+                'duration': item['duration'] ?? 0,
+                'bitrate': item['bitrate'],
+                'sampling_rate': item['sampling_rate'],
+                'frame_rate': item['frame_rate']
+              }
+            };
+            totalProcessed++;
+          }
+        }
+
+        // Break if we've reached the limit
+        if (uniqueMediaItems.length >= contextLimit) {
+          break;
+        }
+      }
+
+      // Convert deduplicated media back to list and sort by creation time (newest first)
+      final deduplicatedMedia = uniqueMediaItems.values.toList();
+      deduplicatedMedia.sort((a, b) {
+        final aTime = DateTime.tryParse(a['timestamp'] ?? '') ?? DateTime(1970);
+        final bTime = DateTime.tryParse(b['timestamp'] ?? '') ?? DateTime(1970);
+        return bTime.compareTo(aTime); // Newest first
+      });
+
+      // Take only the limit amount after deduplication and sorting
+      final recentMedia = deduplicatedMedia.take(contextLimit).toList();
+
+      if (kDebugMode) {
+        print(
+            '🔍 MediaMetadataService: Processed $totalProcessed total items across directories');
+        print(
+            '🔍 MediaMetadataService: After deduplication: ${uniqueMediaItems.length} unique items');
+        print(
+            '🔍 MediaMetadataService: Final AI context contains: ${recentMedia.length} items');
+      }
+
+      // Get directory information with stats
       final directoryInfos = directories.map((directory) {
         final dirPath = directory.path;
         final dirInfo = directoriesInfo[dirPath] ?? {};
-        final mediaList = mediaByFolder[dirPath] ?? [];
+        final mediaList =
+            (mediaByFolder[dirPath] as List<dynamic>?)?.cast<String>() ??
+                <String>[];
 
-        // Get the most recent 100 files in this directory
-        final recentFiles = mediaList
-            .take(100)
+        // Get sample files from this directory (limited to avoid overwhelming context)
+        final sampleFiles = mediaList
+            .take(10) // Only show first 10 files per directory as samples
             .map((id) => mediaItems[id])
             .where((item) => item != null)
             .map((item) => {
@@ -315,19 +469,6 @@ class MediaMetadataService extends ChangeNotifier {
                   'file_name': path.basename(item!['file_uri']),
                   'mime_type': item['mime_type'],
                   'timestamp': item['creation_time'],
-                  'device_metadata': {
-                    'creation_time': item['creation_time'],
-                    'latitude': item['latitude'],
-                    'longitude': item['longitude'],
-                    'orientation': item['orientation'] ?? 1,
-                    'width': item['width'] ?? 0,
-                    'height': item['height'] ?? 0,
-                    'file_size_bytes': item['file_size_bytes'] ?? 0,
-                    'duration': item['duration'] ?? 0,
-                    'bitrate': item['bitrate'],
-                    'sampling_rate': item['sampling_rate'],
-                    'frame_rate': item['frame_rate']
-                  }
                 })
             .toList();
 
@@ -339,56 +480,39 @@ class MediaMetadataService extends ChangeNotifier {
           'name': dirInfo['name'],
           'path': dirInfo['path'],
           'media_count': dirInfo['media_count'],
-          'recent_files': recentFiles,
+          'sample_files':
+              sampleFiles, // Changed from 'recent_files' to 'sample_files' for clarity
           'stats': {
             'has_location_data': locationStats['has_location'],
             'common_locations': locationStats['common_locations'],
             'date_range': dateRange,
-            'media_types': _getMediaTypesInDirectory(mediaList)
+            'media_types': _getMediaTypesInDirectory(mediaList).keys.toList()
           }
         };
       }).toList();
-
-      // Get recent media across all directories
-      final recentMedia = getRecentMedia(limit: 100)
-          .map((item) => {
-                'file_uri': item['file_uri'],
-                'file_name': path.basename(item['file_uri']),
-                'mime_type': item['mime_type'],
-                'timestamp': item['creation_time'],
-                'directory': item['folder'],
-                'device_metadata': {
-                  'creation_time': item['creation_time'],
-                  'latitude': item['latitude'],
-                  'longitude': item['longitude'],
-                  'orientation': item['orientation'] ?? 1,
-                  'width': item['width'] ?? 0,
-                  'height': item['height'] ?? 0,
-                  'file_size_bytes': item['file_size_bytes'] ?? 0,
-                  'duration': item['duration'] ?? 0,
-                  'bitrate': item['bitrate'],
-                  'sampling_rate': item['sampling_rate'],
-                  'frame_rate': item['frame_rate']
-                }
-              })
-          .toList();
 
       return {
         'media_context': {
           'recent_media': recentMedia,
           'directories': directoryInfos,
           'total_count': _metadataCache['media_items']?.length ?? 0,
+          'context_limit': contextLimit,
+          'deduplication_stats': {
+            'total_processed': totalProcessed,
+            'unique_items': uniqueMediaItems.length,
+            'final_count': recentMedia.length,
+          },
           'summary': {
             'total_directories': directories.length,
             'total_files': _metadataCache['media_items']?.length ?? 0,
             'date_range': _calculateGlobalDateRange(),
-            'media_types_available': _getAllMediaTypes()
+            'media_types_available': _getAllMediaTypes().keys.toList()
           }
         }
       };
     } catch (e) {
       if (kDebugMode) {
-        print('Error getting media context for AI: $e');
+        print('❌ Error getting media context for AI: $e');
       }
       // Return empty context on error
       return {
@@ -396,11 +520,17 @@ class MediaMetadataService extends ChangeNotifier {
           'recent_media': [],
           'directories': [],
           'total_count': 0,
+          'context_limit': _appSettingsService?.aiMediaContextLimit ?? 100,
+          'deduplication_stats': {
+            'total_processed': 0,
+            'unique_items': 0,
+            'final_count': 0,
+          },
           'summary': {
             'total_directories': 0,
             'total_files': 0,
             'date_range': null,
-            'media_types_available': []
+            'media_types_available': <String>[]
           }
         }
       };
@@ -463,7 +593,10 @@ class MediaMetadataService extends ChangeNotifier {
   }
 
   Map<String, String> _calculateGlobalDateRange() {
-    final allMediaIds = _metadataCache['media_items']?.keys.toList() ?? [];
+    final allMediaIds =
+        (_metadataCache['media_items']?.keys.toList() as List<dynamic>?)
+                ?.cast<String>() ??
+            <String>[];
     return _calculateDateRange(allMediaIds);
   }
 
@@ -482,7 +615,10 @@ class MediaMetadataService extends ChangeNotifier {
   }
 
   Map<String, int> _getAllMediaTypes() {
-    final allMediaIds = _metadataCache['media_items']?.keys.toList() ?? [];
+    final allMediaIds =
+        (_metadataCache['media_items']?.keys.toList() as List<dynamic>?)
+                ?.cast<String>() ??
+            <String>[];
     return _getMediaTypesInDirectory(allMediaIds);
   }
 
@@ -491,7 +627,9 @@ class MediaMetadataService extends ChangeNotifier {
   }
 
   List<Map<String, dynamic>> getMediaByDate(String date) {
-    final mediaIds = _metadataCache['media_by_date']?[date] ?? [];
+    final mediaIds = (_metadataCache['media_by_date']?[date] as List<dynamic>?)
+            ?.cast<String>() ??
+        <String>[];
     return mediaIds
         .map((id) => getMediaItem(id))
         .whereType<Map<String, dynamic>>()
@@ -499,7 +637,10 @@ class MediaMetadataService extends ChangeNotifier {
   }
 
   List<Map<String, dynamic>> getMediaByFolder(String folderPath) {
-    final mediaIds = _metadataCache['media_by_folder']?[folderPath] ?? [];
+    final mediaIds =
+        (_metadataCache['media_by_folder']?[folderPath] as List<dynamic>?)
+                ?.cast<String>() ??
+            <String>[];
     return mediaIds
         .map((id) => getMediaItem(id))
         .whereType<Map<String, dynamic>>()
@@ -509,7 +650,10 @@ class MediaMetadataService extends ChangeNotifier {
   List<Map<String, dynamic>> getMediaByLocation(
       double latitude, double longitude) {
     final locationKey = '$latitude,$longitude';
-    final mediaIds = _metadataCache['media_by_location']?[locationKey] ?? [];
+    final mediaIds =
+        (_metadataCache['media_by_location']?[locationKey] as List<dynamic>?)
+                ?.cast<String>() ??
+            <String>[];
     return mediaIds
         .map((id) => getMediaItem(id))
         .whereType<Map<String, dynamic>>()

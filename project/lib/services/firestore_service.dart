@@ -108,6 +108,52 @@ class FirestoreService {
     }
   }
 
+  // Delete an action by document ID (for corrupted posts)
+  Future<void> deleteActionById(String docId) async {
+    final uid = _currentUserId;
+    if (uid == null) {
+      throw Exception('User not authenticated');
+    }
+
+    try {
+      await _firestore
+          .collection('users')
+          .doc(uid)
+          .collection('actions')
+          .doc(docId)
+          .delete();
+    } catch (e) {
+      throw Exception('Failed to delete action by ID: $e');
+    }
+  }
+
+  // Clear all actions (for clear history functionality)
+  Future<void> clearAllActions() async {
+    final uid = _currentUserId;
+    if (uid == null) {
+      throw Exception('User not authenticated');
+    }
+
+    try {
+      // Get all action documents for this user
+      final querySnapshot = await _firestore
+          .collection('users')
+          .doc(uid)
+          .collection('actions')
+          .get();
+
+      // Delete all documents in batches
+      final batch = _firestore.batch();
+      for (final doc in querySnapshot.docs) {
+        batch.delete(doc.reference);
+      }
+
+      await batch.commit();
+    } catch (e) {
+      throw Exception('Failed to clear all actions: $e');
+    }
+  }
+
   // Cache media selection for a query
   Future<void> cacheMediaSelection(String query, String assetId) async {
     final uid = _currentUserId;
