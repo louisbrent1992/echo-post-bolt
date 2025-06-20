@@ -14,14 +14,14 @@ import '../services/ai_service.dart';
 import '../services/media_coordinator.dart';
 import '../widgets/mic_button.dart';
 import '../widgets/social_icon.dart';
-import '../widgets/post_preview.dart';
 import '../widgets/post_content_box.dart';
 import '../widgets/transcription_status.dart';
 import '../widgets/unified_action_button.dart';
-import '../widgets/directory_selector.dart';
+import '../widgets/unified_media_buttons.dart';
 import '../screens/media_selection_screen.dart';
 import '../screens/review_post_screen.dart';
 import '../screens/history_screen.dart';
+import '../screens/directory_selection_screen.dart';
 import '../services/firestore_service.dart';
 
 /// EchoPost Voice-to-Post Pipeline
@@ -97,6 +97,10 @@ class _CommandScreenState extends State<CommandScreen>
   // Media coordinator for centralized media handling
   late final MediaCoordinator _mediaCoordinator;
 
+  // Pre-selected media state (can be set before recording)
+  List<MediaItem> _preSelectedMedia = [];
+  bool _hasPreSelectedMedia = false;
+
   @override
   void initState() {
     super.initState();
@@ -135,7 +139,7 @@ class _CommandScreenState extends State<CommandScreen>
     super.dispose();
   }
 
-  void _resetRecordingState() {
+  void _resetRecordingState({bool clearPreSelectedMedia = false}) {
     _recordingTimer?.cancel();
     _amplitudeTimer?.cancel();
     _recordingTimer = null;
@@ -157,8 +161,17 @@ class _CommandScreenState extends State<CommandScreen>
     _hasSpeechDetected = false;
     _silenceCount = 0;
 
+    // Optionally clear pre-selected media (e.g., when user explicitly resets)
+    if (clearPreSelectedMedia) {
+      _preSelectedMedia = [];
+      _hasPreSelectedMedia = false;
+    }
+
     if (kDebugMode) {
       print('🔄 Recording state reset to idle');
+      if (clearPreSelectedMedia) {
+        print('🔄 Pre-selected media cleared');
+      }
     }
   }
 
@@ -1024,9 +1037,32 @@ class _CommandScreenState extends State<CommandScreen>
 
       if (kDebugMode) {
         print('🚀 Calling AIService.processVoiceCommand...');
+        if (_hasPreSelectedMedia) {
+          print(
+              '📎 Including ${_preSelectedMedia.length} pre-selected media items in context');
+        }
       }
 
-      final action = await aiService.processVoiceCommand(transcription);
+      // Enhanced transcription with media context if pre-selected media exists
+      String enhancedTranscription = transcription;
+      if (_hasPreSelectedMedia) {
+        final mediaDescriptions = _preSelectedMedia.map((media) {
+          final isVideo = media.mimeType.startsWith('video/');
+          final type = isVideo ? 'video' : 'image';
+          return '$type (${media.deviceMetadata.width}x${media.deviceMetadata.height})';
+        }).join(', ');
+
+        enhancedTranscription = '''$transcription
+
+MEDIA_CONTEXT: User has pre-selected the following media: $mediaDescriptions. Please include these in the final post structure by setting the media array with the existing media items.''';
+
+        if (kDebugMode) {
+          print(
+              '📝 Enhanced transcription with media context: "$enhancedTranscription"');
+        }
+      }
+
+      final action = await aiService.processVoiceCommand(enhancedTranscription);
 
       if (kDebugMode) {
         print('✅ Received SocialAction from AI service');
@@ -1058,7 +1094,35 @@ class _CommandScreenState extends State<CommandScreen>
       }
 
       final recoveredAction = await _mediaCoordinator.recoverMediaState(action);
-      final finalAction = recoveredAction ?? action;
+      var finalAction = recoveredAction ?? action;
+
+      // If we have pre-selected media and the AI didn't include media, merge them
+      if (_hasPreSelectedMedia && finalAction.content.media.isEmpty) {
+        if (kDebugMode) {
+          print('🔗 Merging pre-selected media with AI-generated action');
+        }
+
+        finalAction = SocialAction(
+          actionId: finalAction.actionId,
+          createdAt: finalAction.createdAt,
+          platforms: finalAction.platforms,
+          content: Content(
+            text: finalAction.content.text,
+            hashtags: finalAction.content.hashtags,
+            mentions: finalAction.content.mentions,
+            link: finalAction.content.link,
+            media: _preSelectedMedia, // Include pre-selected media
+          ),
+          options: finalAction.options,
+          platformData: finalAction.platformData,
+          internal: finalAction.internal,
+          mediaQuery: finalAction.mediaQuery,
+        );
+
+        // Clear pre-selected media since it's now part of the action
+        _preSelectedMedia = [];
+        _hasPreSelectedMedia = false;
+      }
 
       if (mounted) {
         setState(() {
@@ -1153,71 +1217,119 @@ class _CommandScreenState extends State<CommandScreen>
   }
 
   Future<void> _navigateToMediaSelection() async {
-    if (_currentAction == null) return;
-
     try {
       if (kDebugMode) {
-        print('🔍 Navigating to media selection with MediaCoordinator...');
+        print('🔍 Navigating to media selection...');
+        print('   Has current action: ${_currentAction != null}');
+        print('   Has pre-selected media: $_hasPreSelectedMedia');
       }
 
-      // Fetch candidates via MediaCoordinator if we have a query
+      SocialAction? actionForSelection;
       List<Map<String, dynamic>>? initialCandidates;
-      if (_currentAction!.mediaQuery != null) {
-        final query = _currentAction!.mediaQuery!;
-        final searchTerms = query.searchTerms.join(' ');
 
-        // Build date range if available
-        DateTimeRange? dateRange;
-        if (query.dateRange != null) {
-          dateRange = DateTimeRange(
-            start: query.dateRange!.startDate ??
-                DateTime.now().subtract(const Duration(days: 365)),
-            end: query.dateRange!.endDate ?? DateTime.now(),
+      if (_currentAction != null) {
+        // Post-recording: Use existing action
+        actionForSelection = _currentAction!;
+
+        // Fetch candidates if we have a media query
+        if (_currentAction!.mediaQuery != null) {
+          final query = _currentAction!.mediaQuery!;
+          final searchTerms = query.searchTerms.join(' ');
+
+          // Build date range if available
+          DateTimeRange? dateRange;
+          if (query.dateRange != null) {
+            dateRange = DateTimeRange(
+              start: query.dateRange!.startDate ??
+                  DateTime.now().subtract(const Duration(days: 365)),
+              end: query.dateRange!.endDate ?? DateTime.now(),
+            );
+          }
+
+          // Get media candidates through coordinator
+          initialCandidates = await _mediaCoordinator.getMediaForQuery(
+            searchTerms,
+            dateRange: dateRange,
+            mediaTypes: query.mediaTypes.isNotEmpty ? query.mediaTypes : null,
+            directory: query.directoryPath,
           );
         }
-
-        if (kDebugMode) {
-          print('   Search Terms: "$searchTerms"');
-          print('   Media Types: ${query.mediaTypes}');
-          print('   Date Range: ${dateRange?.toString() ?? 'None'}');
-          print('   Directory: ${query.directoryPath ?? 'All'}');
-        }
-
-        // Get media candidates through coordinator
-        initialCandidates = await _mediaCoordinator.getMediaForQuery(
-          searchTerms,
-          dateRange: dateRange,
-          mediaTypes: query.mediaTypes.isNotEmpty ? query.mediaTypes : null,
-          directory: query.directoryPath,
+      } else {
+        // Pre-selection: Create a temporary action for media selection
+        actionForSelection = SocialAction(
+          actionId: 'temp_${DateTime.now().millisecondsSinceEpoch}',
+          createdAt: DateTime.now().toIso8601String(),
+          platforms: ['instagram'], // Default platform for media selection
+          content: Content(
+            text: '',
+            hashtags: [],
+            mentions: [],
+            media: _preSelectedMedia, // Include any existing pre-selected media
+          ),
+          options: Options(),
+          platformData: PlatformData(),
+          internal: Internal(
+            originalTranscription: '',
+            aiGenerated: false,
+          ),
         );
 
-        if (kDebugMode) {
-          print('📊 Found ${initialCandidates.length} media candidates');
-        }
+        // Get general media candidates for browsing
+        initialCandidates = await _mediaCoordinator.getMediaForQuery(
+          '', // Empty search for general browsing
+          mediaTypes: ['image', 'video'], // Support both images and videos
+        );
+      }
+
+      if (kDebugMode) {
+        print('📊 Found ${initialCandidates?.length ?? 0} media candidates');
       }
 
       final updatedAction = await Navigator.push<SocialAction>(
         context,
         MaterialPageRoute(
           builder: (context) => MediaSelectionScreen(
-            action: _currentAction!,
+            action: actionForSelection!,
             initialCandidates: initialCandidates,
           ),
         ),
       );
 
       if (updatedAction != null) {
-        // Validate the updated action through coordinator before setting state
-        final validatedAction =
-            await _mediaCoordinator.recoverMediaState(updatedAction);
-        setState(() {
-          _currentAction = validatedAction ?? updatedAction;
-        });
+        if (_currentAction != null) {
+          // Post-recording: Update existing action
+          final validatedAction =
+              await _mediaCoordinator.recoverMediaState(updatedAction);
+          setState(() {
+            _currentAction = validatedAction ?? updatedAction;
+          });
 
-        if (kDebugMode) {
-          print('✅ Media selection completed and validated');
-          print(
-              '📊 Selected media count: ${_currentAction!.content.media.length}');
+          if (kDebugMode) {
+            print('✅ Post-recording media selection completed');
+            print(
+                '📊 Selected media count: ${_currentAction!.content.media.length}');
+          }
+        } else {
+          // Pre-selection: Store media for later use
+          setState(() {
+            _preSelectedMedia = List.from(updatedAction.content.media);
+            _hasPreSelectedMedia = _preSelectedMedia.isNotEmpty;
+          });
+
+          if (kDebugMode) {
+            print('✅ Pre-selection completed');
+            print('📊 Pre-selected media count: ${_preSelectedMedia.length}');
+          }
+
+          if (mounted && _hasPreSelectedMedia) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(
+                    '${_preSelectedMedia.length} media selected! Record your voice to create the post.'),
+                duration: const Duration(seconds: 3),
+              ),
+            );
+          }
         }
       }
     } catch (e) {
@@ -1307,6 +1419,15 @@ class _CommandScreenState extends State<CommandScreen>
     );
   }
 
+  void _navigateToDirectorySelection() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => const DirectorySelectionScreen(),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -1331,8 +1452,8 @@ class _CommandScreenState extends State<CommandScreen>
             child: SafeArea(
               child: Stack(
                 children: [
-                  // Main content
-                  _buildMainContent(),
+                  // Main content with ReviewPostScreen layout
+                  _buildReviewStyleLayout(),
 
                   // History button (top-right)
                   Positioned(
@@ -1356,85 +1477,66 @@ class _CommandScreenState extends State<CommandScreen>
     );
   }
 
-  Widget _buildMainContent() {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final screenHeight = constraints.maxHeight;
-        final availableHeight =
-            screenHeight - 32; // Account for top/bottom padding
+  Widget _buildReviewStyleLayout() {
+    // Grid spacing constants (matching ReviewPostScreen)
+    const double _spacing1 = 6.0;
+    const double _spacing2 = 12.0;
+    const double _spacing3 = 18.0;
+    const double _spacing4 = 24.0;
+    const double _spacing6 = 36.0;
 
-        // Calculate proportional heights for the three main sections
-        final topSectionHeight =
-            screenHeight * 0.12; // Social icons + directory selector
-        final bottomSectionHeight =
-            screenHeight * 0.25; // Recording area + transcription
-        final middleSectionHeight =
-            availableHeight - topSectionHeight - bottomSectionHeight;
+    return Column(
+      children: [
+        // Header section (60px height) - Social Icons
+        Container(
+          height: 60,
+          padding: const EdgeInsets.symmetric(horizontal: _spacing3),
+          child: _buildCommandHeader(),
+        ),
 
-        return Column(
-          children: [
-            // Top section - Social Icons + Directory Selector
-            SizedBox(
-              height: topSectionHeight,
-              child: Column(
-                children: [
-                  // Social Icons with responsive height constraint
-                  Expanded(
-                    flex: 2,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 20, vertical: 8),
-                      child: SocialIconsRow(
-                        selectedPlatforms: _currentAction?.platforms ?? [],
-                        onPlatformToggle: _togglePlatform,
-                        maxHeight: topSectionHeight * 0.6,
-                      ),
-                    ),
+        // Main content area (flexible with controlled spacing)
+        Expanded(
+          child: SingleChildScrollView(
+            physics: const BouncingScrollPhysics(),
+            child: Column(
+              children: [
+                const SizedBox(height: _spacing4),
+
+                // Media preview section (matching ReviewPostScreen dimensions)
+                _buildCommandMediaSection(),
+
+                // Post content box (main text/hashtags) - only show if we have content
+                if (_currentAction != null) ...[
+                  PostContentBox(
+                    action: _currentAction!,
+                    onEditText: null, // Disable editing in command screen
+                    onVoiceEdit:
+                        null, // Disable voice editing in command screen
                   ),
-                  // Directory selector
-                  const Expanded(
-                    flex: 1,
-                    child: DirectorySelector(),
-                  ),
+                  const SizedBox(height: _spacing3),
                 ],
-              ),
-            ),
 
-            // Middle section - Post Preview with ReviewPostScreen-style content
-            SizedBox(
-              height: middleSectionHeight,
-              child: Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-                child: Center(
-                  child: Container(
-                    constraints: BoxConstraints(
-                      maxWidth: constraints.maxWidth * 0.9,
-                      maxHeight: middleSectionHeight * 0.95,
-                    ),
-                    child: _currentAction != null
-                        ? _buildReviewStyleContent(context)
-                        : _buildEmptyPostPreview(context),
-                  ),
-                ),
-              ),
+                const SizedBox(height: _spacing6),
+              ],
             ),
+          ),
+        ),
 
-            // Bottom section - Transcription + Recording
-            SizedBox(
-              height: bottomSectionHeight,
-              child: Column(
-                children: [
-                  // Transcription status (upper part of bottom section) - now includes recording timer
-                  if (_transcription.isNotEmpty ||
-                      _recordingState == RecordingState.processing ||
-                      _recordingState == RecordingState.recording)
-                    Expanded(
-                      flex: 2,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 20),
-                        child: Center(
-                          child: TranscriptionStatus(
+        // Bottom unified action area (matching ReviewPostScreen)
+        SizedBox(
+          height: 180, // Same height as ReviewPostScreen
+          child: Column(
+            children: [
+              // Transcription status area (upper part)
+              Expanded(
+                flex: 2,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 20),
+                  child: Center(
+                    child: _transcription.isNotEmpty ||
+                            _recordingState == RecordingState.processing ||
+                            _recordingState == RecordingState.recording
+                        ? TranscriptionStatus(
                             transcription: _transcription,
                             isProcessing:
                                 _recordingState == RecordingState.processing,
@@ -1443,116 +1545,126 @@ class _CommandScreenState extends State<CommandScreen>
                             recordingDuration: _recordingDuration,
                             maxRecordingDuration: _maxRecordingDuration,
                             context: _getTranscriptionContext(),
-                          ),
-                        ),
-                      ),
-                    )
-                  else
-                    const Expanded(flex: 2, child: SizedBox()),
+                          )
+                        : const SizedBox.shrink(),
+                  ),
+                ),
+              ),
 
-                  // Unified action button area (lower part of bottom section)
-                  Expanded(
-                    flex: 3,
-                    child: SafeArea(
-                      minimum: const EdgeInsets.only(bottom: 16),
-                      child: Center(
-                        child: SizedBox(
-                          width: bottomSectionHeight * 0.6,
-                          height: bottomSectionHeight * 0.6,
-                          child: UnifiedActionButton(
-                            state: _getUnifiedButtonState(),
-                            amplitude: normalizedAmplitude,
-                            onRecordStart: _startRecording,
-                            onRecordStop: _stopRecording,
-                            onReviewPost: _navigateToReviewPost,
-                            onAddMedia: _navigateToMediaSelection,
-                          ),
-                        ),
+              // Unified action button area (lower part)
+              Expanded(
+                flex: 3,
+                child: SafeArea(
+                  minimum: const EdgeInsets.only(bottom: 16),
+                  child: Center(
+                    child: SizedBox(
+                      width: 120,
+                      height: 120,
+                      child: UnifiedActionButton(
+                        state: _getUnifiedButtonState(),
+                        amplitude: normalizedAmplitude,
+                        onRecordStart: _startRecording,
+                        onRecordStop: _stopRecording,
+                        onReviewPost: _navigateToReviewPost,
+                        onAddMedia: _navigateToMediaSelection,
                       ),
                     ),
                   ),
-                ],
-              ),
-            ),
-          ],
-        );
-      },
-    );
-  }
-
-  Widget _buildReviewStyleContent(BuildContext context) {
-    return Column(
-      children: [
-        // Main content area (flexible) - removed redundant platform indicators
-        Expanded(
-          child: SingleChildScrollView(
-            physics: const BouncingScrollPhysics(),
-            child: Column(
-              children: [
-                const SizedBox(height: 16),
-
-                // Media preview (if available)
-                if (_currentAction!.content.media.isNotEmpty) ...[
-                  _buildMediaPreview(context),
-                  const SizedBox(height: 16),
-                ],
-
-                // Post content box (main text/hashtags)
-                PostContentBox(
-                  action: _currentAction!,
-                  onEditText: null, // Disable editing in command screen
-                  onVoiceEdit: null, // Disable voice editing in command screen
                 ),
-
-                const SizedBox(height: 16),
-              ],
-            ),
+              ),
+            ],
           ),
         ),
-        // Action buttons removed - now handled by UnifiedActionButton
       ],
     );
   }
 
-  Widget _buildEmptyPostPreview(BuildContext context) {
-    return Container(
-      width: double.infinity, // Full width, edge to edge
-      height: 250, // Consistent height with media preview
-      decoration: BoxDecoration(
-        color:
-            Colors.white.withValues(alpha: 0.1), // Dark translucent background
-        border: Border.all(
-          color: Colors.white.withValues(alpha: 0.3),
-          width: 1,
+  Widget _buildCommandHeader() {
+    return Row(
+      children: [
+        // Social Icons taking up most of the space (no back button)
+        Expanded(
+          child: SocialIconsRow(
+            selectedPlatforms: _currentAction?.platforms ?? [],
+            onPlatformToggle: _togglePlatform,
+            maxHeight: 40, // Fixed height for consistency
+          ),
         ),
-      ),
-      child: const Center(
+        const SizedBox(width: 40), // Balance the history button
+      ],
+    );
+  }
+
+  Widget _buildCommandMediaSection() {
+    // Grid spacing constants (matching ReviewPostScreen)
+    const double _spacing2 = 12.0;
+    const double _spacing3 = 18.0;
+
+    return Column(
+      children: [
+        // Media preview area - full width, edge to edge (matching ReviewPostScreen)
+        Container(
+          width: double.infinity, // Full width
+          height: 250, // Same height as ReviewPostScreen
+          decoration: BoxDecoration(
+            color: Colors.grey.shade100,
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.1),
+                blurRadius: 20,
+                offset: const Offset(0, 8),
+              ),
+            ],
+          ),
+          child: (_currentAction?.content.media.isNotEmpty == true) ||
+                  _hasPreSelectedMedia
+              ? _buildMediaPreview(context)
+              : _buildEmptyMediaPlaceholder(),
+        ),
+
+        const SizedBox(height: _spacing2),
+
+        // Unified media buttons row (Directory + Media selection)
+        UnifiedMediaButtons(
+          onDirectorySelection: _navigateToDirectorySelection,
+          onMediaSelection: _navigateToMediaSelection,
+          hasMedia: (_currentAction?.content.media.isNotEmpty ?? false) ||
+              _hasPreSelectedMedia,
+        ),
+
+        const SizedBox(height: _spacing3),
+      ],
+    );
+  }
+
+  Widget _buildEmptyMediaPlaceholder() {
+    return Container(
+      color: Colors.grey.shade200,
+      child: Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Icon(
-              Icons.post_add,
-              color: Colors.white,
+              Icons.image,
+              color: Colors.grey.shade400,
               size: 48,
             ),
-            SizedBox(height: 16),
+            const SizedBox(height: 12),
             Text(
-              'Your post preview will appear here',
+              'Your image will appear here',
               style: TextStyle(
-                color: Colors.white,
+                color: Colors.grey.shade600,
                 fontSize: 16,
                 fontWeight: FontWeight.w500,
               ),
-              textAlign: TextAlign.center,
             ),
-            SizedBox(height: 8),
+            const SizedBox(height: 6),
             Text(
-              'Start recording to create your post',
+              'Select media first, then record your voice command',
               style: TextStyle(
-                color: Colors.white70,
-                fontSize: 14,
+                color: Colors.grey.shade500,
+                fontSize: 12,
               ),
-              textAlign: TextAlign.center,
             ),
           ],
         ),
@@ -1561,9 +1673,17 @@ class _CommandScreenState extends State<CommandScreen>
   }
 
   Widget _buildMediaPreview(BuildContext context) {
-    if (_currentAction!.content.media.isEmpty) return const SizedBox.shrink();
+    // Determine which media to show - action media takes precedence over pre-selected
+    List<MediaItem> mediaToShow;
+    if (_currentAction?.content.media.isNotEmpty == true) {
+      mediaToShow = _currentAction!.content.media;
+    } else if (_hasPreSelectedMedia) {
+      mediaToShow = _preSelectedMedia;
+    } else {
+      return const SizedBox.shrink();
+    }
 
-    final mediaItem = _currentAction!.content.media.first;
+    final mediaItem = mediaToShow.first;
     final isVideo = mediaItem.mimeType.startsWith('video/');
 
     return Container(
@@ -1627,13 +1747,36 @@ class _CommandScreenState extends State<CommandScreen>
                   ],
                 ),
               ),
-              child: Text(
-                '${mediaItem.deviceMetadata.width} × ${mediaItem.deviceMetadata.height}',
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w500,
-                ),
+              child: Row(
+                children: [
+                  Text(
+                    '${mediaItem.deviceMetadata.width} × ${mediaItem.deviceMetadata.height}',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                  if (_hasPreSelectedMedia && _currentAction == null) ...[
+                    const Spacer(),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFFF0080).withValues(alpha: 0.8),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: const Text(
+                        'Pre-selected',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 10,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
               ),
             ),
           ),

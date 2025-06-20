@@ -11,7 +11,6 @@ import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter/foundation.dart';
 
 import '../models/social_action.dart';
-import '../services/auth_service.dart';
 import '../services/firestore_service.dart';
 import '../services/social_post_service.dart';
 import '../services/ai_service.dart';
@@ -20,8 +19,10 @@ import '../screens/history_screen.dart';
 import '../screens/command_screen.dart';
 import '../widgets/post_content_box.dart';
 import '../widgets/unified_action_button.dart';
-import '../widgets/transcription_status.dart';
+import '../widgets/scheduling_status.dart';
 import '../screens/media_selection_screen.dart';
+import '../widgets/unified_media_buttons.dart';
+import '../screens/directory_selection_screen.dart';
 
 class VideoPlayerWidget extends StatefulWidget {
   final String fileUri;
@@ -720,8 +721,7 @@ User voice instruction: "$transcription"''';
 
                 const SizedBox(height: _spacing3),
 
-                // Schedule info
-                _buildScheduleInfo(),
+                // Scheduling moved to bottom area for cleaner layout
 
                 const SizedBox(height: _spacing6),
               ],
@@ -729,22 +729,20 @@ User voice instruction: "$transcription"''';
           ),
         ),
 
-        // Bottom unified action area (replaces old action bar)
+        // Bottom unified action area (scheduling + confirmation)
         SizedBox(
-          height:
-              180, // Increased height to accommodate transcription status + button
+          height: 180, // Height to accommodate scheduling status + button
           child: Column(
             children: [
-              // Transcription status area (upper part)
+              // Scheduling status area (upper part)
               Expanded(
                 flex: 2,
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 20),
                   child: Center(
-                    child: TranscriptionStatus(
-                      transcription: _action.content.text,
-                      context: TranscriptionContext.confirmReady,
-                      customMessage: 'Ready to post to your social networks',
+                    child: SchedulingStatus(
+                      schedule: _action.options.schedule,
+                      onEditSchedule: _editSchedule,
                     ),
                   ),
                 ),
@@ -831,27 +829,11 @@ User voice instruction: "$transcription"''';
 
         const SizedBox(height: _spacing2),
 
-        // Media selection button - full width
-        Container(
-          width: double.infinity,
-          height: 40,
-          margin: const EdgeInsets.symmetric(
-              horizontal: _spacing3), // Keep some margin for button
-          child: OutlinedButton.icon(
-            icon: const Icon(Icons.photo_library, size: 16),
-            label: Text(
-              _action.content.media.isEmpty ? 'Select Image' : 'Change Image',
-              style: const TextStyle(fontWeight: FontWeight.w500, fontSize: 13),
-            ),
-            onPressed: _navigateToMediaSelection,
-            style: OutlinedButton.styleFrom(
-              foregroundColor: const Color(0xFFFF0080),
-              side: const BorderSide(color: Color(0xFFFF0080)),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(_spacing2),
-              ),
-            ),
-          ),
+        // Unified media buttons row (Directory + Media selection)
+        UnifiedMediaButtons(
+          onDirectorySelection: _navigateToDirectorySelection,
+          onMediaSelection: _navigateToMediaSelection,
+          hasMedia: _action.content.media.isNotEmpty,
         ),
 
         const SizedBox(height: _spacing3),
@@ -930,7 +912,7 @@ User voice instruction: "$transcription"''';
             ),
             const SizedBox(height: _spacing1),
             Text(
-              'Tap "Select Image" below to choose media',
+              'Use the buttons below to select directory and media',
               style: TextStyle(
                 color: Colors.grey.shade500,
                 fontSize: 12,
@@ -985,24 +967,64 @@ User voice instruction: "$transcription"''';
           _action = updatedAction;
         });
 
-        // Update Firestore
-        final firestoreService =
-            Provider.of<FirestoreService>(context, listen: false);
-        await firestoreService.updateAction(
-          _action.actionId,
-          _action.toJson(),
-        );
+        // Only update Firestore if this is not a temporary action
+        final isTemporaryAction = _action.actionId.startsWith('temp_');
+        if (!isTemporaryAction) {
+          try {
+            // Update Firestore
+            final firestoreService =
+                Provider.of<FirestoreService>(context, listen: false);
+            await firestoreService.updateAction(
+              _action.actionId,
+              _action.toJson(),
+            );
 
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Media updated successfully! 🎉'),
-              duration: Duration(seconds: 2),
-            ),
-          );
+            if (kDebugMode) {
+              print(
+                  '💾 Media updated in Firestore for action: ${_action.actionId}');
+            }
+
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('Media updated successfully! 🎉'),
+                  duration: Duration(seconds: 2),
+                ),
+              );
+            }
+          } catch (firestoreError) {
+            if (kDebugMode) {
+              print('❌ Firestore update failed: $firestoreError');
+            }
+            // Still show success since local state was updated
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('Media updated locally (sync pending)'),
+                  duration: Duration(seconds: 2),
+                ),
+              );
+            }
+          }
+        } else {
+          if (kDebugMode) {
+            print(
+                '🔄 Skipping Firestore update for temporary action: ${_action.actionId}');
+          }
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Media updated! 🎉'),
+                duration: Duration(seconds: 2),
+              ),
+            );
+          }
         }
       }
     } catch (e) {
+      if (kDebugMode) {
+        print('❌ Media selection navigation error: $e');
+      }
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -1012,71 +1034,6 @@ User voice instruction: "$transcription"''';
         );
       }
     }
-  }
-
-  Widget _buildScheduleInfo() {
-    final isNow = _action.options.schedule == 'now';
-    final scheduleText = isNow
-        ? 'Posting immediately'
-        : 'Scheduled for ${_formatDateTime(DateTime.parse(_action.options.schedule))}';
-
-    return Container(
-      width: MediaQuery.of(context).size.width * 0.9,
-      margin: const EdgeInsets.symmetric(horizontal: _spacing3),
-      padding: const EdgeInsets.all(_spacing3),
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.1),
-        borderRadius: BorderRadius.circular(_spacing2),
-        border: Border.all(
-          color: Colors.white.withValues(alpha: 0.2),
-        ),
-      ),
-      child: Row(
-        children: [
-          Icon(
-            isNow ? Icons.send : Icons.schedule,
-            color: const Color(0xFFFF0080),
-            size: 18,
-          ),
-          const SizedBox(width: _spacing2),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  'Schedule',
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w500,
-                    color: Colors.white70,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  scheduleText,
-                  style: const TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w500,
-                    color: Colors.white,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          TextButton(
-            onPressed: _editSchedule,
-            child: const Text(
-              'Change',
-              style: TextStyle(
-                color: Color(0xFFFF0080),
-                fontWeight: FontWeight.w500,
-                fontSize: 12,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
   }
 
   Widget _buildLoadingView() {
@@ -1105,5 +1062,14 @@ User voice instruction: "$transcription"''';
   String _formatDateTime(DateTime dateTime) {
     final formatter = DateFormat('MMM d, yyyy \'at\' h:mm a');
     return formatter.format(dateTime);
+  }
+
+  void _navigateToDirectorySelection() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => const DirectorySelectionScreen(),
+      ),
+    );
   }
 }

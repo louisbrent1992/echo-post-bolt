@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:flutter/foundation.dart';
 
 import '../models/social_action.dart';
 import '../services/media_coordinator.dart';
@@ -75,25 +76,43 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
         });
       }
 
-      // Check if we have an explicit file URI
+      // Check if we have an explicit file URI - but when coming from ReviewPostScreen,
+      // we want to show the grid to allow changing media, not just preview existing media
       if (widget.action.content.media.isNotEmpty &&
           widget.action.content.media.first.fileUri.isNotEmpty) {
         final mediaItem = widget.action.content.media.first;
         if (await _mediaCoordinator.validateMediaURI(mediaItem.fileUri)) {
+          // Instead of setting _selectedMedia and returning (which shows single preview),
+          // we'll populate _mediaCandidates to show the grid view
+          final existingMediaAsCandidate = {
+            'id': 'current',
+            'file_uri': mediaItem.fileUri,
+            'mime_type': mediaItem.mimeType,
+            'device_metadata': {
+              'creation_time': mediaItem.deviceMetadata.creationTime,
+              'latitude': mediaItem.deviceMetadata.latitude,
+              'longitude': mediaItem.deviceMetadata.longitude,
+              'width': mediaItem.deviceMetadata.width,
+              'height': mediaItem.deviceMetadata.height,
+              'file_size_bytes': mediaItem.deviceMetadata.fileSizeBytes,
+            }
+          };
+
+          // Get additional media candidates to show in grid
+          final additionalCandidates = await _mediaCoordinator.getMediaForQuery(
+            '', // Empty search to get recent media
+            dateRange: null,
+            mediaTypes: null,
+          );
+
           setState(() {
-            _selectedMedia = {
-              'id': 'explicit',
-              'file_uri': mediaItem.fileUri,
-              'mime_type': mediaItem.mimeType,
-              'device_metadata': {
-                'creation_time': mediaItem.deviceMetadata.creationTime,
-                'latitude': mediaItem.deviceMetadata.latitude,
-                'longitude': mediaItem.deviceMetadata.longitude,
-                'width': mediaItem.deviceMetadata.width,
-                'height': mediaItem.deviceMetadata.height,
-                'file_size_bytes': mediaItem.deviceMetadata.fileSizeBytes,
-              }
-            };
+            // Add current media as first item, then additional candidates
+            _mediaCandidates = [
+              existingMediaAsCandidate,
+              ...additionalCandidates
+            ];
+            _selectedMedia =
+                existingMediaAsCandidate; // Pre-select the current media
             _isLoading = false;
           });
           return;
@@ -273,13 +292,27 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
         mediaQuery: widget.action.mediaQuery,
       );
 
-      // Save the updated action to Firestore
-      final firestoreService =
-          Provider.of<FirestoreService>(context, listen: false);
-      await firestoreService.updateAction(
-        updatedAction.actionId,
-        updatedAction.toJson(),
-      );
+      // Only save to Firestore if this is NOT a temporary action (pre-selection)
+      final isTemporaryAction = widget.action.actionId.startsWith('temp_');
+      if (!isTemporaryAction) {
+        // Save the updated action to Firestore for real actions
+        final firestoreService =
+            Provider.of<FirestoreService>(context, listen: false);
+        await firestoreService.updateAction(
+          updatedAction.actionId,
+          updatedAction.toJson(),
+        );
+
+        if (kDebugMode) {
+          print(
+              '💾 Updated action saved to Firestore: ${updatedAction.actionId}');
+        }
+      } else {
+        if (kDebugMode) {
+          print(
+              '🔄 Skipping Firestore update for temporary action: ${updatedAction.actionId}');
+        }
+      }
 
       // Return the updated action to the previous screen
       if (mounted) {
@@ -386,11 +419,44 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
                 // Filters section (collapsible)
                 if (_showFilters) _buildFiltersSection(),
 
-                // Single media preview or grid
+                // Media grid - always show grid when we have candidates
                 Expanded(
-                  child: _selectedMedia != null && _mediaCandidates.isEmpty
-                      ? _buildSingleMediaPreview()
-                      : _buildMediaGrid(),
+                  child: _mediaCandidates.isNotEmpty
+                      ? _buildMediaGrid() // Always show grid when we have candidates
+                      : _selectedMedia != null
+                          ? _buildSingleMediaPreview() // Only show single preview as fallback
+                          : Center(
+                              child: Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Icon(
+                                    Icons.photo_library_outlined,
+                                    size: 64,
+                                    color:
+                                        Theme.of(context).colorScheme.outline,
+                                  ),
+                                  const SizedBox(height: 16),
+                                  Text(
+                                    'No media available',
+                                    style:
+                                        Theme.of(context).textTheme.titleMedium,
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Text(
+                                    'Try enabling custom directories or adjusting filters',
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .bodyMedium
+                                        ?.copyWith(
+                                          color: Theme.of(context)
+                                              .colorScheme
+                                              .outline,
+                                        ),
+                                    textAlign: TextAlign.center,
+                                  ),
+                                ],
+                              ),
+                            ),
                 ),
 
                 // Confirm button
