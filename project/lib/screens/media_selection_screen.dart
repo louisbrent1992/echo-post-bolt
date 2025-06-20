@@ -87,15 +87,29 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
         }
       }
 
-      // Use initial candidates if provided, otherwise apply filters
-      if (widget.initialCandidates != null) {
+      // Use initial candidates if provided, otherwise get latest image as fallback
+      if (widget.initialCandidates != null &&
+          widget.initialCandidates!.isNotEmpty) {
         setState(() {
           _mediaCandidates = widget.initialCandidates!;
           _selectedMedia = null;
           _isLoading = false;
         });
       } else {
-        await _applyFilters();
+        // No candidates provided, get latest image as fallback
+        final latestImage = await _mediaCoordinator
+            .getLatestImageInDirectory(widget.action.mediaQuery?.directoryPath);
+
+        if (latestImage != null) {
+          setState(() {
+            _mediaCandidates = [latestImage];
+            _selectedMedia = null;
+            _isLoading = false;
+          });
+        } else {
+          // If no latest image found, apply filters to search for any media
+          await _applyFilters();
+        }
       }
     } catch (e) {
       if (mounted) {
@@ -231,8 +245,8 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
           ? const Center(child: CircularProgressIndicator())
           : Column(
               children: [
-                // Search query display
-                if (_searchTerms.isNotEmpty)
+                // Dynamic query status display (only show if actively searching)
+                if (_searchTerms.isNotEmpty && _mediaCandidates.isNotEmpty)
                   Padding(
                     padding: const EdgeInsets.all(16.0),
                     child: Container(
@@ -253,7 +267,7 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
                           const SizedBox(width: 8),
                           Expanded(
                             child: Text(
-                              'Searching for: "${_searchTerms.join(', ')}"',
+                              'Found ${_mediaCandidates.length} result${_mediaCandidates.length == 1 ? '' : 's'} for "${_searchTerms.join(', ')}"',
                               style: TextStyle(
                                 fontWeight: FontWeight.bold,
                                 color: Theme.of(context).colorScheme.onSurface,
@@ -565,12 +579,36 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
           child: Stack(
             fit: StackFit.expand,
             children: [
-              // Media thumbnail
+              // Media thumbnail with error handling
               ClipRRect(
                 borderRadius: BorderRadius.circular(8),
                 child: Image.file(
                   File(Uri.parse(media['file_uri']).path),
                   fit: BoxFit.cover,
+                  errorBuilder: (context, error, stackTrace) {
+                    return Container(
+                      color: Colors.grey.shade300,
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(
+                            isVideo ? Icons.videocam_off : Icons.broken_image,
+                            color: Colors.grey.shade600,
+                            size: 32,
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            'Failed to load',
+                            style: TextStyle(
+                              color: Colors.grey.shade600,
+                              fontSize: 10,
+                            ),
+                            textAlign: TextAlign.center,
+                          ),
+                        ],
+                      ),
+                    );
+                  },
                 ),
               ),
 

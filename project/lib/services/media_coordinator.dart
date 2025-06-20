@@ -193,7 +193,7 @@ class MediaCoordinator extends ChangeNotifier {
       };
 
       final candidates = await _photoManager.findAssetCandidates(searchParams);
-      final candidateMaps = _photoManager.getAssetMaps(candidates);
+      final candidateMaps = await _photoManager.getAssetMaps(candidates);
 
       // Enrich with metadata from EXIF data
       for (var media in candidateMaps) {
@@ -506,12 +506,13 @@ class MediaCoordinator extends ChangeNotifier {
   }
 
   /// Convert asset entities to maps
-  List<Map<String, dynamic>> getAssetMaps(List<AssetEntity> candidates) {
+  Future<List<Map<String, dynamic>>> getAssetMaps(
+      List<AssetEntity> candidates) async {
     if (!_isInitialized) {
       throw StateError(
           'MediaCoordinator not initialized. Call initialize() first.');
     }
-    return _photoManager.getAssetMaps(candidates);
+    return await _photoManager.getAssetMaps(candidates);
   }
 
   // ========== MediaSearchService Methods ==========
@@ -554,6 +555,67 @@ class MediaCoordinator extends ChangeNotifier {
           'MediaCoordinator not initialized. Call initialize() first.');
     }
     return await _metadataService.extractMetadata(file);
+  }
+
+  /// Gets the most recent image file URI from specified directory or all directories
+  Future<Map<String, dynamic>?> getLatestImageInDirectory(
+      String? directoryPath) async {
+    if (!_isInitialized) {
+      throw StateError(
+          'MediaCoordinator not initialized. Call initialize() first.');
+    }
+
+    try {
+      if (kDebugMode) {
+        print(
+            '🔍 MediaCoordinator: Getting latest image from directory: ${directoryPath ?? 'All'}');
+      }
+
+      final searchParams = {
+        'terms': <String>[], // No search terms, just get recent
+        'date_range': null,
+        'media_type': 'photo', // Only photos
+        'directory': directoryPath,
+      };
+
+      final candidates = await _photoManager.findAssetCandidates(searchParams);
+      if (candidates.isEmpty) {
+        if (kDebugMode) {
+          print('⚠️ MediaCoordinator: No images found in directory');
+        }
+        return null;
+      }
+
+      // Get the most recent image (first one since they're sorted by creation date desc)
+      final latestAsset = candidates.first;
+      final assetMaps = await _photoManager.getAssetMaps([latestAsset]);
+
+      if (assetMaps.isNotEmpty) {
+        final latestImage = assetMaps.first;
+
+        // Enrich with metadata
+        final fileUri = latestImage['file_uri'] as String;
+        final file = File(Uri.parse(fileUri).path);
+        if (await file.exists()) {
+          final metadata = await _metadataService.extractMetadata(file);
+          latestImage['metadata'] = metadata;
+        }
+
+        if (kDebugMode) {
+          print(
+              '✅ MediaCoordinator: Found latest image: ${latestImage['file_uri']}');
+        }
+
+        return latestImage;
+      }
+
+      return null;
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ MediaCoordinator: Error getting latest image: $e');
+      }
+      return null;
+    }
   }
 
   @override

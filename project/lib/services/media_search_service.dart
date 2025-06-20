@@ -495,24 +495,69 @@ class MediaSearchService extends ChangeNotifier {
     }
   }
 
-  List<Map<String, dynamic>> getAssetMaps(List<AssetEntity> candidates) {
-    return candidates
-        .map((asset) => {
-              'id': asset.id,
-              'file_uri': 'file://${asset.relativePath}/${asset.title}',
-              'mime_type': _getMimeType(asset),
-              'device_metadata': {
-                'creation_time': asset.createDateTime.toIso8601String(),
-                'latitude': asset.latitude,
-                'longitude': asset.longitude,
-                'width': asset.width,
-                'height': asset.height,
-                'file_size_bytes': asset.size,
-                'duration': asset.duration.toDouble(),
-                'orientation': asset.orientation,
-              }
-            })
-        .toList();
+  Future<List<Map<String, dynamic>>> getAssetMaps(
+      List<AssetEntity> candidates) async {
+    final List<Map<String, dynamic>> results = [];
+
+    for (final asset in candidates) {
+      try {
+        // Get the actual file from the asset using PhotoManager's API
+        final file = await asset.file;
+        if (file != null) {
+          results.add({
+            'id': asset.id,
+            'file_uri': file.uri.toString(),
+            'mime_type': _getMimeType(asset),
+            'device_metadata': {
+              'creation_time': asset.createDateTime.toIso8601String(),
+              'latitude': asset.latitude,
+              'longitude': asset.longitude,
+              'width': asset.width,
+              'height': asset.height,
+              'file_size_bytes': asset.size,
+              'duration': asset.duration.toDouble(),
+              'orientation': asset.orientation,
+            }
+          });
+        } else {
+          // Fallback: try to construct a reasonable path, but log the issue
+          if (kDebugMode) {
+            print(
+                '⚠️ MediaSearchService: Could not get file for asset ${asset.id}, using fallback path');
+          }
+          results.add({
+            'id': asset.id,
+            'file_uri':
+                'file://${asset.relativePath ?? ''}/${asset.title ?? asset.id}',
+            'mime_type': _getMimeType(asset),
+            'device_metadata': {
+              'creation_time': asset.createDateTime.toIso8601String(),
+              'latitude': asset.latitude,
+              'longitude': asset.longitude,
+              'width': asset.width,
+              'height': asset.height,
+              'file_size_bytes': asset.size,
+              'duration': asset.duration.toDouble(),
+              'orientation': asset.orientation,
+            }
+          });
+        }
+      } catch (e) {
+        if (kDebugMode) {
+          print(
+              '❌ MediaSearchService: Error getting file for asset ${asset.id}: $e');
+        }
+        // Skip this asset if we can't get its file
+        continue;
+      }
+    }
+
+    if (kDebugMode) {
+      print(
+          '🔍 MediaSearchService: Converted ${candidates.length} assets to ${results.length} maps');
+    }
+
+    return results;
   }
 
   String _getMimeType(AssetEntity asset) {
