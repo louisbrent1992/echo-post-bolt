@@ -504,6 +504,9 @@ class MediaSearchService extends ChangeNotifier {
         // Get the actual file from the asset using PhotoManager's API
         final file = await asset.file;
         if (file != null) {
+          // Get actual file size in bytes
+          final fileSizeBytes = await file.length();
+
           results.add({
             'id': asset.id,
             'file_uri': file.uri.toString(),
@@ -514,7 +517,7 @@ class MediaSearchService extends ChangeNotifier {
               'longitude': asset.longitude,
               'width': asset.width,
               'height': asset.height,
-              'file_size_bytes': asset.size,
+              'file_size_bytes': fileSizeBytes,
               'duration': asset.duration.toDouble(),
               'orientation': asset.orientation,
             }
@@ -536,7 +539,7 @@ class MediaSearchService extends ChangeNotifier {
               'longitude': asset.longitude,
               'width': asset.width,
               'height': asset.height,
-              'file_size_bytes': asset.size,
+              'file_size_bytes': 0, // Unknown file size for fallback
               'duration': asset.duration.toDouble(),
               'orientation': asset.orientation,
             }

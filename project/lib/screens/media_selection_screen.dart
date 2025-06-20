@@ -32,11 +32,22 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
   String? _mediaType;
   List<String> _searchTerms = [];
 
+  // Search functionality
+  late final TextEditingController _searchController;
+  bool _isSearching = false;
+
   @override
   void initState() {
     super.initState();
     _mediaCoordinator = Provider.of<MediaCoordinator>(context, listen: false);
+    _searchController = TextEditingController();
     _initializeScreen();
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
   }
 
   Future<void> _initializeScreen() async {
@@ -50,6 +61,7 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
         final query = widget.action.mediaQuery!;
         setState(() {
           _searchTerms = query.searchTerms;
+          _searchController.text = query.searchTerms.join(' ');
           if (query.dateRange != null) {
             _dateRange = DateTimeRange(
               start: query.dateRange!.startDate ?? DateTime.now(),
@@ -152,6 +164,35 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
     }
   }
 
+  Future<void> _fetchMedia() async {
+    setState(() {
+      _isSearching = true;
+    });
+
+    try {
+      final candidates = await _mediaCoordinator.getMediaForQuery(
+        _searchTerms.join(' '),
+        dateRange: _dateRange,
+        mediaTypes: _mediaType != null ? [_mediaType!] : null,
+      );
+
+      setState(() {
+        _mediaCandidates = candidates;
+        _selectedMedia = null;
+        _isSearching = false;
+      });
+    } catch (e) {
+      setState(() {
+        _isSearching = false;
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to search media: $e')),
+        );
+      }
+    }
+  }
+
   Future<void> _confirmSelection() async {
     if (_selectedMedia == null) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -176,9 +217,15 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
               DateTime.now().toIso8601String(),
           latitude: deviceMetadata['latitude']?.toDouble(),
           longitude: deviceMetadata['longitude']?.toDouble(),
-          width: deviceMetadata['width'] ?? 0,
-          height: deviceMetadata['height'] ?? 0,
-          fileSizeBytes: deviceMetadata['file_size_bytes'] ?? 0,
+          orientation: (deviceMetadata['orientation'] as num?)?.toInt() ?? 1,
+          width: (deviceMetadata['width'] as num?)?.toInt() ?? 0,
+          height: (deviceMetadata['height'] as num?)?.toInt() ?? 0,
+          fileSizeBytes:
+              (deviceMetadata['file_size_bytes'] as num?)?.toInt() ?? 0,
+          duration: deviceMetadata['duration']?.toDouble(),
+          bitrate: (deviceMetadata['bitrate'] as num?)?.toInt(),
+          samplingRate: (deviceMetadata['sampling_rate'] as num?)?.toInt(),
+          frameRate: deviceMetadata['frame_rate']?.toDouble(),
         ),
       );
 
@@ -319,8 +366,6 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
   }
 
   Widget _buildSourceIndicator() {
-    if (_mediaCoordinator == null) return const SizedBox.shrink();
-
     final isCustomEnabled = _mediaCoordinator.isCustomDirectoriesEnabled;
     final enabledCount = _mediaCoordinator.enabledDirectories.length;
 
@@ -379,6 +424,77 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // Search field
+          Row(
+            children: [
+              Icon(
+                Icons.search,
+                size: 18,
+                color: Theme.of(context).colorScheme.primary,
+              ),
+              const SizedBox(width: 8),
+              Text(
+                'Search:',
+                style: Theme.of(context).textTheme.bodyMedium,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: TextField(
+                  controller: _searchController,
+                  decoration: InputDecoration(
+                    hintText: 'Enter search terms...',
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 8,
+                    ),
+                    suffixIcon: _isSearching
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : IconButton(
+                            icon: const Icon(Icons.search),
+                            onPressed: () {
+                              setState(() {
+                                _searchTerms = _searchController.text
+                                    .trim()
+                                    .split(' ')
+                                    .where((term) => term.isNotEmpty)
+                                    .toList();
+                              });
+                              _fetchMedia();
+                            },
+                          ),
+                  ),
+                  onChanged: (text) {
+                    setState(() {
+                      _searchTerms = text
+                          .trim()
+                          .split(' ')
+                          .where((term) => term.isNotEmpty)
+                          .toList();
+                    });
+                  },
+                  onSubmitted: (text) {
+                    setState(() {
+                      _searchTerms = text
+                          .trim()
+                          .split(' ')
+                          .where((term) => term.isNotEmpty)
+                          .toList();
+                    });
+                    _fetchMedia();
+                  },
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+
           // Date range filter
           Row(
             children: [
