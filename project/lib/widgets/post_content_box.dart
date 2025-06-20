@@ -25,24 +25,18 @@ class PostContentBox extends StatelessWidget {
     final mentions = action.content.mentions;
     final hasContent = caption.isNotEmpty || hashtags.isNotEmpty;
 
-    if (kDebugMode) {
-      if (caption.isEmpty && hashtags.isEmpty) {
-        print('🔍 PostContentBox Debug: No content found');
-        print('   Caption: "$caption"');
-        print('   Hashtags: $hashtags');
-        print('   Mentions: $mentions');
-      } else {
-        print('✅ PostContentBox Debug: Content available');
-        print('   Caption: "$caption"');
-        print('   Hashtags: $hashtags');
-      }
+    // Only log debug info when content is actually available to avoid console clutter
+    if (kDebugMode && hasContent) {
+      print('✅ PostContentBox Debug: Content available');
+      print('   Caption: "$caption"');
+      print('   Hashtags: $hashtags');
     }
 
     return Container(
       width: double.infinity, // Full width, edge to edge
       constraints: const BoxConstraints(
         minHeight: 120,
-        maxHeight: 300,
+        maxHeight: 200,
       ),
       decoration: BoxDecoration(
         // Sleek dark translucent background
@@ -62,11 +56,8 @@ class PostContentBox extends StatelessWidget {
           // Header with edit controls
           _buildHeader(context),
 
-          // Content area
-          Flexible(
-            child:
-                _buildContent(context, caption, hashtags, mentions, hasContent),
-          ),
+          // Content area - now scrollable
+          _buildContent(context, caption, hashtags, mentions, hasContent),
         ],
       ),
     );
@@ -74,7 +65,7 @@ class PostContentBox extends StatelessWidget {
 
   Widget _buildHeader(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.fromLTRB(18, 15, 12, 0),
+      padding: const EdgeInsets.fromLTRB(18, 8, 12, 0),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
@@ -113,8 +104,8 @@ class PostContentBox extends StatelessWidget {
                         ? 'Processing...'
                         : 'Add text with voice',
                 constraints: const BoxConstraints(
-                  minWidth: 30,
-                  minHeight: 30,
+                  minWidth: 26,
+                  minHeight: 26,
                 ),
                 padding: EdgeInsets.zero,
               ),
@@ -123,8 +114,8 @@ class PostContentBox extends StatelessWidget {
                 onPressed: onEditText,
                 tooltip: 'Edit caption',
                 constraints: const BoxConstraints(
-                  minWidth: 30,
-                  minHeight: 30,
+                  minWidth: 26,
+                  minHeight: 26,
                 ),
                 padding: EdgeInsets.zero,
               ),
@@ -137,156 +128,130 @@ class PostContentBox extends StatelessWidget {
 
   Widget _buildContent(BuildContext context, String caption,
       List<String> hashtags, List<String> mentions, bool hasContent) {
-    return Container(
-      padding: const EdgeInsets.fromLTRB(18, 12, 18, 18),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // Processing indicator
-          if (isProcessingVoice) ...[
-            Container(
-              padding: const EdgeInsets.all(12),
-              margin: const EdgeInsets.only(bottom: 12),
-              decoration: BoxDecoration(
-                color: const Color(0xFFFF0080).withValues(alpha: 0.1),
-                borderRadius: BorderRadius.circular(9),
-              ),
-              child: const Row(
-                children: [
-                  SizedBox(
-                    width: 14,
-                    height: 14,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      valueColor: AlwaysStoppedAnimation<Color>(
-                        Color(0xFFFF0080),
+    return Expanded(
+      child: SingleChildScrollView(
+        physics: const BouncingScrollPhysics(),
+        padding: const EdgeInsets.fromLTRB(18, 8, 18, 18),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (hasContent) ...[
+              // Caption text
+              if (caption.isNotEmpty) ...[
+                Text(
+                  caption,
+                  style: const TextStyle(
+                    fontSize: 17,
+                    height: 1.4,
+                    color: Colors.white,
+                    fontWeight: FontWeight.w400,
+                  ),
+                ),
+                if (hashtags.isNotEmpty || mentions.isNotEmpty)
+                  const SizedBox(height: 15),
+              ],
+
+              // Hashtags and mentions
+              if (hashtags.isNotEmpty || mentions.isNotEmpty) ...[
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: [
+                    // Hashtags
+                    ...hashtags.map((tag) => Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 6),
+                          decoration: BoxDecoration(
+                            color:
+                                const Color(0xFFFF0080).withValues(alpha: 0.15),
+                            borderRadius: BorderRadius.circular(18),
+                            border: Border.all(
+                              color: const Color(0xFFFF0080)
+                                  .withValues(alpha: 0.3),
+                              width: 1,
+                            ),
+                          ),
+                          child: Text(
+                            '#$tag',
+                            style: const TextStyle(
+                              color: Color(0xFFFF0080),
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        )),
+
+                    // Mentions
+                    ...mentions.map((mention) => Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: Colors.blue.withValues(alpha: 0.15),
+                            borderRadius: BorderRadius.circular(18),
+                            border: Border.all(
+                              color: Colors.blue.withValues(alpha: 0.3),
+                              width: 1,
+                            ),
+                          ),
+                          child: Text(
+                            '@$mention',
+                            style: const TextStyle(
+                              color: Colors.blue,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        )),
+                  ],
+                ),
+              ],
+            ] else ...[
+              // Empty state - properly centered with minimum height
+              Container(
+                constraints: const BoxConstraints(minHeight: 80),
+                child: Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.1),
+                          shape: BoxShape.circle,
+                        ),
+                        child: Icon(
+                          Icons.edit_note,
+                          color: Colors.white.withValues(alpha: 0.6),
+                          size: 28,
+                        ),
                       ),
-                    ),
+                      const SizedBox(height: 12),
+                      Text(
+                        'Your post content will appear here',
+                        style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.8),
+                          fontSize: 15,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        'Use the microphone to dictate or the pencil to type',
+                        style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.6),
+                          fontSize: 13,
+                          height: 1.3,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                    ],
                   ),
-                  SizedBox(width: 9),
-                  Text(
-                    'Processing your voice edit...',
-                    style: TextStyle(
-                      color: Color(0xFFFF0080),
-                      fontSize: 12,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-
-          if (hasContent) ...[
-            // Caption text
-            if (caption.isNotEmpty) ...[
-              Text(
-                caption,
-                style: const TextStyle(
-                  fontSize: 17,
-                  height: 1.4,
-                  color: Colors.white,
-                  fontWeight: FontWeight.w400,
                 ),
               ),
-              if (hashtags.isNotEmpty || mentions.isNotEmpty)
-                const SizedBox(height: 15),
             ],
-
-            // Hashtags and mentions
-            if (hashtags.isNotEmpty || mentions.isNotEmpty) ...[
-              Wrap(
-                spacing: 6,
-                runSpacing: 6,
-                children: [
-                  ...hashtags.map((tag) => _buildHashtagChip(tag)),
-                  ...mentions.map((mention) => _buildMentionChip(mention)),
-                ],
-              ),
-            ],
-          ] else ...[
-            // Empty state
-            Container(
-              padding: const EdgeInsets.all(15),
-              decoration: BoxDecoration(
-                color: Colors.white
-                    .withValues(alpha: 0.1), // Dark translucent background
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(
-                  color: Colors.white.withValues(alpha: 0.2), // Light border
-                ),
-              ),
-              child: Column(
-                children: [
-                  Icon(
-                    Icons.text_fields,
-                    color: Colors.white60, // White icon
-                    size: 24,
-                  ),
-                  const SizedBox(height: 9),
-                  Text(
-                    'No caption or hashtags yet',
-                    style: TextStyle(
-                      color: Colors.white, // White text
-                      fontSize: 14,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                  const SizedBox(height: 3),
-                  Text(
-                    'Use the buttons above to add content',
-                    style: TextStyle(
-                      color: Colors.white70, // Light white text
-                      fontSize: 12,
-                    ),
-                  ),
-                ],
-              ),
-            ),
           ],
-        ],
-      ),
-    );
-  }
-
-  Widget _buildHashtagChip(String tag) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
-      decoration: BoxDecoration(
-        color: const Color(0xFFFF0080).withValues(alpha: 0.1),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: const Color(0xFFFF0080).withValues(alpha: 0.3),
-        ),
-      ),
-      child: Text(
-        '#$tag',
-        style: const TextStyle(
-          color: Color(0xFFFF0080),
-          fontSize: 14,
-          fontWeight: FontWeight.w500,
-        ),
-      ),
-    );
-  }
-
-  Widget _buildMentionChip(String mention) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
-      decoration: BoxDecoration(
-        color: Colors.blue.withValues(alpha: 0.1),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: Colors.blue.withValues(alpha: 0.3),
-        ),
-      ),
-      child: Text(
-        '@$mention',
-        style: const TextStyle(
-          color: Colors.blue,
-          fontSize: 14,
-          fontWeight: FontWeight.w500,
         ),
       ),
     );

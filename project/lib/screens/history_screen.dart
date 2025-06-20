@@ -10,6 +10,7 @@ import '../services/firestore_service.dart';
 import '../services/social_post_service.dart';
 import '../services/auth_service.dart';
 import '../screens/command_screen.dart';
+import '../widgets/social_icon.dart';
 
 class HistoryScreen extends StatefulWidget {
   const HistoryScreen({super.key});
@@ -28,25 +29,22 @@ class _HistoryScreenState extends State<HistoryScreen> {
     return Scaffold(
       backgroundColor:
           Colors.transparent, // Make scaffold transparent for gradient
-      appBar: AppBar(
-        title:
-            const Text('Post History', style: TextStyle(color: Colors.white)),
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        iconTheme: const IconThemeData(color: Colors.white),
-        leading: IconButton(
-          icon: const Icon(Icons.home, color: Colors.white),
-          onPressed: () {
-            // Navigate to home (Command Screen) instead of just popping
-            Navigator.pushAndRemoveUntil(
-              context,
-              MaterialPageRoute(builder: (context) => const CommandScreen()),
-              (route) => false,
-            );
-          },
-        ),
-        actions: [
-          PopupMenuButton<String>(
+      appBar: PreferredSize(
+        preferredSize: const Size.fromHeight(60),
+        child: TitleHeader(
+          title: 'Post History',
+          leftAction: IconButton(
+            icon: const Icon(Icons.home, color: Colors.white),
+            onPressed: () {
+              // Navigate to home (Command Screen) instead of just popping
+              Navigator.pushAndRemoveUntil(
+                context,
+                MaterialPageRoute(builder: (context) => const CommandScreen()),
+                (route) => false,
+              );
+            },
+          ),
+          rightAction: PopupMenuButton<String>(
             icon: const Icon(Icons.more_vert, color: Colors.white),
             color: const Color(0xFF2A2A2A),
             onSelected: (value) {
@@ -83,7 +81,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
               ),
             ],
           ),
-        ],
+        ),
       ),
       body: Container(
         decoration: const BoxDecoration(

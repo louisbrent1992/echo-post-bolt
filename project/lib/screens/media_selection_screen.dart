@@ -7,6 +7,7 @@ import '../models/social_action.dart';
 import '../services/media_coordinator.dart';
 import '../services/firestore_service.dart';
 import '../screens/directory_selection_screen.dart';
+import '../widgets/social_icon.dart';
 
 class MediaSelectionScreen extends StatefulWidget {
   final SocialAction action;
@@ -322,14 +323,15 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
     return Scaffold(
       backgroundColor:
           Colors.transparent, // Make scaffold transparent for gradient
-      appBar: AppBar(
-        title:
-            const Text('Select Media', style: TextStyle(color: Colors.white)),
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        iconTheme: const IconThemeData(color: Colors.white),
-        actions: [
-          IconButton(
+      appBar: PreferredSize(
+        preferredSize: const Size.fromHeight(60),
+        child: TitleHeader(
+          title: 'Select Media',
+          leftAction: IconButton(
+            icon: const Icon(Icons.arrow_back, color: Colors.white),
+            onPressed: () => Navigator.pop(context),
+          ),
+          rightAction: IconButton(
             icon: Icon(
               _showFilters ? Icons.filter_list_off : Icons.filter_list,
               color: Colors.white,
@@ -340,7 +342,7 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
               });
             },
           ),
-        ],
+        ),
       ),
       body: Container(
         decoration: const BoxDecoration(

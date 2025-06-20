@@ -23,6 +23,7 @@ import '../widgets/scheduling_status.dart';
 import '../screens/media_selection_screen.dart';
 import '../widgets/unified_media_buttons.dart';
 import '../screens/directory_selection_screen.dart';
+import '../widgets/social_icon.dart';
 
 class VideoPlayerWidget extends StatefulWidget {
   final String fileUri;
@@ -129,14 +130,13 @@ class _ReviewPostScreenState extends State<ReviewPostScreen> {
   // Media coordinator for validation
   late final MediaCoordinator _mediaCoordinator;
 
-  // Grid spacing constants (multiples of 6 for consistency)
+  // Systematic grid spacing constants (multiples of 6 for visual harmony)
   static const double _gridUnit = 6.0;
-  static const double _spacing1 = _gridUnit; // 6px
-  static const double _spacing2 = _gridUnit * 2; // 12px
-  static const double _spacing3 = _gridUnit * 3; // 18px
-  static const double _spacing4 = _gridUnit * 4; // 24px
-  static const double _spacing5 = _gridUnit * 5; // 30px
-  static const double _spacing6 = _gridUnit * 6; // 36px
+  static const double _spacing1 = _gridUnit; // 6px - minimal spacing
+  static const double _spacing2 = _gridUnit * 2; // 12px - small spacing
+  static const double _spacing3 = _gridUnit * 3; // 18px - medium spacing
+  static const double _spacing4 = _gridUnit * 4; // 24px - large spacing
+  static const double _spacing5 = _gridUnit * 5; // 30px - extra large spacing
 
   @override
   void initState() {
@@ -704,12 +704,16 @@ User voice instruction: "$transcription"''';
             physics: const BouncingScrollPhysics(),
             child: Column(
               children: [
-                const SizedBox(height: _spacing4),
+                const SizedBox(
+                    height: _spacing4), // 24px - consistent top spacing
 
                 // Media preview (if available) or placeholder
                 _buildMediaSection(),
 
                 // Post content box (main text/hashtags)
+                const SizedBox(
+                    height:
+                        _spacing1), // 6px - reduced spacing between media buttons and post content (matching CommandScreen)
                 PostContentBox(
                   action: _action,
                   isRecording: _isRecording,
@@ -719,11 +723,15 @@ User voice instruction: "$transcription"''';
                       _isRecording ? _stopVoiceRecording : _startVoiceRecording,
                 ),
 
-                const SizedBox(height: _spacing3),
+                const SizedBox(
+                    height:
+                        _spacing5), // 30px - proportional spacing to scheduling area (matching CommandScreen)
 
                 // Scheduling moved to bottom area for cleaner layout
 
-                const SizedBox(height: _spacing6),
+                const SizedBox(
+                    height:
+                        _spacing2), // 12px - final spacing before bottom area (matching CommandScreen)
               ],
             ),
           ),
@@ -774,34 +782,21 @@ User voice instruction: "$transcription"''';
   }
 
   Widget _buildHeader() {
-    return Row(
-      children: [
-        IconButton(
-          onPressed: () => Navigator.pop(context),
-          icon: const Icon(
-            Icons.arrow_back,
-            color: Colors.white,
-            size: 24,
-          ),
-          padding: EdgeInsets.zero,
-          constraints: const BoxConstraints(
-            minWidth: 40,
-            minHeight: 40,
-          ),
+    return TitleHeader(
+      title: 'Review Your Post',
+      leftAction: IconButton(
+        onPressed: () => Navigator.pop(context),
+        icon: const Icon(
+          Icons.arrow_back,
+          color: Colors.white,
+          size: 24,
         ),
-        const Expanded(
-          child: Text(
-            'Review Your Post',
-            style: TextStyle(
-              color: Colors.white,
-              fontSize: 18,
-              fontWeight: FontWeight.w600,
-            ),
-            textAlign: TextAlign.center,
-          ),
+        padding: EdgeInsets.zero,
+        constraints: const BoxConstraints(
+          minWidth: 40,
+          minHeight: 40,
         ),
-        const SizedBox(width: 40), // Balance the back button
-      ],
+      ),
     );
   }
 
@@ -827,7 +822,7 @@ User voice instruction: "$transcription"''';
               : _buildMediaPreview(),
         ),
 
-        const SizedBox(height: _spacing2),
+        const SizedBox(height: _spacing2), // 12px - consistent spacing
 
         // Unified media buttons row (Directory + Media selection)
         UnifiedMediaButtons(
@@ -836,7 +831,9 @@ User voice instruction: "$transcription"''';
           hasMedia: _action.content.media.isNotEmpty,
         ),
 
-        const SizedBox(height: _spacing3),
+        const SizedBox(
+            height:
+                _spacing2), // 12px - consistent spacing after buttons (matching CommandScreen)
       ],
     );
   }

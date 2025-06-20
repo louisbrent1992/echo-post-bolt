@@ -101,6 +101,9 @@ class _CommandScreenState extends State<CommandScreen>
   List<MediaItem> _preSelectedMedia = [];
   bool _hasPreSelectedMedia = false;
 
+  // Welcome dialog state
+  bool _hasShownWelcome = false;
+
   @override
   void initState() {
     super.initState();
@@ -1029,7 +1032,9 @@ class _CommandScreenState extends State<CommandScreen>
     }
 
     try {
-      if (!mounted) return;
+      if (!mounted) {
+        return;
+      }
 
       final aiService = Provider.of<AIService>(context, listen: false);
       final firestoreService =
@@ -1086,12 +1091,29 @@ class _CommandScreenState extends State<CommandScreen>
         print('🔍 Media Query: "${action.mediaQuery}"');
       }
 
+      // Ensure default platforms are selected if none specified
+      final defaultPlatforms = ['instagram', 'twitter', 'facebook', 'tiktok'];
+      final platformsToUse =
+          action.platforms.isEmpty ? defaultPlatforms : action.platforms;
+
+      // Create action with proper platform defaults
+      final actionWithPlatforms = SocialAction(
+        actionId: action.actionId,
+        createdAt: action.createdAt,
+        platforms: platformsToUse,
+        content: action.content,
+        options: action.options,
+        platformData: action.platformData,
+        internal: action.internal,
+        mediaQuery: action.mediaQuery,
+      );
+
       // Validate the created SocialAction
-      _validateSocialAction(action, transcription);
+      _validateSocialAction(actionWithPlatforms, transcription);
 
       // Save the action to Firestore
       try {
-        await firestoreService.saveAction(action.toJson());
+        await firestoreService.saveAction(actionWithPlatforms.toJson());
         if (kDebugMode) {
           print('💾 Saved action to Firestore');
         }
@@ -1107,8 +1129,9 @@ class _CommandScreenState extends State<CommandScreen>
         print('🔄 Using MediaCoordinator to recover/validate media state...');
       }
 
-      final recoveredAction = await _mediaCoordinator.recoverMediaState(action);
-      var finalAction = recoveredAction ?? action;
+      final recoveredAction =
+          await _mediaCoordinator.recoverMediaState(actionWithPlatforms);
+      var finalAction = recoveredAction ?? actionWithPlatforms;
 
       // If we have pre-selected media and the AI didn't include media, merge them
       if (_hasPreSelectedMedia && finalAction.content.media.isEmpty) {
@@ -1175,6 +1198,9 @@ class _CommandScreenState extends State<CommandScreen>
             print('⚠️ Action has no media or media query');
           }
         }
+
+        // Check if post is now complete and advance automatically
+        await _checkAndAdvanceToReview();
       }
     } catch (e) {
       if (kDebugMode) {
@@ -1299,8 +1325,14 @@ class _CommandScreenState extends State<CommandScreen>
         print('📊 Found ${initialCandidates?.length ?? 0} media candidates');
       }
 
-      final updatedAction = await Navigator.push<SocialAction>(
-        context,
+      // Capture context before navigation
+      if (!mounted) {
+        return;
+      }
+      final navigator = Navigator.of(context);
+      final scaffoldMessenger = ScaffoldMessenger.of(context);
+
+      final updatedAction = await navigator.push<SocialAction>(
         MaterialPageRoute(
           builder: (context) => MediaSelectionScreen(
             action: actionForSelection!,
@@ -1314,21 +1346,30 @@ class _CommandScreenState extends State<CommandScreen>
           // Post-recording: Update existing action
           final validatedAction =
               await _mediaCoordinator.recoverMediaState(updatedAction);
-          setState(() {
-            _currentAction = validatedAction ?? updatedAction;
-          });
+          if (mounted) {
+            setState(() {
+              _currentAction = validatedAction ?? updatedAction;
+            });
+          }
 
           if (kDebugMode) {
             print('✅ Post-recording media selection completed');
             print(
                 '📊 Selected media count: ${_currentAction!.content.media.length}');
           }
+
+          // Check if post is now complete and advance automatically
+          if (mounted) {
+            await _checkAndAdvanceToReview();
+          }
         } else {
           // Pre-selection: Store media for later use
-          setState(() {
-            _preSelectedMedia = List.from(updatedAction.content.media);
-            _hasPreSelectedMedia = _preSelectedMedia.isNotEmpty;
-          });
+          if (mounted) {
+            setState(() {
+              _preSelectedMedia = List.from(updatedAction.content.media);
+              _hasPreSelectedMedia = _preSelectedMedia.isNotEmpty;
+            });
+          }
 
           if (kDebugMode) {
             print('✅ Pre-selection completed');
@@ -1336,13 +1377,16 @@ class _CommandScreenState extends State<CommandScreen>
           }
 
           if (mounted && _hasPreSelectedMedia) {
-            ScaffoldMessenger.of(context).showSnackBar(
+            scaffoldMessenger.showSnackBar(
               SnackBar(
                 content: Text(
                     '${_preSelectedMedia.length} media selected! Record your voice to create the post.'),
                 duration: const Duration(seconds: 3),
               ),
             );
+
+            // Check if post is now complete and advance automatically
+            await _checkAndAdvanceToReview();
           }
         }
       }
@@ -1364,6 +1408,10 @@ class _CommandScreenState extends State<CommandScreen>
 
   Future<void> _navigateToReviewPost() async {
     if (_currentAction == null) return;
+
+    // Capture context before async operations
+    final navigator = Navigator.of(context);
+    final scaffoldMessenger = ScaffoldMessenger.of(context);
 
     try {
       if (kDebugMode) {
@@ -1392,8 +1440,9 @@ class _CommandScreenState extends State<CommandScreen>
         }
       }
 
-      final result = await Navigator.push(
-        context,
+      if (!mounted) return;
+
+      final result = await navigator.push(
         MaterialPageRoute(
           builder: (context) => ReviewPostScreen(action: actionToReview),
         ),
@@ -1404,9 +1453,11 @@ class _CommandScreenState extends State<CommandScreen>
         if (kDebugMode) {
           print('✅ Post published successfully, resetting state');
         }
-        setState(() {
-          _resetRecordingState();
-        });
+        if (mounted) {
+          setState(() {
+            _resetRecordingState();
+          });
+        }
       }
     } catch (e) {
       if (kDebugMode) {
@@ -1414,7 +1465,7 @@ class _CommandScreenState extends State<CommandScreen>
       }
 
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
+        scaffoldMessenger.showSnackBar(
           SnackBar(
             content: Text('Failed to prepare post for review: $e'),
             duration: const Duration(seconds: 3),
@@ -1442,6 +1493,206 @@ class _CommandScreenState extends State<CommandScreen>
     );
   }
 
+  // Voice recording for interactive editing (integrated with main recording system)
+  Future<void> _startVoiceEditing() async {
+    // Use the main recording system instead of separate voice editing
+    if (_recordingState == RecordingState.idle) {
+      await _startRecording();
+    }
+  }
+
+  Future<void> _stopVoiceEditing() async {
+    // Use the main recording system
+    if (_recordingState == RecordingState.recording) {
+      await _stopRecording();
+    }
+  }
+
+  Future<void> _editPostText() async {
+    // Capture dependencies before async operations
+    final firestoreService =
+        Provider.of<FirestoreService>(context, listen: false);
+    final scaffoldMessenger = ScaffoldMessenger.of(context);
+    final textController =
+        TextEditingController(text: _currentAction?.content.text ?? '');
+
+    final result = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: Colors.black.withValues(alpha: 0.9),
+        title: const Text('Edit Post Content',
+            style: TextStyle(color: Colors.white)),
+        content: TextField(
+          controller: textController,
+          style: const TextStyle(color: Colors.white),
+          decoration: InputDecoration(
+            hintText: 'Enter your post content...',
+            hintStyle: TextStyle(color: Colors.white60),
+            border: OutlineInputBorder(
+              borderSide:
+                  BorderSide(color: Colors.white.withValues(alpha: 0.3)),
+            ),
+            enabledBorder: OutlineInputBorder(
+              borderSide:
+                  BorderSide(color: Colors.white.withValues(alpha: 0.3)),
+            ),
+            focusedBorder: const OutlineInputBorder(
+              borderSide: BorderSide(color: Color(0xFFFF0080)),
+            ),
+            filled: true,
+            fillColor: Colors.white.withValues(alpha: 0.1),
+          ),
+          maxLines: 5,
+          autofocus: true,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child:
+                const Text('CANCEL', style: TextStyle(color: Colors.white70)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, textController.text),
+            child:
+                const Text('SAVE', style: TextStyle(color: Color(0xFFFF0080))),
+          ),
+        ],
+      ),
+    );
+
+    if (result != null && result.trim().isNotEmpty) {
+      // Create or update action with default platforms if none selected
+      final defaultPlatforms = ['instagram', 'twitter', 'facebook', 'tiktok'];
+      final currentPlatforms = _currentAction?.platforms ?? [];
+      final platformsToUse =
+          currentPlatforms.isEmpty ? defaultPlatforms : currentPlatforms;
+
+      final actionToUpdate = _currentAction ??
+          SocialAction(
+            actionId: 'temp_${DateTime.now().millisecondsSinceEpoch}',
+            createdAt: DateTime.now().toIso8601String(),
+            platforms: platformsToUse,
+            content: Content(
+              text: '',
+              hashtags: [],
+              mentions: [],
+              media: _hasPreSelectedMedia ? _preSelectedMedia : [],
+            ),
+            options: Options(),
+            platformData: PlatformData(),
+            internal: Internal(
+              originalTranscription: '',
+              aiGenerated: false,
+            ),
+          );
+
+      final updatedAction = SocialAction(
+        actionId: actionToUpdate.actionId,
+        createdAt: actionToUpdate.createdAt,
+        platforms: platformsToUse,
+        content: Content(
+          text: result.trim(),
+          hashtags: actionToUpdate.content.hashtags,
+          mentions: actionToUpdate.content.mentions,
+          link: actionToUpdate.content.link,
+          media: _hasPreSelectedMedia
+              ? _preSelectedMedia
+              : actionToUpdate.content.media,
+        ),
+        options: actionToUpdate.options,
+        platformData: actionToUpdate.platformData,
+        internal: actionToUpdate.internal,
+        mediaQuery: actionToUpdate.mediaQuery,
+      );
+
+      // Clear pre-selected media since it's now part of the action
+      if (_hasPreSelectedMedia) {
+        _preSelectedMedia = [];
+        _hasPreSelectedMedia = false;
+      }
+
+      try {
+        if (_currentAction == null) {
+          // Creating new action
+          await firestoreService.saveAction(updatedAction.toJson());
+        } else {
+          // Updating existing action
+          await firestoreService.updateAction(
+              updatedAction.actionId, updatedAction.toJson());
+        }
+      } catch (e) {
+        if (kDebugMode) {
+          print('⚠️ Failed to save text edit to Firestore: $e');
+        }
+        // Continue even if Firestore save fails
+      }
+
+      if (mounted) {
+        setState(() {
+          _currentAction = updatedAction;
+        });
+
+        scaffoldMessenger.showSnackBar(
+          const SnackBar(
+            content: Text('Post content updated! 📝'),
+            duration: Duration(seconds: 2),
+          ),
+        );
+
+        // Do NOT automatically advance - stay in command screen for platform selection
+        // The user should be able to see and modify platform selections
+      }
+    }
+
+    textController.dispose();
+  }
+
+  /// Checks if the current post state is complete (has both media and content)
+  bool _isPostComplete() {
+    final hasContent = _currentAction != null &&
+        (_currentAction!.content.text.isNotEmpty ||
+            _currentAction!.content.hashtags.isNotEmpty);
+    final hasMedia = (_currentAction?.content.media.isNotEmpty ?? false) ||
+        _hasPreSelectedMedia;
+
+    if (kDebugMode) {
+      print('🔍 Post completion check:');
+      print('   Has content: $hasContent');
+      print('   Has media: $hasMedia');
+      print('   Is complete: ${hasContent && hasMedia}');
+    }
+
+    return hasContent && hasMedia;
+  }
+
+  /// Checks if we need media selection (has content but no media)
+  bool _needsMediaSelection() {
+    final hasContent = _currentAction != null &&
+        (_currentAction!.content.text.isNotEmpty ||
+            _currentAction!.content.hashtags.isNotEmpty);
+    final hasMedia = (_currentAction?.content.media.isNotEmpty ?? false) ||
+        _hasPreSelectedMedia;
+    final hasMediaQuery = _currentAction?.mediaQuery?.isNotEmpty == true;
+
+    return hasContent && !hasMedia && hasMediaQuery;
+  }
+
+  /// Automatically advances to review post when state is complete
+  Future<void> _checkAndAdvanceToReview() async {
+    if (_isPostComplete()) {
+      if (kDebugMode) {
+        print('🚀 Post is complete, automatically advancing to review');
+      }
+
+      // Small delay for better UX (shows the completion state briefly)
+      await Future.delayed(const Duration(milliseconds: 300));
+
+      if (mounted) {
+        await _navigateToReviewPost();
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -1464,26 +1715,7 @@ class _CommandScreenState extends State<CommandScreen>
               ),
             ),
             child: SafeArea(
-              child: Stack(
-                children: [
-                  // Main content with ReviewPostScreen layout
-                  _buildReviewStyleLayout(),
-
-                  // History button (top-right)
-                  Positioned(
-                    top: 16,
-                    right: 16,
-                    child: IconButton(
-                      onPressed: _navigateToHistory,
-                      icon: const Icon(
-                        Icons.history,
-                        color: Colors.white,
-                        size: 28,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
+              child: _buildReviewStyleLayout(),
             ),
           );
         },
@@ -1492,12 +1724,13 @@ class _CommandScreenState extends State<CommandScreen>
   }
 
   Widget _buildReviewStyleLayout() {
-    // Grid spacing constants (matching ReviewPostScreen)
-    const double _spacing1 = 6.0;
-    const double _spacing2 = 12.0;
-    const double _spacing3 = 18.0;
-    const double _spacing4 = 24.0;
-    const double _spacing6 = 36.0;
+    // Systematic grid spacing constants (multiples of 6 for visual harmony)
+    const double _gridUnit = 6.0;
+    const double _spacing1 = _gridUnit; // 6px - minimal spacing
+    const double _spacing2 = _gridUnit * 2; // 12px - small spacing
+    const double _spacing3 = _gridUnit * 3; // 18px - medium spacing
+    const double _spacing4 = _gridUnit * 4; // 24px - large spacing
+    const double _spacing5 = _gridUnit * 5; // 30px - extra large spacing
 
     return Column(
       children: [
@@ -1514,23 +1747,33 @@ class _CommandScreenState extends State<CommandScreen>
             physics: const BouncingScrollPhysics(),
             child: Column(
               children: [
-                const SizedBox(height: _spacing4),
+                const SizedBox(
+                    height: _spacing4), // 24px - consistent top spacing
 
                 // Media preview section (matching ReviewPostScreen dimensions)
                 _buildCommandMediaSection(),
 
-                // Post content box (main text/hashtags) - only show if we have content
-                if (_currentAction != null) ...[
-                  PostContentBox(
-                    action: _currentAction!,
-                    onEditText: null, // Disable editing in command screen
-                    onVoiceEdit:
-                        null, // Disable voice editing in command screen
-                  ),
-                  const SizedBox(height: _spacing3),
-                ],
+                // Post content box (always visible - unified approach)
+                const SizedBox(
+                    height:
+                        _spacing1), // 6px - reduced spacing between media buttons and post content
+                PostContentBox(
+                  action: _currentAction ?? _createEmptyAction(),
+                  isRecording: _recordingState == RecordingState.recording,
+                  isProcessingVoice:
+                      _recordingState == RecordingState.processing,
+                  onEditText: _editPostText,
+                  onVoiceEdit: _recordingState == RecordingState.recording
+                      ? _stopVoiceEditing
+                      : _startVoiceEditing,
+                ),
+                const SizedBox(
+                    height:
+                        _spacing5), // 30px - proportional spacing to transcription area
 
-                const SizedBox(height: _spacing6),
+                const SizedBox(
+                    height:
+                        _spacing2), // 12px - final spacing before bottom area
               ],
             ),
           ),
@@ -1547,20 +1790,16 @@ class _CommandScreenState extends State<CommandScreen>
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 20),
                   child: Center(
-                    child: _transcription.isNotEmpty ||
-                            _recordingState == RecordingState.processing ||
-                            _recordingState == RecordingState.recording
-                        ? TranscriptionStatus(
-                            transcription: _transcription,
-                            isProcessing:
-                                _recordingState == RecordingState.processing,
-                            isRecording:
-                                _recordingState == RecordingState.recording,
-                            recordingDuration: _recordingDuration,
-                            maxRecordingDuration: _maxRecordingDuration,
-                            context: _getTranscriptionContext(),
-                          )
-                        : const SizedBox.shrink(),
+                    child: TranscriptionStatus(
+                      transcription: _transcription,
+                      isProcessing:
+                          _recordingState == RecordingState.processing,
+                      isRecording: _recordingState == RecordingState.recording,
+                      recordingDuration: _recordingDuration,
+                      maxRecordingDuration: _maxRecordingDuration,
+                      context: _getTranscriptionContext(),
+                      customMessage: _getCustomMessage(),
+                    ),
                   ),
                 ),
               ),
@@ -1594,25 +1833,24 @@ class _CommandScreenState extends State<CommandScreen>
   }
 
   Widget _buildCommandHeader() {
-    return Row(
-      children: [
-        // Social Icons taking up most of the space (no back button)
-        Expanded(
-          child: SocialIconsRow(
-            selectedPlatforms: _currentAction?.platforms ?? [],
-            onPlatformToggle: _togglePlatform,
-            maxHeight: 40, // Fixed height for consistency
-          ),
+    return CommandHeader(
+      selectedPlatforms: _currentAction?.platforms ?? [],
+      onPlatformToggle: _togglePlatform,
+      rightAction: IconButton(
+        onPressed: _navigateToHistory,
+        icon: const Icon(
+          Icons.history,
+          color: Colors.white,
+          size: 28,
         ),
-        const SizedBox(width: 40), // Balance the history button
-      ],
+      ),
     );
   }
 
   Widget _buildCommandMediaSection() {
-    // Grid spacing constants (matching ReviewPostScreen)
-    const double _spacing2 = 12.0;
-    const double _spacing3 = 18.0;
+    // Systematic grid spacing constants (matching main layout)
+    const double _gridUnit = 6.0;
+    const double _spacing2 = _gridUnit * 2; // 12px
 
     return Column(
       children: [
@@ -1622,7 +1860,6 @@ class _CommandScreenState extends State<CommandScreen>
           height: 250, // Same height as ReviewPostScreen
           decoration: BoxDecoration(
             color: Colors.grey.shade900, // Darker background to match theme
-            borderRadius: BorderRadius.circular(12),
             boxShadow: [
               BoxShadow(
                 color: Colors.black.withValues(alpha: 0.3),
@@ -1631,16 +1868,13 @@ class _CommandScreenState extends State<CommandScreen>
               ),
             ],
           ),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(12),
-            child: (_currentAction?.content.media.isNotEmpty == true) ||
-                    _hasPreSelectedMedia
-                ? _buildMediaPreview(context)
-                : _buildEmptyMediaPlaceholder(),
-          ),
+          child: (_currentAction?.content.media.isNotEmpty == true) ||
+                  _hasPreSelectedMedia
+              ? _buildMediaPreview(context)
+              : _buildEmptyMediaPlaceholder(),
         ),
 
-        const SizedBox(height: _spacing2),
+        const SizedBox(height: _spacing2), // 12px - consistent spacing
 
         // Unified media buttons row (Directory + Media selection)
         UnifiedMediaButtons(
@@ -1650,7 +1884,8 @@ class _CommandScreenState extends State<CommandScreen>
               _hasPreSelectedMedia,
         ),
 
-        const SizedBox(height: _spacing3),
+        const SizedBox(
+            height: _spacing2), // 12px - consistent spacing after buttons
       ],
     );
   }
@@ -1705,7 +1940,7 @@ class _CommandScreenState extends State<CommandScreen>
             ),
             const SizedBox(height: 8),
             Text(
-              'Select media first, then record your voice command',
+              'Select media or record your voice command',
               style: TextStyle(
                 color: Colors.white.withValues(alpha: 0.7),
                 fontSize: 12,
@@ -1746,7 +1981,6 @@ class _CommandScreenState extends State<CommandScreen>
               ? Container(
                   decoration: BoxDecoration(
                     color: const Color(0xFF2A2A2A),
-                    borderRadius: BorderRadius.circular(12),
                   ),
                   child: const Center(
                     child: Icon(
@@ -1756,27 +1990,23 @@ class _CommandScreenState extends State<CommandScreen>
                     ),
                   ),
                 )
-              : ClipRRect(
-                  borderRadius: BorderRadius.circular(12),
-                  child: Image.file(
-                    File(Uri.parse(mediaItem.fileUri).path),
-                    fit: BoxFit.cover,
-                    errorBuilder: (context, error, stackTrace) {
-                      return Container(
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF2A2A2A),
-                          borderRadius: BorderRadius.circular(12),
+              : Image.file(
+                  File(Uri.parse(mediaItem.fileUri).path),
+                  fit: BoxFit.cover,
+                  errorBuilder: (context, error, stackTrace) {
+                    return Container(
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF2A2A2A),
+                      ),
+                      child: const Center(
+                        child: Icon(
+                          Icons.image,
+                          color: Colors.grey,
+                          size: 40,
                         ),
-                        child: const Center(
-                          child: Icon(
-                            Icons.image,
-                            color: Colors.grey,
-                            size: 40,
-                          ),
-                        ),
-                      );
-                    },
-                  ),
+                      ),
+                    );
+                  },
                 ),
 
           // Media info overlay
@@ -1787,10 +2017,6 @@ class _CommandScreenState extends State<CommandScreen>
             child: Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                borderRadius: const BorderRadius.only(
-                  bottomLeft: Radius.circular(12),
-                  bottomRight: Radius.circular(12),
-                ),
                 gradient: LinearGradient(
                   begin: Alignment.bottomCenter,
                   end: Alignment.topCenter,
@@ -1817,7 +2043,6 @@ class _CommandScreenState extends State<CommandScreen>
                           horizontal: 8, vertical: 2),
                       decoration: BoxDecoration(
                         color: const Color(0xFFFF0080).withValues(alpha: 0.8),
-                        borderRadius: BorderRadius.circular(12),
                       ),
                       child: const Text(
                         'Pre-selected',
@@ -1937,20 +2162,25 @@ class _CommandScreenState extends State<CommandScreen>
   UnifiedButtonState _getUnifiedButtonState() {
     switch (_recordingState) {
       case RecordingState.idle:
+        // Check if post is complete for automatic advancement
+        if (_isPostComplete()) {
+          return UnifiedButtonState.reviewPost;
+        }
         return UnifiedButtonState.idle;
       case RecordingState.recording:
         return UnifiedButtonState.recording;
       case RecordingState.processing:
         return UnifiedButtonState.processing;
       case RecordingState.ready:
+        // Check if post is complete for automatic advancement
+        if (_isPostComplete()) {
+          return UnifiedButtonState.reviewPost;
+        }
         // Check if we need media selection
-        final hasMedia = _currentAction!.content.media.isNotEmpty;
-        final hasMediaQuery = _currentAction!.mediaQuery?.isNotEmpty == true;
-
-        if (!hasMedia && hasMediaQuery) {
+        if (_needsMediaSelection()) {
           return UnifiedButtonState.addMedia;
         }
-        // When transcription is ready and media is available, show review post button
+        // Default to review post when transcription is ready
         return UnifiedButtonState.reviewPost;
     }
   }
@@ -1973,5 +2203,36 @@ class _CommandScreenState extends State<CommandScreen>
         }
         return TranscriptionContext.reviewReady;
     }
+  }
+
+  String? _getCustomMessage() {
+    // Show welcome message when in idle state with no transcription
+    if (_recordingState == RecordingState.idle &&
+        _transcription.isEmpty &&
+        _currentAction == null) {
+      return 'Welcome to EchoPost. Say what you want to post.';
+    }
+    return null;
+  }
+
+  SocialAction _createEmptyAction() {
+    return SocialAction(
+      actionId: '',
+      createdAt: '',
+      platforms: [],
+      content: Content(
+        text: '',
+        hashtags: [],
+        mentions: [],
+        media: [],
+      ),
+      options: Options(),
+      platformData: PlatformData(),
+      internal: Internal(
+        originalTranscription: '',
+        aiGenerated: false,
+      ),
+      mediaQuery: null,
+    );
   }
 }
