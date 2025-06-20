@@ -235,6 +235,9 @@ class _TranscriptionStatusState extends State<TranscriptionStatus>
   String _getDisplayText() {
     if (widget.transcription.isNotEmpty) {
       return widget.transcription;
+    } else if (widget.customMessage == 'Welcome to EchoPost.') {
+      // Special case for welcome state - show body text instead of repeating header
+      return 'Say what you want to post.';
     } else {
       return _getStatusText();
     }

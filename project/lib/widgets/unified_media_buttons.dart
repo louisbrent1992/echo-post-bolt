@@ -24,7 +24,7 @@ class UnifiedMediaButtons extends StatelessWidget {
     return Container(
       width: double.infinity,
       height: 40,
-      margin: const EdgeInsets.symmetric(horizontal: _spacing3),
+      margin: const EdgeInsets.symmetric(horizontal: 20),
       child: Row(
         children: [
           // Directory selection button (left side)

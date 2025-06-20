@@ -189,7 +189,7 @@ class SocialIconsRow extends StatelessWidget {
               RippleCircle(
                 color: color,
                 size: maxHeight *
-                    0.9, // Slightly smaller than container for proper fit
+                    1.1, // Increased from 0.9 to 1.1 for more prominent ripple effect with larger icons
                 duration: const Duration(milliseconds: 1200),
               ),
 
@@ -291,7 +291,7 @@ class SixSlotHeader extends StatelessWidget {
     this.slot2to5,
     this.slot6,
     this.height = 60,
-    this.padding = const EdgeInsets.symmetric(horizontal: 16),
+    this.padding = const EdgeInsets.symmetric(horizontal: 20),
   });
 
   @override
@@ -345,7 +345,7 @@ class CommandHeader extends StatelessWidget {
       slot2to5: SocialIconsRow(
         selectedPlatforms: selectedPlatforms,
         onPlatformToggle: onPlatformToggle,
-        maxHeight: 44, // Slightly larger for better presence
+        maxHeight: 52, // Increased from 44 to 52 for more presence
         enableInteraction: onPlatformToggle != null,
       ),
       slot6: rightAction,

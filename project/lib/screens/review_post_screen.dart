@@ -779,7 +779,7 @@ User voice instruction: "$transcription"''';
         // Header section (60px height)
         Container(
           height: 60,
-          padding: const EdgeInsets.symmetric(horizontal: _spacing3),
+          padding: const EdgeInsets.symmetric(horizontal: 20),
           child: _buildHeader(),
         ),
 

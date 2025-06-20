@@ -1275,7 +1275,7 @@ class _CommandScreenState extends State<CommandScreen>
       children: [
         Container(
           height: 60,
-          padding: const EdgeInsets.symmetric(horizontal: _spacing3),
+          padding: const EdgeInsets.symmetric(horizontal: 20),
           child: CommandHeader(
             selectedPlatforms: coordinator.currentPost?.platforms ?? [],
             onPlatformToggle: _togglePlatform,
@@ -1529,7 +1529,7 @@ class _CommandScreenState extends State<CommandScreen>
             ),
             const SizedBox(height: 16),
             Text(
-              'Your image will appear here',
+              'Your media will appear here',
               style: TextStyle(
                 color: Colors.white.withValues(alpha: 0.95),
                 fontSize: AppTypography.large,
@@ -1604,7 +1604,7 @@ class _CommandScreenState extends State<CommandScreen>
     if (_recordingState == RecordingState.idle &&
         coordinator.currentTranscription.isEmpty &&
         coordinator.currentPost == null) {
-      return 'Welcome to EchoPost. Say what you want to post.';
+      return 'Welcome to EchoPost.';
     }
 
     // CRITICAL: Only show coordinator errors if we're not in an active recording workflow
