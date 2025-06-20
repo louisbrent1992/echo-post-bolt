@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:provider/provider.dart';
+import 'dart:ui';
 
 import 'services/auth_service.dart';
 import 'services/firestore_service.dart';
@@ -15,6 +16,32 @@ import 'screens/command_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // CRITICAL: Add comprehensive error handling for framework errors
+  FlutterError.onError = (FlutterErrorDetails details) {
+    FlutterError.presentError(details);
+    if (kDebugMode) {
+      print('🚨 Flutter Framework Error: ${details.exception}');
+      print('📍 Library: ${details.library}');
+      print('📄 Context: ${details.context}');
+      print('🔍 Stack: ${details.stack}');
+
+      // Check for specific _dependents.isEmpty error
+      if (details.exception.toString().contains('_dependents.isEmpty')) {
+        print(
+            '⚠️ DETECTED: _dependents.isEmpty error - likely Provider state management timing issue');
+      }
+    }
+  };
+
+  // Catch platform errors (non-Flutter callbacks)
+  PlatformDispatcher.instance.onError = (error, stack) {
+    if (kDebugMode) {
+      print('🚨 Platform Error: $error');
+      print('🔍 Stack: $stack');
+    }
+    return true; // Mark as handled to prevent crash
+  };
 
   // Load environment variables from .env.local
   await dotenv.load(fileName: ".env.local");
@@ -53,13 +80,23 @@ Future<void> main() async {
         Provider<SocialPostService>(
           create: (_) => SocialPostService(),
         ),
-        ChangeNotifierProvider<SocialActionPostCoordinator>(
+        ChangeNotifierProxyProvider4<MediaCoordinator, AIService,
+            FirestoreService, SocialPostService, SocialActionPostCoordinator>(
           create: (context) => SocialActionPostCoordinator(
             mediaCoordinator: context.read<MediaCoordinator>(),
             firestoreService: context.read<FirestoreService>(),
             aiService: context.read<AIService>(),
             socialPostService: context.read<SocialPostService>(),
           ),
+          update: (context, mediaCoordinator, aiService, firestoreService,
+                  socialPostService, previous) =>
+              previous ??
+              SocialActionPostCoordinator(
+                mediaCoordinator: mediaCoordinator,
+                firestoreService: firestoreService,
+                aiService: aiService,
+                socialPostService: socialPostService,
+              ),
         ),
       ],
       child: ServiceInitializationWrapper(

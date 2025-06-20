@@ -8,6 +8,7 @@ import 'package:http/http.dart' as http;
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:record/record.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:intl/intl.dart';
 
 import '../models/social_action.dart';
 import '../services/media_coordinator.dart';
@@ -18,13 +19,12 @@ import '../widgets/transcription_status.dart';
 import '../widgets/unified_action_button.dart';
 import '../widgets/unified_media_buttons.dart';
 import '../screens/media_selection_screen.dart';
-import '../screens/review_post_screen.dart';
 import '../screens/history_screen.dart';
 import '../screens/directory_selection_screen.dart';
 import '../constants/typography.dart';
 
 /// Recording states for voice capture workflow
-enum RecordingState { idle, recording, processing, ready }
+enum RecordingState { idle, recording, processing, ready, posting }
 
 /// EchoPost Voice-to-Post Pipeline
 ///
@@ -46,16 +46,17 @@ enum RecordingState { idle, recording, processing, ready }
 ///    images in their voice commands (e.g., "post my last picture"). The
 ///    `MediaCoordinator` handles intelligent media selection and validation.
 ///    Users can also manually select media via `MediaSelectionScreen` if needed.
-/// 6. Review & Publish – Finally, the user lands on `ReviewPostScreen`,
-///    previews the composed post, edits if necessary, and confirms. Upon
-///    confirmation, the `SocialActionPostCoordinator` handles both Firestore
-///    persistence and posting to social media platforms.
+/// 6. Review & Confirm – All post editing, scheduling, and confirmation happens
+///    directly on this CommandScreen. Users can edit text, hashtags, schedule,
+///    and media without leaving the screen. Upon confirmation, the
+///    `SocialActionPostCoordinator` handles both Firestore persistence and
+///    posting to social media platforms.
 ///
 /// Each stage contains robust validation, error handling, and debug logging so
 /// that any break in the pipeline (Whisper outages, malformed JSON, network
 /// errors, etc.) is surfaced early and the UI gracefully degrades. The entire
 /// workflow is coordinated through the `SocialActionPostCoordinator` for
-/// consistent state management across all screens.
+/// consistent state management in a single-screen architecture.
 
 class CommandScreen extends StatefulWidget {
   const CommandScreen({super.key});
@@ -503,11 +504,9 @@ class _CommandScreenState extends State<CommandScreen>
 
       // Update UI based on coordinator state
       setState(() {
-        // If coordinator has content, we're ready to proceed
-        // Don't require "complete" post since that depends on platform-specific media requirements
-        _recordingState = (_postCoordinator?.hasContent == true)
-            ? RecordingState.ready
-            : RecordingState.idle;
+        // CRITICAL: Always reset to idle after processing to allow new recordings
+        // The user can manually confirm when ready via the confirm button
+        _recordingState = RecordingState.idle;
       });
 
       if (kDebugMode) {
@@ -515,7 +514,8 @@ class _CommandScreenState extends State<CommandScreen>
         print('   Post complete: ${_postCoordinator?.isPostComplete}');
         print('   Has content: ${_postCoordinator?.hasContent}');
         print('   Has media: ${_postCoordinator?.hasMedia}');
-        print('   Recording state: $_recordingState');
+        print(
+            '   Recording state: $_recordingState (reset to idle for new recordings)');
         print('   Coordinator post state: ${_postCoordinator?.postState}');
         print(
             '   Media requirement met: ${_postCoordinator?.hasContent == true ? 'checking...' : 'N/A'}');
@@ -523,11 +523,6 @@ class _CommandScreenState extends State<CommandScreen>
           print(
               '   Platform-specific media requirement: ${_postCoordinator?.isPostComplete == true ? 'MET' : 'NOT MET'}');
         }
-      }
-
-      // Auto-advance if post is complete (has content + meets platform media requirements)
-      if (_postCoordinator?.isPostComplete == true) {
-        await _checkAndAdvanceToReview();
       }
     } catch (e) {
       if (kDebugMode) {
@@ -899,7 +894,6 @@ class _CommandScreenState extends State<CommandScreen>
           );
 
       final navigator = Navigator.of(context);
-      final scaffoldMessenger = ScaffoldMessenger.of(context);
 
       final updatedAction = await navigator.push<SocialAction>(
         MaterialPageRoute(
@@ -919,11 +913,6 @@ class _CommandScreenState extends State<CommandScreen>
           print(
               '📊 Selected media count: ${updatedAction.content.media.length}');
         }
-
-        // Auto-advance if post is now complete
-        if (mounted && _postCoordinator?.isPostComplete == true) {
-          await _checkAndAdvanceToReview();
-        }
       }
     } catch (e) {
       if (kDebugMode) {
@@ -934,89 +923,6 @@ class _CommandScreenState extends State<CommandScreen>
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Failed to load media selection: $e'),
-            duration: const Duration(seconds: 3),
-          ),
-        );
-      }
-    }
-  }
-
-  Future<void> _navigateToReviewPost() async {
-    final currentPost = _postCoordinator?.currentPost;
-    if (currentPost == null) return;
-
-    try {
-      if (kDebugMode) {
-        print('🔍 Navigating to review post via coordinator...');
-      }
-
-      // Final validation through MediaCoordinator
-      final safeAction = await _mediaCoordinator.recoverMediaState(currentPost);
-      final actionToReview = safeAction ?? currentPost;
-
-      if (!mounted) return;
-
-      final navigator = Navigator.of(context);
-
-      // CRITICAL: Ensure clean state before navigation
-      // Reset any processing flags that might cause spinning indicator
-      _postCoordinator?.setProcessingState(false);
-      setState(() {
-        _recordingState = RecordingState.idle;
-        _isStoppingRecording = false;
-        _isStartingRecording = false;
-      });
-
-      // Navigate to review screen
-      final result = await navigator.push(
-        MaterialPageRoute(
-          builder: (context) => ReviewPostScreen(action: actionToReview),
-        ),
-      );
-
-      // CRITICAL: Only reset on explicit success (post published)
-      // Back navigation should preserve all state
-      if (mounted && result == true) {
-        // Post was successfully published - full reset
-        if (kDebugMode) {
-          print('✅ Post published successfully, performing full reset');
-        }
-        _postCoordinator?.reset();
-        setState(() {
-          _resetRecordingState(clearPreSelectedMedia: true);
-        });
-      } else {
-        // User navigated back or posting failed - preserve all state
-        if (kDebugMode) {
-          print(
-              '🔙 User navigated back or posting failed, preserving post state');
-        }
-        // CRITICAL: Ensure clean UI state on return
-        // The coordinator preserves post content, but UI should be clean
-        _postCoordinator?.setProcessingState(false);
-        setState(() {
-          _recordingState = RecordingState.idle;
-          _isStoppingRecording = false;
-          _isStartingRecording = false;
-        });
-      }
-    } catch (e) {
-      if (kDebugMode) {
-        print('❌ Error in review post navigation: $e');
-      }
-
-      if (mounted) {
-        // Reset processing state on error but preserve post content
-        _postCoordinator?.setProcessingState(false);
-        setState(() {
-          _recordingState = RecordingState.idle;
-          _isStoppingRecording = false;
-          _isStartingRecording = false;
-        });
-
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to prepare post for review: $e'),
             duration: const Duration(seconds: 3),
           ),
         );
@@ -1109,16 +1015,19 @@ class _CommandScreenState extends State<CommandScreen>
 
     if (result != null && result.trim().isNotEmpty) {
       try {
-        // Direct coordinator update - no deferral needed with architectural fix
-        await _postCoordinator?.updatePostContent(result.trim());
+        // CRITICAL: Call coordinator method directly without deferring
+        // The coordinator handles proper state management and notification
+        if (mounted && _postCoordinator != null) {
+          await _postCoordinator!.updatePostContent(result.trim());
 
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Post content updated! 📝'),
-              duration: Duration(seconds: 2),
-            ),
-          );
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Post content updated! 📝'),
+                duration: Duration(seconds: 2),
+              ),
+            );
+          }
         }
       } catch (e) {
         if (kDebugMode) {
@@ -1140,20 +1049,23 @@ class _CommandScreenState extends State<CommandScreen>
 
   Future<void> _editPostHashtags(List<String> newHashtags) async {
     try {
-      // Direct coordinator update - no deferral needed with architectural fix
-      await _postCoordinator?.updatePostHashtags(newHashtags);
+      // CRITICAL: Call coordinator method directly without deferring
+      // The coordinator handles proper state management and notification
+      if (mounted && _postCoordinator != null) {
+        await _postCoordinator!.updatePostHashtags(newHashtags);
 
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              newHashtags.isEmpty
-                  ? 'All hashtags removed 🏷️'
-                  : 'Hashtags updated! ${newHashtags.length} tags 🏷️',
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                newHashtags.isEmpty
+                    ? 'All hashtags removed 🏷️'
+                    : 'Hashtags updated! ${newHashtags.length} tags 🏷️',
+              ),
+              duration: const Duration(seconds: 2),
             ),
-            duration: const Duration(seconds: 2),
-          ),
-        );
+          );
+        }
       }
     } catch (e) {
       if (kDebugMode) {
@@ -1172,7 +1084,212 @@ class _CommandScreenState extends State<CommandScreen>
     }
   }
 
-  bool _isPostComplete() => _postCoordinator?.isPostComplete == true;
+  Future<void> _editSchedule() async {
+    final now = DateTime.now();
+    final currentAction = _postCoordinator?.currentPost;
+    final initialDate = currentAction?.options.schedule == 'now'
+        ? now
+        : DateTime.parse(
+            currentAction?.options.schedule ?? now.toIso8601String());
+
+    final pickedDate = await showDatePicker(
+      context: context,
+      initialDate: initialDate,
+      firstDate: now,
+      lastDate: now.add(const Duration(days: 365)),
+    );
+
+    if (pickedDate != null && mounted) {
+      final pickedTime = await showTimePicker(
+        context: context,
+        initialTime: TimeOfDay.fromDateTime(initialDate),
+      );
+
+      if (pickedTime != null) {
+        final scheduledDateTime = DateTime(
+          pickedDate.year,
+          pickedDate.month,
+          pickedDate.day,
+          pickedTime.hour,
+          pickedTime.minute,
+        );
+
+        try {
+          // CRITICAL: Update through coordinator for centralized state management
+          await _postCoordinator
+              ?.updatePostSchedule(scheduledDateTime.toIso8601String());
+
+          if (kDebugMode) {
+            print('✅ Schedule updated via coordinator');
+            print('   New schedule: ${scheduledDateTime.toIso8601String()}');
+          }
+
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(
+                    'Schedule updated to ${DateFormat('MMM d, yyyy \'at\' h:mm a').format(scheduledDateTime)}'),
+                duration: const Duration(seconds: 2),
+              ),
+            );
+          }
+        } catch (e) {
+          if (kDebugMode) {
+            print('❌ Failed to update schedule via coordinator: $e');
+          }
+
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Failed to update schedule: $e'),
+                backgroundColor: Colors.red,
+                duration: const Duration(seconds: 3),
+              ),
+            );
+          }
+        }
+      }
+    }
+  }
+
+  Future<void> _confirmAndPost() async {
+    // Check execution readiness first
+    final readiness = _postCoordinator!.executionReadiness;
+    if (!readiness.isReady) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+                'Post not ready: ${readiness.missingRequirements.join(', ')}'),
+            backgroundColor: Colors.orange,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+      return;
+    }
+
+    // Set processing state
+    setState(() {
+      _recordingState = RecordingState.posting;
+    });
+
+    try {
+      if (kDebugMode) {
+        print('🚀 Starting post confirmation and execution...');
+      }
+
+      // CRITICAL: Use coordinator's centralized post execution
+      final results = await _postCoordinator!.finalizeAndExecutePost();
+
+      if (mounted) {
+        final allSucceeded = results.values.every((success) => success);
+
+        await showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (context) => AlertDialog(
+            backgroundColor: Colors.black.withValues(alpha: 0.9),
+            title: const Text('Posting Results',
+                style: TextStyle(color: Colors.white)),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                for (final platform in results.keys)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 8.0),
+                    child: Row(
+                      children: [
+                        Icon(
+                          results[platform]! ? Icons.check_circle : Icons.error,
+                          color: results[platform]! ? Colors.green : Colors.red,
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          platform.substring(0, 1).toUpperCase() +
+                              platform.substring(1),
+                          style: const TextStyle(
+                              fontWeight: FontWeight.bold, color: Colors.white),
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          results[platform]! ? 'Posted' : 'Failed',
+                          style: const TextStyle(color: Colors.white70),
+                        ),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () {
+                  Navigator.pop(context); // Close the dialog
+                },
+                child: const Text('OK',
+                    style: TextStyle(color: Color(0xFFFF0080))),
+              ),
+            ],
+          ),
+        );
+
+        // CRITICAL: Handle post-posting state based on results
+        if (mounted) {
+          if (allSucceeded) {
+            // Post was successful - reset everything and navigate to history
+            if (kDebugMode) {
+              print(
+                  '✅ All posts successful, resetting state and navigating to history');
+            }
+
+            _postCoordinator?.reset();
+            setState(() {
+              _resetRecordingState(clearPreSelectedMedia: true);
+            });
+
+            // Navigate to history screen
+            Navigator.pushAndRemoveUntil(
+              context,
+              MaterialPageRoute(
+                builder: (context) => const HistoryScreen(),
+              ),
+              (route) => route.isFirst,
+            );
+          } else {
+            // Some posts failed - stay on command screen for retry
+            if (kDebugMode) {
+              print(
+                  '⚠️ Some posts failed, staying on command screen for retry');
+            }
+
+            setState(() {
+              _recordingState = RecordingState.idle;
+            });
+          }
+        }
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ Failed to confirm and post: $e');
+      }
+
+      setState(() {
+        _recordingState = RecordingState.idle;
+      });
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Posting failed: $e'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 4),
+          ),
+        );
+      }
+    }
+  }
+
   bool _needsMediaSelection() {
     final hasContent = _postCoordinator?.hasContent == true;
     final hasMedia = _postCoordinator?.hasMedia == true;
@@ -1210,20 +1327,6 @@ class _CommandScreenState extends State<CommandScreen>
     }
 
     return requiresMedia;
-  }
-
-  Future<void> _checkAndAdvanceToReview() async {
-    if (_postCoordinator?.isPostComplete == true) {
-      if (kDebugMode) {
-        print(
-            '🚀 Post is complete via coordinator, automatically advancing to review');
-      }
-
-      await Future.delayed(const Duration(milliseconds: 300));
-      if (mounted) {
-        await _navigateToReviewPost();
-      }
-    }
   }
 
   @override
@@ -1265,11 +1368,7 @@ class _CommandScreenState extends State<CommandScreen>
 
   Widget _buildReviewStyleLayout(SocialActionPostCoordinator coordinator) {
     const double _gridUnit = 6.0;
-    const double _spacing1 = _gridUnit;
-    const double _spacing2 = _gridUnit * 2;
-    const double _spacing3 = _gridUnit * 3;
     const double _spacing4 = _gridUnit * 4;
-    const double _spacing5 = _gridUnit * 5;
 
     return Column(
       children: [
@@ -1304,8 +1403,10 @@ class _CommandScreenState extends State<CommandScreen>
                   action: coordinator.currentPost ?? _createEmptyAction(),
                   isRecording: _recordingState == RecordingState.recording,
                   isProcessingVoice:
-                      _recordingState == RecordingState.processing,
+                      _recordingState == RecordingState.processing ||
+                          _recordingState == RecordingState.posting,
                   onEditText: _editPostText,
+                  onEditSchedule: _editSchedule,
                   onEditHashtags: _editPostHashtags,
                   onVoiceEdit: _recordingState == RecordingState.recording
                       ? _stopVoiceEditing
@@ -1325,7 +1426,9 @@ class _CommandScreenState extends State<CommandScreen>
                 child: Center(
                   child: TranscriptionStatus(
                     transcription: coordinator.currentTranscription,
-                    isProcessing: _recordingState == RecordingState.processing,
+                    isProcessing:
+                        _recordingState == RecordingState.processing ||
+                            _recordingState == RecordingState.posting,
                     isRecording: _recordingState == RecordingState.recording,
                     recordingDuration: _recordingDuration,
                     maxRecordingDuration: _maxRecordingDuration,
@@ -1347,7 +1450,7 @@ class _CommandScreenState extends State<CommandScreen>
                         amplitude: normalizedAmplitude,
                         onRecordStart: _startRecording,
                         onRecordStop: _stopRecording,
-                        onReviewPost: _navigateToReviewPost,
+                        onConfirmPost: _confirmAndPost,
                         onAddMedia: _navigateToMediaSelection,
                       ),
                     ),
@@ -1546,22 +1649,31 @@ class _CommandScreenState extends State<CommandScreen>
       SocialActionPostCoordinator coordinator) {
     switch (_recordingState) {
       case RecordingState.idle:
+        // Show confirm button if post is complete, otherwise show idle mic
         if (coordinator.isPostComplete) {
-          return UnifiedButtonState.reviewPost;
+          return UnifiedButtonState.confirmPost;
+        }
+        // Show add media button if we have content but need media
+        if (coordinator.hasContent && _needsMediaSelection()) {
+          return UnifiedButtonState.addMedia;
         }
         return UnifiedButtonState.idle;
       case RecordingState.recording:
         return UnifiedButtonState.recording;
       case RecordingState.processing:
         return UnifiedButtonState.processing;
+      case RecordingState.posting:
+        return UnifiedButtonState
+            .processing; // Show processing state during posting
       case RecordingState.ready:
+        // This state is no longer used since we always reset to idle
         if (coordinator.isPostComplete) {
-          return UnifiedButtonState.reviewPost;
+          return UnifiedButtonState.confirmPost;
         }
         if (_needsMediaSelection()) {
           return UnifiedButtonState.addMedia;
         }
-        return UnifiedButtonState.reviewPost;
+        return UnifiedButtonState.confirmPost;
     }
   }
 
@@ -1580,6 +1692,17 @@ class _CommandScreenState extends State<CommandScreen>
 
     switch (_recordingState) {
       case RecordingState.idle:
+        // Check if we have content to determine appropriate context
+        if (coordinator.isPostComplete) {
+          if (kDebugMode)
+            print('   → Returning TranscriptionContext.reviewReady');
+          return TranscriptionContext.reviewReady;
+        }
+        if (coordinator.hasContent && _needsMediaSelection()) {
+          if (kDebugMode)
+            print('   → Returning TranscriptionContext.addMediaReady');
+          return TranscriptionContext.addMediaReady;
+        }
         if (kDebugMode) print('   → Returning TranscriptionContext.recording');
         return TranscriptionContext.recording;
       case RecordingState.recording:
@@ -1588,7 +1711,13 @@ class _CommandScreenState extends State<CommandScreen>
       case RecordingState.processing:
         if (kDebugMode) print('   → Returning TranscriptionContext.processing');
         return TranscriptionContext.processing;
+      case RecordingState.posting:
+        if (kDebugMode)
+          print('   → Returning TranscriptionContext.processing (posting)');
+        return TranscriptionContext
+            .processing; // Show processing context during posting
       case RecordingState.ready:
+        // This state is no longer used since we always reset to idle
         if (_needsMediaSelection()) {
           if (kDebugMode)
             print('   → Returning TranscriptionContext.addMediaReady');

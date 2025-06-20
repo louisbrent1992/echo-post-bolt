@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart';
+import 'package:intl/intl.dart';
 import '../models/social_action.dart';
 import '../constants/typography.dart';
 
@@ -9,6 +9,7 @@ class PostContentBox extends StatelessWidget {
   final SocialAction action;
   final VoidCallback? onEditText;
   final VoidCallback? onVoiceEdit;
+  final VoidCallback? onEditSchedule;
   final Function(List<String>)? onEditHashtags;
   final bool isRecording;
   final bool isProcessingVoice;
@@ -18,6 +19,7 @@ class PostContentBox extends StatelessWidget {
     required this.action,
     this.onEditText,
     this.onVoiceEdit,
+    this.onEditSchedule,
     this.onEditHashtags,
     this.isRecording = false,
     this.isProcessingVoice = false,
@@ -66,7 +68,7 @@ class PostContentBox extends StatelessWidget {
                 ),
               ),
               const Spacer(),
-              // Voice dictation button - CRITICAL functionality
+              // Voice dictation button - CRITICAL functionality (FIRST)
               if (onVoiceEdit != null)
                 IconButton(
                   onPressed: onVoiceEdit,
@@ -85,6 +87,7 @@ class PostContentBox extends StatelessWidget {
                           ? 'Processing...'
                           : 'Voice dictation'),
                 ),
+              // Text edit button (SECOND)
               if (onEditText != null)
                 IconButton(
                   onPressed: onEditText,
@@ -94,6 +97,17 @@ class PostContentBox extends StatelessWidget {
                     size: 18,
                   ),
                   tooltip: 'Edit post text',
+                ),
+              // Schedule button (THIRD)
+              if (onEditSchedule != null)
+                IconButton(
+                  onPressed: onEditSchedule,
+                  icon: Icon(
+                    Icons.schedule,
+                    color: Colors.white.withValues(alpha: 0.7),
+                    size: 18,
+                  ),
+                  tooltip: 'Schedule post',
                 ),
             ],
           ),
@@ -145,6 +159,10 @@ class PostContentBox extends StatelessWidget {
 
           // Unified hashtag section
           _buildUnifiedHashtagsSection(context, hashtags),
+
+          // Schedule section
+          const SizedBox(height: 16),
+          _buildScheduleSection(context),
         ],
       ),
     );
@@ -266,6 +284,79 @@ class PostContentBox extends StatelessWidget {
             ),
           ),
         ],
+      ],
+    );
+  }
+
+  Widget _buildScheduleSection(BuildContext context) {
+    final schedule = action.options.schedule;
+    final isScheduled = schedule != 'now';
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(
+              Icons.schedule,
+              color: Colors.white.withValues(alpha: 0.9),
+              size: 16,
+            ),
+            const SizedBox(width: 6),
+            Text(
+              'Schedule',
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.95),
+                fontSize: AppTypography.small,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const Spacer(),
+            if (onEditSchedule != null)
+              IconButton(
+                onPressed: onEditSchedule,
+                icon: Icon(
+                  Icons.edit,
+                  color: Colors.white.withValues(alpha: 0.7),
+                  size: 16,
+                ),
+                tooltip: 'Edit schedule',
+              ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: 0.6),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Row(
+            children: [
+              Icon(
+                isScheduled ? Icons.access_time : Icons.flash_on,
+                color: isScheduled
+                    ? Colors.orange.withValues(alpha: 0.8)
+                    : const Color(0xFFFF0080).withValues(alpha: 0.8),
+                size: 16,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  isScheduled
+                      ? 'Scheduled for ${DateFormat('MMM d, yyyy \'at\' h:mm a').format(DateTime.parse(schedule))}'
+                      : 'Post immediately when confirmed',
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.9),
+                    fontSize: AppTypography.small,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
       ],
     );
   }
