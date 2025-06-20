@@ -44,9 +44,6 @@ Future<void> main() async {
         ChangeNotifierProvider<MediaCoordinator>(
           create: (_) => MediaCoordinator(),
         ),
-        ChangeNotifierProvider<SocialActionPostCoordinator>(
-          create: (_) => SocialActionPostCoordinator(),
-        ),
         Provider<AIService>(
           create: (context) => AIService(apiKey),
         ),
@@ -55,6 +52,14 @@ Future<void> main() async {
         ),
         Provider<SocialPostService>(
           create: (_) => SocialPostService(),
+        ),
+        ChangeNotifierProvider<SocialActionPostCoordinator>(
+          create: (context) => SocialActionPostCoordinator(
+            mediaCoordinator: context.read<MediaCoordinator>(),
+            firestoreService: context.read<FirestoreService>(),
+            aiService: context.read<AIService>(),
+            socialPostService: context.read<SocialPostService>(),
+          ),
         ),
       ],
       child: ServiceInitializationWrapper(
@@ -158,11 +163,10 @@ class _ServiceInitializationWrapperState
       // Wait a bit to ensure all providers are ready
       await Future.delayed(const Duration(milliseconds: 100));
 
-      // Initialize all media services through the MediaCoordinator
+      // Initialize MediaCoordinator
       final mediaCoordinator =
           Provider.of<MediaCoordinator>(context, listen: false);
 
-      // Check if the coordinator is still valid before initializing
       if (!mounted) {
         if (kDebugMode) {
           print('⚠️ Widget unmounted during initialization, aborting...');
@@ -173,70 +177,14 @@ class _ServiceInitializationWrapperState
       await mediaCoordinator.initialize();
 
       if (kDebugMode) {
-        print('✅ MediaCoordinator and all dependent services initialized');
+        print('✅ All services initialized with constructor injection');
       }
-
-      // Initialize SocialActionPostCoordinator
-      if (!mounted) return;
-
-      setState(() {
-        _initializationStatus = 'Initializing post coordinator...';
-      });
-
-      final postCoordinator =
-          Provider.of<SocialActionPostCoordinator>(context, listen: false);
-      final aiService = Provider.of<AIService>(context, listen: false);
-      final firestoreService =
-          Provider.of<FirestoreService>(context, listen: false);
-      final socialPostService =
-          Provider.of<SocialPostService>(context, listen: false);
-
-      await postCoordinator.initialize(
-        mediaCoordinator: mediaCoordinator,
-        firestoreService: firestoreService,
-        aiService: aiService,
-        socialPostService: socialPostService,
-      );
-
-      if (kDebugMode) {
-        print('✅ SocialActionPostCoordinator initialized');
-      }
-
-      // Connect AIService with coordinators
-      if (!mounted) return;
-
-      setState(() {
-        _initializationStatus = 'Connecting AI service...';
-      });
-
-      aiService.setMediaCoordinator(mediaCoordinator);
-      aiService.setPostCoordinator(postCoordinator);
-
-      if (kDebugMode) {
-        print('🤖 AIService connected to coordinators');
-      }
-
-      if (!mounted) return;
-
-      setState(() {
-        _initializationStatus = 'Finalizing initialization...';
-      });
-
-      // Small delay to show completion
-      await Future.delayed(const Duration(milliseconds: 500));
 
       if (!mounted) return;
 
       setState(() {
         _isInitialized = true;
       });
-
-      if (kDebugMode) {
-        print('🎉 All services initialized successfully!');
-        print('   ✅ MediaCoordinator');
-        print('   ✅ SocialActionPostCoordinator');
-        print('   ✅ AIService with coordinators');
-      }
     } catch (e) {
       if (kDebugMode) {
         print('❌ Service initialization failed: $e');
@@ -246,15 +194,6 @@ class _ServiceInitializationWrapperState
 
       setState(() {
         _initializationStatus = 'Initialization failed: $e';
-      });
-
-      // Show error but still continue to app
-      await Future.delayed(const Duration(seconds: 2));
-
-      if (!mounted) return;
-
-      setState(() {
-        _isInitialized = true;
       });
     }
   }

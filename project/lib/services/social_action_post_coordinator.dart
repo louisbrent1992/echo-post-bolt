@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -11,19 +10,15 @@ import '../services/social_post_service.dart';
 
 /// Manages the persistent state and orchestration of social media posts
 /// across all screens in the EchoPost application.
-///
-/// This coordinator ensures:
-/// - Consistent post state management across command, media selection, and review screens
-/// - Robust JSON parsing with multiple fallback strategies
-/// - Reliable baseline experience even when AI services fail
-/// - Persistent storage and recovery of post drafts
-/// - Consistent recording behavior across all screens
 class SocialActionPostCoordinator extends ChangeNotifier {
-  // Services
-  MediaCoordinator? _mediaCoordinator;
-  FirestoreService? _firestoreService;
-  AIService? _aiService;
-  SocialPostService? _socialPostService;
+  // Platform requirements constants
+  static const _mediaRequiredPlatforms = {'instagram', 'tiktok'};
+
+  // Services - injected via constructor
+  final MediaCoordinator _mediaCoordinator;
+  final FirestoreService _firestoreService;
+  final AIService _aiService;
+  final SocialPostService _socialPostService;
 
   // Current post state
   SocialAction? _currentPost;
@@ -35,12 +30,25 @@ class SocialActionPostCoordinator extends ChangeNotifier {
   // Recording state
   bool _isRecording = false;
   bool _isProcessing = false;
-  Timer? _autoSaveTimer;
 
-  // Initialization
-  bool _isInitialized = false;
+  // Auto-save with debouncing
+  Timer? _debounceTimer;
+  static const _autoSaveDebounceMs = 1000; // 1 second debounce
 
-  SocialActionPostCoordinator();
+  SocialActionPostCoordinator({
+    required MediaCoordinator mediaCoordinator,
+    required FirestoreService firestoreService,
+    required AIService aiService,
+    required SocialPostService socialPostService,
+  })  : _mediaCoordinator = mediaCoordinator,
+        _firestoreService = firestoreService,
+        _aiService = aiService,
+        _socialPostService = socialPostService {
+    if (kDebugMode) {
+      print(
+          '✅ SocialActionPostCoordinator initialized with constructor injection');
+    }
+  }
 
   // Getters
   SocialAction? get currentPost => _currentPost;
@@ -50,45 +58,28 @@ class SocialActionPostCoordinator extends ChangeNotifier {
   String? get lastError => _lastError;
   bool get isRecording => _isRecording;
   bool get isProcessing => _isProcessing;
-  bool get isInitialized => _isInitialized;
   bool get hasContent => _currentPost?.content.text.isNotEmpty == true;
   bool get hasMedia =>
       _currentPost?.content.media.isNotEmpty == true ||
       _preSelectedMedia.isNotEmpty;
-  bool get isPostComplete => hasContent && hasMedia;
+  bool get isPostComplete => hasContent && _isMediaRequirementMet;
 
-  /// Initialize the coordinator with required services
-  Future<void> initialize({
-    required MediaCoordinator mediaCoordinator,
-    required FirestoreService firestoreService,
-    required AIService aiService,
-    required SocialPostService socialPostService,
-  }) async {
-    if (_isInitialized) return;
+  /// Check if media requirement is met based on selected platforms
+  bool get _isMediaRequirementMet {
+    if (_currentPost == null) return false;
 
-    _mediaCoordinator = mediaCoordinator;
-    _firestoreService = firestoreService;
-    _aiService = aiService;
-    _socialPostService = socialPostService;
+    // If no platforms selected, require media for safety
+    if (_currentPost!.platforms.isEmpty) return hasMedia;
 
-    // Set up auto-save timer for draft persistence
-    _autoSaveTimer = Timer.periodic(const Duration(seconds: 30), (_) {
-      _autoSaveDraft();
-    });
+    // Check if any selected platform requires media
+    final requiresMedia = _currentPost!.platforms.any(
+        (platform) => _mediaRequiredPlatforms.contains(platform.toLowerCase()));
 
-    _isInitialized = true;
-
-    if (kDebugMode) {
-      print('✅ SocialActionPostCoordinator initialized');
-    }
+    return requiresMedia ? hasMedia : true;
   }
 
-  /// Process voice transcription with robust error handling and fallbacks
+  /// Process voice transcription with flattened, testable pipeline
   Future<void> processVoiceTranscription(String transcription) async {
-    if (!_isInitialized) {
-      throw StateError('SocialActionPostCoordinator not initialized');
-    }
-
     _currentTranscription = transcription;
     _postState = PostState.processing;
     _lastError = null;
@@ -96,82 +87,27 @@ class SocialActionPostCoordinator extends ChangeNotifier {
 
     try {
       if (kDebugMode) {
-        print(
-            '🎯 SocialActionPostCoordinator: Processing transcription: "$transcription"');
+        print('🎯 Processing transcription: "$transcription"');
       }
 
-      // Attempt AI processing with intelligent fallback handling
-      SocialAction? aiGeneratedPost;
-      Map<String, dynamic>? partialChatGptData;
+      // Pipeline: each step is a separate, testable method
+      final aiPost = await _tryAiGenerate(transcription);
+      final mergedPost = _mergeWithExisting(aiPost);
+      final mediaPost = await _includeMedia(mergedPost, transcription);
+      final finalPost = _sanitizePost(mediaPost);
 
-      try {
-        aiGeneratedPost = await _aiService!.processVoiceCommand(
-          transcription,
-          preSelectedMedia:
-              _preSelectedMedia.isNotEmpty ? _preSelectedMedia : null,
-        );
-
-        if (kDebugMode) {
-          print('✅ ChatGPT generated complete post');
-          print('   Enhanced text: "${aiGeneratedPost.content.text}"');
-          print('   Hashtags: ${aiGeneratedPost.content.hashtags}');
-          print(
-              '   Fallback used: ${aiGeneratedPost.internal.fallbackReason ?? 'none'}');
-        }
-      } catch (aiError) {
-        if (kDebugMode) {
-          print('⚠️ AI service failed: $aiError');
-        }
-
-        // Try to extract partial data from the error if it contains JSON fragments
-        partialChatGptData = _extractPartialJsonData(aiError.toString());
-
-        if (partialChatGptData != null) {
-          if (kDebugMode) {
-            print('🔧 Extracted partial ChatGPT data:');
-            print('   Text: ${partialChatGptData['content']?['text']}');
-            print('   Hashtags: ${partialChatGptData['content']?['hashtags']}');
-          }
-        }
-
-        if (kDebugMode) {
-          print('🔄 Creating enhanced baseline post with ChatGPT fragments...');
-        }
-
-        // Create enhanced baseline post with any recovered ChatGPT data
-        aiGeneratedPost =
-            _createEnhancedBaselinePost(transcription, partialChatGptData);
-      }
-
-      // Merge with existing state if we have one
-      if (_currentPost != null) {
-        aiGeneratedPost =
-            _mergeWithExistingPost(aiGeneratedPost, _currentPost!);
-      }
-
-      // CRITICAL: Ensure media is included with intelligent defaults
-      aiGeneratedPost =
-          await _ensureMediaInclusion(aiGeneratedPost, transcription);
-
-      // Validate and sanitize the post
-      aiGeneratedPost = _validateAndSanitizePost(aiGeneratedPost);
-
-      _currentPost = aiGeneratedPost;
+      _currentPost = finalPost;
       _postState = hasContent ? PostState.ready : PostState.needsContent;
-
-      // Auto-save the draft
-      await _saveDraft();
-
+      _triggerDebouncedSave();
       notifyListeners();
 
       if (kDebugMode) {
         print('✅ Post processing complete');
-        print('   Final text: "${_currentPost!.content.text}"');
-        print('   Final hashtags: ${_currentPost!.content.hashtags}');
-        print('   Media count: ${_currentPost!.content.media.length}');
+        print('   Text: "${_currentPost!.content.text}"');
+        print('   Hashtags: ${_currentPost!.content.hashtags}');
         print('   Platforms: ${_currentPost!.platforms.join(', ')}');
         print(
-            '   Fallback reason: ${_currentPost!.internal.fallbackReason ?? 'none'}');
+            '   Fallback: ${_currentPost!.internal.fallbackReason ?? 'none'}');
       }
     } catch (e) {
       _lastError = e.toString();
@@ -185,137 +121,270 @@ class SocialActionPostCoordinator extends ChangeNotifier {
     }
   }
 
-  /// Extract partial JSON data from error messages or incomplete responses
-  Map<String, dynamic>? _extractPartialJsonData(String errorOrResponse) {
+  /// Step 1: Try AI generation with simplified fallback
+  Future<SocialAction> _tryAiGenerate(String transcription) async {
     try {
-      // Look for JSON-like structures in the error/response
-      final jsonStart = errorOrResponse.indexOf('{');
-      final jsonEnd = errorOrResponse.lastIndexOf('}');
-
-      if (jsonStart != -1 && jsonEnd != -1 && jsonEnd > jsonStart) {
-        final jsonCandidate = errorOrResponse.substring(jsonStart, jsonEnd + 1);
-
-        // Try to parse the candidate JSON
-        final parsedData = robustJsonParse(jsonCandidate);
-
-        // Validate that it has useful content
-        if (parsedData.containsKey('content')) {
-          return parsedData;
-        }
-      }
-
-      return null;
+      return await _aiService.processVoiceCommand(
+        transcription,
+        preSelectedMedia:
+            _preSelectedMedia.isNotEmpty ? _preSelectedMedia : null,
+      );
     } catch (e) {
       if (kDebugMode) {
-        print('🔧 Could not extract partial JSON data: $e');
+        print('⚠️ AI generation failed, creating baseline post: $e');
       }
-      return null;
+      return _createBaselinePost(transcription);
     }
   }
 
-  /// Create an enhanced baseline post that incorporates any partial ChatGPT data
-  SocialAction _createEnhancedBaselinePost(
-      String transcription, Map<String, dynamic>? partialData) {
-    final timestamp = DateTime.now().toIso8601String();
-    final actionId =
-        'enhanced_baseline_${DateTime.now().millisecondsSinceEpoch}';
+  /// Step 2: Merge with existing post if available
+  SocialAction _mergeWithExisting(SocialAction newPost) {
+    if (_currentPost == null) return newPost;
 
-    // Extract enhanced content from partial ChatGPT data if available
-    String enhancedText = transcription;
-    List<String> enhancedHashtags = [];
-    List<String> enhancedMentions = [];
-    String fallbackReason = 'enhanced_baseline_creation';
+    return _currentPost!.copyWith(
+      platforms: newPost.platforms.isNotEmpty ? newPost.platforms : null,
+      content: _currentPost!.content.copyWith(
+        text: newPost.content.text.isNotEmpty ? newPost.content.text : null,
+        hashtags: newPost.content.hashtags.isNotEmpty
+            ? newPost.content.hashtags
+            : null,
+        mentions: newPost.content.mentions.isNotEmpty
+            ? newPost.content.mentions
+            : null,
+        media: newPost.content.media.isNotEmpty ? newPost.content.media : null,
+      ),
+      internal: _currentPost!.internal.copyWith(
+        aiGenerated: newPost.internal.aiGenerated,
+        originalTranscription: newPost.internal.originalTranscription,
+        fallbackReason: newPost.internal.fallbackReason,
+      ),
+    );
+  }
 
-    if (partialData != null && partialData.containsKey('content')) {
-      final contentData = partialData['content'] as Map<String, dynamic>?;
+  /// Step 3: Include media intelligently
+  Future<SocialAction> _includeMedia(
+      SocialAction post, String transcription) async {
+    // If post already has media, keep it
+    if (post.content.media.isNotEmpty) return post;
 
-      if (contentData != null) {
-        // Use ChatGPT's enhanced text if available
-        if (contentData.containsKey('text') && contentData['text'] is String) {
-          final chatGptText = contentData['text'] as String;
-          if (chatGptText.trim().isNotEmpty && chatGptText != transcription) {
-            enhancedText = chatGptText;
-            fallbackReason = 'partial_chatgpt_with_enhanced_text';
+    // If we have pre-selected media, use it
+    if (_preSelectedMedia.isNotEmpty) {
+      return post.copyWith(
+        content: post.content.copyWith(media: List.from(_preSelectedMedia)),
+      );
+    }
 
-            if (kDebugMode) {
-              print('✅ Preserved ChatGPT enhanced text: "$enhancedText"');
-            }
-          }
+    // If user referenced media, try to assign default
+    if (_transcriptionReferencesMedia(transcription)) {
+      try {
+        final recentMedia = await _getRecentMedia(limit: 5);
+        if (recentMedia.isNotEmpty) {
+          return post.copyWith(
+            content: post.content.copyWith(media: [recentMedia.first]),
+            internal: post.internal
+                .copyWith(fallbackReason: 'default_media_assigned'),
+          );
         }
-
-        // Use ChatGPT's hashtags if available
-        if (contentData.containsKey('hashtags') &&
-            contentData['hashtags'] is List) {
-          final chatGptHashtags = (contentData['hashtags'] as List)
-              .map((h) => h.toString().replaceAll('#', '').trim())
-              .where((h) => h.isNotEmpty)
-              .toList();
-
-          if (chatGptHashtags.isNotEmpty) {
-            enhancedHashtags = chatGptHashtags;
-            fallbackReason = 'partial_chatgpt_with_hashtags';
-
-            if (kDebugMode) {
-              print('✅ Preserved ChatGPT hashtags: $enhancedHashtags');
-            }
-          }
-        }
-
-        // Use ChatGPT's mentions if available
-        if (contentData.containsKey('mentions') &&
-            contentData['mentions'] is List) {
-          enhancedMentions = (contentData['mentions'] as List)
-              .map((m) => m.toString().trim())
-              .where((m) => m.isNotEmpty)
-              .toList();
+      } catch (e) {
+        if (kDebugMode) {
+          print('❌ Failed to get recent media: $e');
         }
       }
     }
 
-    // If no hashtags from ChatGPT, generate intelligent defaults
-    if (enhancedHashtags.isEmpty) {
-      enhancedHashtags = _generateIntelligentHashtags(enhancedText);
-      if (fallbackReason == 'enhanced_baseline_creation') {
-        fallbackReason = 'baseline_with_generated_hashtags';
-      }
-    }
+    return post;
+  }
 
-    // If no mentions from ChatGPT, extract from text
-    if (enhancedMentions.isEmpty) {
-      enhancedMentions = _extractMentionsFromText(enhancedText);
-    }
+  /// Step 4: Sanitize and validate post
+  SocialAction _sanitizePost(SocialAction post) {
+    final actionId = post.actionId.isEmpty
+        ? 'sanitized_${DateTime.now().millisecondsSinceEpoch}'
+        : post.actionId;
+
+    final sanitizedText =
+        post.content.text.replaceAll(RegExp(r'[^\w\s\.,!?@#-]'), '').trim();
+
+    final platforms = post.platforms.isEmpty
+        ? _selectDefaultPlatforms(sanitizedText, hasMedia,
+            _transcriptionReferencesMedia(post.internal.originalTranscription))
+        : post.platforms;
+
+    return post.copyWith(
+      actionId: actionId,
+      platforms: platforms,
+      content: post.content.copyWith(text: sanitizedText),
+    );
+  }
+
+  /// Create baseline post with intelligent platform selection
+  SocialAction _createBaselinePost(String transcription) {
+    final hasMedia = _preSelectedMedia.isNotEmpty;
+    final hasMediaReference = _transcriptionReferencesMedia(transcription);
+    final selectedPlatforms =
+        _selectDefaultPlatforms(transcription, hasMedia, hasMediaReference);
+    final hashtags = _generateIntelligentHashtags(transcription);
 
     return SocialAction(
-      actionId: actionId,
-      createdAt: timestamp,
-      platforms: ['instagram', 'twitter', 'facebook', 'tiktok'],
+      actionId: 'baseline_${DateTime.now().millisecondsSinceEpoch}',
+      createdAt: DateTime.now().toIso8601String(),
+      platforms: selectedPlatforms,
       content: Content(
-        text: enhancedText,
-        hashtags: enhancedHashtags,
-        mentions: enhancedMentions,
-        media: _preSelectedMedia.isNotEmpty ? List.from(_preSelectedMedia) : [],
+        text: transcription,
+        hashtags: hashtags,
+        media: hasMedia ? List.from(_preSelectedMedia) : [],
       ),
       options: Options(
         schedule: 'now',
-        visibility: {
-          'instagram': 'public',
-          'twitter': 'public',
-          'facebook': 'public',
-          'tiktok': 'public',
-        },
+        visibility: _createVisibilityMap(selectedPlatforms),
       ),
-      platformData: PlatformData(
-        facebook: FacebookData(postHere: false),
-        instagram: InstagramData(postHere: true, postType: 'feed'),
-        twitter: TwitterData(postHere: true),
-        tiktok: TikTokData(postHere: false, sound: Sound()),
-      ),
+      platformData: _createPlatformData(selectedPlatforms),
       internal: Internal(
-        aiGenerated: partialData != null, // True if we had some ChatGPT data
+        aiGenerated: false,
         originalTranscription: transcription,
-        fallbackReason: fallbackReason,
+        fallbackReason: 'baseline_creation',
       ),
     );
+  }
+
+  /// Intelligently select default platforms based on content type and media availability
+  List<String> _selectDefaultPlatforms(
+      String text, bool hasMedia, bool hasMediaReference) {
+    final platforms = <String>[];
+
+    // Always include text-supporting platforms for any content
+    platforms.addAll(['twitter', 'facebook']);
+
+    // Add media-requiring platforms only if we have media or user referenced media
+    if (hasMedia || hasMediaReference) {
+      platforms.addAll(['instagram', 'tiktok']);
+    }
+
+    if (kDebugMode) {
+      print('🎯 Intelligent platform selection:');
+      print(
+          '   Text: "${text.substring(0, text.length > 50 ? 50 : text.length)}${text.length > 50 ? '...' : ''}"');
+      print('   Has media: $hasMedia');
+      print('   Has media reference: $hasMediaReference');
+      print('   Selected platforms: $platforms');
+    }
+
+    return platforms;
+  }
+
+  /// Create platform-specific configuration for selected platforms
+  Map<String, String> _createVisibilityMap(List<String> platforms) {
+    final visibility = <String, String>{};
+    for (final platform in platforms) {
+      visibility[platform] = 'public';
+    }
+    return visibility;
+  }
+
+  /// Create platform data for selected platforms
+  PlatformData _createPlatformData(List<String> platforms) {
+    return PlatformData(
+      facebook: platforms.contains('facebook')
+          ? FacebookData(postHere: true)
+          : FacebookData(postHere: false),
+      instagram: platforms.contains('instagram')
+          ? InstagramData(postHere: true, postType: 'feed')
+          : InstagramData(postHere: false, postType: 'feed'),
+      twitter: platforms.contains('twitter')
+          ? TwitterData(postHere: true)
+          : TwitterData(postHere: false),
+      tiktok: platforms.contains('tiktok')
+          ? TikTokData(postHere: true, sound: Sound())
+          : TikTokData(postHere: false, sound: Sound()),
+    );
+  }
+
+  /// Trigger debounced save - only saves after 1 second of no changes
+  void _triggerDebouncedSave() {
+    _debounceTimer?.cancel();
+    _debounceTimer =
+        Timer(const Duration(milliseconds: _autoSaveDebounceMs), () {
+      _saveDraft();
+    });
+  }
+
+  /// Get recent media with performance limit
+  Future<List<MediaItem>> _getRecentMedia({int limit = 25}) async {
+    try {
+      final recentMediaMaps = await _mediaCoordinator.getMediaForQuery(
+        '', // Empty search for general recent media
+        mediaTypes: ['image', 'video'],
+      );
+
+      // Convert to MediaItem objects with limit
+      final recentMedia = recentMediaMaps.take(limit).map((mediaMap) {
+        return MediaItem(
+          fileUri: mediaMap['file_uri'] ?? '',
+          mimeType: mediaMap['mime_type'] ?? 'image/jpeg',
+          deviceMetadata: DeviceMetadata(
+            creationTime:
+                mediaMap['timestamp'] ?? DateTime.now().toIso8601String(),
+            latitude: mediaMap['device_metadata']?['latitude'],
+            longitude: mediaMap['device_metadata']?['longitude'],
+            orientation: mediaMap['device_metadata']?['orientation'] ?? 1,
+            width: mediaMap['device_metadata']?['width'] ?? 0,
+            height: mediaMap['device_metadata']?['height'] ?? 0,
+            fileSizeBytes: mediaMap['device_metadata']?['file_size_bytes'] ?? 0,
+            duration: mediaMap['device_metadata']?['duration'] ?? 0,
+            bitrate: mediaMap['device_metadata']?['bitrate'],
+            samplingRate: mediaMap['device_metadata']?['sampling_rate'],
+            frameRate: mediaMap['device_metadata']?['frame_rate'],
+          ),
+        );
+      }).toList();
+
+      return recentMedia;
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ Failed to get recent media: $e');
+      }
+      return [];
+    }
+  }
+
+  /// Check if transcription suggests the user wants media included
+  bool _transcriptionReferencesMedia(String transcription) {
+    final lowerTranscription = transcription.toLowerCase();
+
+    final mediaKeywords = [
+      'picture',
+      'photo',
+      'image',
+      'pic',
+      'shot',
+      'video',
+      'clip',
+      'recording',
+      'last',
+      'recent',
+      'latest',
+      'newest',
+      'this picture',
+      'this photo',
+      'this image',
+      'my picture',
+      'my photo',
+      'my image',
+      'the picture',
+      'the photo',
+      'the image',
+    ];
+
+    final hasMediaKeyword =
+        mediaKeywords.any((keyword) => lowerTranscription.contains(keyword));
+
+    if (kDebugMode && hasMediaKeyword) {
+      final matchedKeywords = mediaKeywords
+          .where((keyword) => lowerTranscription.contains(keyword))
+          .toList();
+      print('🔍 Found media keywords: ${matchedKeywords.join(', ')}');
+    }
+
+    return hasMediaKeyword;
   }
 
   /// Generate intelligent hashtags based on content analysis
@@ -395,227 +464,178 @@ class SocialActionPostCoordinator extends ChangeNotifier {
     return uniqueHashtags;
   }
 
-  /// Robust JSON parsing with multiple repair strategies
-  Map<String, dynamic> robustJsonParse(String jsonString) {
-    // Strategy 1: Direct parsing
-    try {
-      return json.decode(jsonString) as Map<String, dynamic>;
-    } catch (e) {
-      if (kDebugMode) {
-        print('🔧 JSON parse failed, attempting repair...');
-      }
+  /// Extract hashtags from text content (spoken hashtags)
+  List<String> _extractHashtagsFromText(String text) {
+    // Match hashtags in the format #hashtag or #HashTag
+    final hashtagRegex = RegExp(r'#([a-zA-Z0-9_]+)', multiLine: true);
+    final matches = hashtagRegex.allMatches(text);
+
+    final extractedHashtags = matches
+        .map((match) => match.group(1)!)
+        .where((hashtag) => hashtag.isNotEmpty)
+        .map((hashtag) => hashtag.toLowerCase()) // Normalize to lowercase
+        .toSet() // Remove duplicates
+        .toList();
+
+    if (kDebugMode && extractedHashtags.isNotEmpty) {
+      print('🏷️ Extracted hashtags from text: $extractedHashtags');
     }
 
-    // Strategy 2: Use the existing repairJson function
-    try {
-      final repairedJson = _aiService?.repairJson(jsonString) ?? jsonString;
-      return json.decode(repairedJson) as Map<String, dynamic>;
-    } catch (e) {
-      if (kDebugMode) {
-        print('🔧 JSON repair failed, attempting advanced repair...');
-      }
-    }
-
-    // Strategy 3: Advanced repair with type-safe defaults
-    try {
-      return _advancedJsonRepair(jsonString);
-    } catch (e) {
-      if (kDebugMode) {
-        print('❌ All JSON repair strategies failed: $e');
-      }
-
-      // Strategy 4: Return minimal valid structure
-      return _createMinimalValidJson();
-    }
+    return extractedHashtags;
   }
 
-  /// Advanced JSON repair with intelligent type inference
-  Map<String, dynamic> _advancedJsonRepair(String brokenJson) {
-    String repaired = brokenJson.trim();
+  /// Remove hashtags from text content (clean text for display)
+  String _removeHashtagsFromText(String text) {
+    // Remove hashtags in the format #hashtag or #HashTag
+    final hashtagRegex = RegExp(r'#[a-zA-Z0-9_]+\s*', multiLine: true);
+    final cleanText = text.replaceAll(hashtagRegex, '').trim();
 
-    // Find JSON boundaries
-    int start = repaired.indexOf('{');
-    if (start == -1) {
-      throw Exception('No JSON object found');
-    }
-
-    // Extract the JSON portion
-    repaired = repaired.substring(start);
-
-    // Fix common truncation issues
-    if (!repaired.endsWith('}')) {
-      // Count open braces and brackets
-      int openBraces = 0;
-      int openBrackets = 0;
-      bool inString = false;
-
-      for (int i = 0; i < repaired.length; i++) {
-        final char = repaired[i];
-
-        if (char == '"' && (i == 0 || repaired[i - 1] != '\\')) {
-          inString = !inString;
-        }
-
-        if (!inString) {
-          if (char == '{')
-            openBraces++;
-          else if (char == '}')
-            openBraces--;
-          else if (char == '[')
-            openBrackets++;
-          else if (char == ']') openBrackets--;
-        }
-      }
-
-      // Close open structures
-      for (int i = 0; i < openBrackets; i++) {
-        repaired += ']';
-      }
-      for (int i = 0; i < openBraces; i++) {
-        repaired += '}';
-      }
-    }
-
-    // Fix trailing commas
-    repaired = repaired.replaceAllMapped(
-      RegExp(r',(\s*[}\]])'),
-      (match) => match.group(1)!,
-    );
-
-    // Fix incomplete key-value pairs
-    repaired = repaired.replaceAllMapped(
-      RegExp(r'"([^"]+)":\s*([,}\]])'),
-      (match) {
-        final key = match.group(1)!;
-        final terminator = match.group(2)!;
-
-        // Intelligent default based on key name
-        if (key.contains('text') || key.contains('transcription')) {
-          return '"$key": ""$terminator';
-        } else if (key.contains('platforms') ||
-            key.contains('hashtags') ||
-            key.contains('mentions')) {
-          return '"$key": []$terminator';
-        } else if (key.contains('media')) {
-          return '"$key": []$terminator';
-        } else if (key.contains('time') || key.contains('date')) {
-          return '"$key": "${DateTime.now().toIso8601String()}"$terminator';
-        } else if (key.contains('id')) {
-          return '"$key": "generated_${DateTime.now().millisecondsSinceEpoch}"$terminator';
-        } else {
-          return '"$key": null$terminator';
-        }
-      },
-    );
-
-    try {
-      return json.decode(repaired) as Map<String, dynamic>;
-    } catch (e) {
-      // If all else fails, merge with a template
-      return _mergeWithTemplate(repaired);
-    }
+    // Clean up extra whitespace
+    return cleanText.replaceAll(RegExp(r'\s+'), ' ').trim();
   }
 
-  /// Create minimal valid JSON structure
-  Map<String, dynamic> _createMinimalValidJson() {
-    return {
-      'action_id': 'fallback_${DateTime.now().millisecondsSinceEpoch}',
-      'created_at': DateTime.now().toIso8601String(),
-      'platforms': ['instagram', 'twitter'],
-      'content': {
-        'text': _currentTranscription,
-        'hashtags': [],
-        'mentions': [],
-        'media': [],
-      },
-      'options': {
-        'schedule': 'now',
-        'visibility': {
-          'instagram': 'public',
-          'twitter': 'public',
-        },
-      },
-      'platform_data': {
-        'instagram': {'post_here': true},
-        'twitter': {'post_here': true},
-      },
-      'internal': {
-        'ai_generated': false,
-        'original_transcription': _currentTranscription,
-        'fallback_reason': 'minimal_json_creation',
-      },
-    };
-  }
+  /// Format hashtags for specific platform requirements
+  String _formatHashtagsForPlatform(List<String> hashtags, String platform) {
+    if (hashtags.isEmpty) return '';
 
-  /// Merge partial JSON with complete template
-  Map<String, dynamic> _mergeWithTemplate(String partialJson) {
-    final template = _createMinimalValidJson();
+    switch (platform.toLowerCase()) {
+      case 'instagram':
+        // Instagram: hashtags at the end, separated by spaces, max 30 hashtags
+        final limitedHashtags = hashtags.take(30).toList();
+        return '\n\n${limitedHashtags.map((tag) => '#$tag').join(' ')}';
 
-    try {
-      // Try to extract any valid parts from the partial JSON
-      final matches = RegExp(r'"([^"]+)":\s*"([^"]*)"').allMatches(partialJson);
-      for (final match in matches) {
-        final key = match.group(1)!;
-        final value = match.group(2)!;
+      case 'twitter':
+        // Twitter: hashtags integrated naturally, max 280 chars total, 2-3 hashtags recommended
+        final limitedHashtags = hashtags.take(3).toList();
+        return ' ${limitedHashtags.map((tag) => '#$tag').join(' ')}';
 
-        if (key == 'text' && value.isNotEmpty) {
-          template['content']['text'] = value;
-        }
-      }
+      case 'facebook':
+        // Facebook: hashtags at the end, each on new line for better readability
+        return '\n\n${hashtags.map((tag) => '#$tag').join(' ')}';
 
-      // Extract arrays
-      final arrayMatches =
-          RegExp(r'"([^"]+)":\s*\[([^\]]*)\]').allMatches(partialJson);
-      for (final match in arrayMatches) {
-        final key = match.group(1)!;
-        final arrayContent = match.group(2)!;
-
-        if (key == 'platforms' && arrayContent.isNotEmpty) {
-          final platforms = arrayContent
-              .split(',')
-              .map((s) => s.trim().replaceAll('"', ''))
-              .where((s) => s.isNotEmpty)
-              .toList();
-          if (platforms.isNotEmpty) {
-            template['platforms'] = platforms;
+      case 'tiktok':
+        // TikTok: hashtags at the end, space-separated, max 100 chars for hashtags
+        var formattedHashtags = hashtags.map((tag) => '#$tag').join(' ');
+        if (formattedHashtags.length > 100) {
+          // Truncate if too long
+          final truncatedTags = <String>[];
+          var currentLength = 0;
+          for (final tag in hashtags) {
+            final tagWithHash = '#$tag ';
+            if (currentLength + tagWithHash.length <= 100) {
+              truncatedTags.add(tag);
+              currentLength += tagWithHash.length;
+            } else {
+              break;
+            }
           }
+          formattedHashtags = truncatedTags.map((tag) => '#$tag').join(' ');
         }
-      }
-    } catch (e) {
-      // Use template as-is
-    }
+        return '\n\n$formattedHashtags';
 
-    return template;
+      default:
+        // Default format: hashtags at the end, space-separated
+        return '\n\n${hashtags.map((tag) => '#$tag').join(' ')}';
+    }
   }
 
-  /// Update post content (text editing)
+  /// Get platform-formatted post content with hashtags
+  String getFormattedPostContent(String platform) {
+    if (_currentPost == null) return '';
+
+    final baseText = _currentPost!.content.text;
+    final hashtags = _currentPost!.content.hashtags;
+
+    // Remove any existing hashtags from the base text to avoid duplication
+    final cleanText = _removeHashtagsFromText(baseText);
+
+    // Add platform-specific hashtag formatting
+    final formattedHashtags = _formatHashtagsForPlatform(hashtags, platform);
+
+    return '$cleanText$formattedHashtags'.trim();
+  }
+
+  /// Update post content with unified hashtag handling
   Future<void> updatePostContent(String newText) async {
+    if (kDebugMode) {
+      print('🔄 Updating post content with unified hashtag handling');
+      print('   New text: "$newText"');
+    }
+
+    // Extract hashtags from the new text
+    final extractedHashtags = _extractHashtagsFromText(newText);
+
+    // Remove hashtags from text to keep them separate
+    final cleanText = _removeHashtagsFromText(newText);
+
     if (_currentPost == null) {
-      // Create new post with the text
-      _currentPost = _createEnhancedBaselinePost(newText, null);
-    } else {
-      // Update existing post
-      _currentPost = SocialAction(
-        actionId: _currentPost!.actionId,
-        createdAt: _currentPost!.createdAt,
-        platforms: _currentPost!.platforms,
+      // Create new post with the text and extracted hashtags
+      final intelligentHashtags = _generateIntelligentHashtags(cleanText);
+      final allHashtags =
+          <String>{...extractedHashtags, ...intelligentHashtags}.toList();
+
+      _currentPost = _createBaselinePost(cleanText).copyWith(
         content: Content(
-          text: newText,
-          hashtags: _currentPost!.content.hashtags,
-          mentions: _currentPost!.content.mentions,
-          link: _currentPost!.content.link,
-          media: _currentPost!.content.media,
+          text: cleanText,
+          hashtags: allHashtags,
+          mentions: [],
+          media: [],
         ),
-        options: _currentPost!.options,
-        platformData: _currentPost!.platformData,
-        internal: _currentPost!.internal,
-        mediaQuery: _currentPost!.mediaQuery,
+      );
+    } else {
+      // Update existing post - merge extracted hashtags with existing ones
+      final existingHashtags = Set<String>.from(_currentPost!.content.hashtags);
+      final newHashtags =
+          <String>{...existingHashtags, ...extractedHashtags}.toList();
+
+      _currentPost = _currentPost!.copyWith(
+        content: _currentPost!.content.copyWith(
+          text: cleanText,
+          hashtags: newHashtags,
+        ),
       );
     }
 
     _postState = hasContent ? PostState.ready : PostState.needsContent;
-    await _saveDraft();
+    _triggerDebouncedSave();
     notifyListeners();
+
+    if (kDebugMode) {
+      print('✅ Post content updated with unified hashtag handling');
+      print('   Clean text: "$cleanText"');
+      print('   Extracted hashtags: $extractedHashtags');
+      print('   Final hashtags: ${_currentPost!.content.hashtags}');
+    }
+  }
+
+  /// Update post hashtags independently
+  Future<void> updatePostHashtags(List<String> newHashtags) async {
+    if (_currentPost == null) {
+      // Create new post with hashtags only
+      _currentPost = _createBaselinePost('').copyWith(
+        content: Content(
+          text: '',
+          hashtags: newHashtags,
+          mentions: [],
+          media: [],
+        ),
+      );
+    } else {
+      // Update existing post hashtags
+      _currentPost = _currentPost!.copyWith(
+        content: _currentPost!.content.copyWith(hashtags: newHashtags),
+      );
+    }
+
+    _postState = hasContent ? PostState.ready : PostState.needsContent;
+    _triggerDebouncedSave();
+    notifyListeners();
+
+    if (kDebugMode) {
+      print('✅ Hashtags updated via coordinator');
+      print('   New hashtags: $newHashtags');
+      print('   Total hashtags: ${newHashtags.length}');
+    }
   }
 
   /// Add media to current post
@@ -626,26 +646,13 @@ class SocialActionPostCoordinator extends ChangeNotifier {
       final updatedMedia = List<MediaItem>.from(_currentPost!.content.media);
       updatedMedia.addAll(media);
 
-      _currentPost = SocialAction(
-        actionId: _currentPost!.actionId,
-        createdAt: _currentPost!.createdAt,
-        platforms: _currentPost!.platforms,
-        content: Content(
-          text: _currentPost!.content.text,
-          hashtags: _currentPost!.content.hashtags,
-          mentions: _currentPost!.content.mentions,
-          link: _currentPost!.content.link,
-          media: updatedMedia,
-        ),
-        options: _currentPost!.options,
-        platformData: _currentPost!.platformData,
-        internal: _currentPost!.internal,
-        mediaQuery: _currentPost!.mediaQuery,
+      _currentPost = _currentPost!.copyWith(
+        content: _currentPost!.content.copyWith(media: updatedMedia),
       );
     }
 
     _postState = isPostComplete ? PostState.ready : PostState.needsMedia;
-    await _saveDraft();
+    _triggerDebouncedSave();
     notifyListeners();
   }
 
@@ -660,17 +667,7 @@ class SocialActionPostCoordinator extends ChangeNotifier {
       updatedPlatforms.add(platform);
     }
 
-    _currentPost = SocialAction(
-      actionId: _currentPost!.actionId,
-      createdAt: _currentPost!.createdAt,
-      platforms: updatedPlatforms,
-      content: _currentPost!.content,
-      options: _currentPost!.options,
-      platformData: _currentPost!.platformData,
-      internal: _currentPost!.internal,
-      mediaQuery: _currentPost!.mediaQuery,
-    );
-
+    _currentPost = _currentPost!.copyWith(platforms: updatedPlatforms);
     notifyListeners();
   }
 
@@ -687,6 +684,12 @@ class SocialActionPostCoordinator extends ChangeNotifier {
 
   /// Set processing state with proper cleanup
   void setProcessingState(bool processing) {
+    if (kDebugMode) {
+      print('🔧 SocialActionPostCoordinator.setProcessingState($processing)');
+      print('   Current _isProcessing: $_isProcessing');
+      print('   Current _postState: $_postState');
+    }
+
     _isProcessing = processing;
     if (processing) {
       _postState = PostState.processing;
@@ -698,6 +701,14 @@ class SocialActionPostCoordinator extends ChangeNotifier {
         _postState = PostState.idle;
       }
     }
+
+    if (kDebugMode) {
+      print('   New _isProcessing: $_isProcessing');
+      print('   New _postState: $_postState');
+      print('   hasContent: $hasContent');
+      print('   currentPost != null: ${_currentPost != null}');
+    }
+
     notifyListeners();
   }
 
@@ -717,292 +728,20 @@ class SocialActionPostCoordinator extends ChangeNotifier {
     }
   }
 
-  /// Soft reset that preserves pre-selected media (for navigation back scenarios)
-  void softReset() {
-    _currentPost = null;
-    _currentTranscription = '';
-    _postState = PostState.idle;
-    _lastError = null;
-    _isRecording = false;
-    _isProcessing = false;
-    notifyListeners();
-
-    if (kDebugMode) {
-      print(
-          '🔄 SocialActionPostCoordinator: Soft reset (preserving ${_preSelectedMedia.length} pre-selected media)');
-    }
-  }
-
-  /// Validate and sanitize post data
-  SocialAction _validateAndSanitizePost(SocialAction post) {
-    // Ensure required fields
-    final actionId = post.actionId.isEmpty
-        ? 'sanitized_${DateTime.now().millisecondsSinceEpoch}'
-        : post.actionId;
-
-    final createdAt = post.createdAt.isEmpty
-        ? DateTime.now().toIso8601String()
-        : post.createdAt;
-
-    final platforms =
-        post.platforms.isEmpty ? ['instagram', 'twitter'] : post.platforms;
-
-    // Sanitize text content
-    final sanitizedText =
-        post.content.text.replaceAll(RegExp(r'[^\w\s\.,!?@#-]'), '').trim();
-
-    return SocialAction(
-      actionId: actionId,
-      createdAt: createdAt,
-      platforms: platforms,
-      content: Content(
-        text: sanitizedText,
-        hashtags: post.content.hashtags,
-        mentions: post.content.mentions,
-        link: post.content.link,
-        media: post.content.media,
-      ),
-      options: post.options,
-      platformData: post.platformData,
-      internal: post.internal,
-      mediaQuery: post.mediaQuery,
-    );
-  }
-
-  /// Ensure media is included in the post
-  Future<SocialAction> _ensureMediaInclusion(
-      SocialAction post, String transcription) async {
-    // Priority 1: If post already has media, keep it
-    if (post.content.media.isNotEmpty) {
-      if (kDebugMode) {
-        print('✅ Post already has ${post.content.media.length} media items');
-      }
-      return post;
-    }
-
-    // Priority 2: If we have pre-selected media, use it
-    if (_preSelectedMedia.isNotEmpty) {
-      if (kDebugMode) {
-        print('📎 Using ${_preSelectedMedia.length} pre-selected media items');
-      }
-      return SocialAction(
-        actionId: post.actionId,
-        createdAt: post.createdAt,
-        platforms: post.platforms,
-        content: Content(
-          text: post.content.text,
-          hashtags: post.content.hashtags,
-          mentions: post.content.mentions,
-          link: post.content.link,
-          media: List.from(_preSelectedMedia),
-        ),
-        options: post.options,
-        platformData: post.platformData,
-        internal: post.internal,
-        mediaQuery: post.mediaQuery,
-      );
-    }
-
-    // Priority 3: Check if user referenced media in transcription
-    if (_transcriptionReferencesMedia(transcription)) {
-      if (kDebugMode) {
-        print('🔍 Transcription references media: "$transcription"');
-        print('🔍 Attempting to assign default media...');
-      }
-
-      try {
-        // Get the most recent media from MediaCoordinator
-        final recentMedia = await _getRecentMediaFromCoordinator();
-
-        if (recentMedia.isNotEmpty) {
-          final defaultMedia = recentMedia.first;
-
-          if (kDebugMode) {
-            print('✅ Assigned default media: ${defaultMedia.fileUri}');
-            print('   Created: ${defaultMedia.deviceMetadata.creationTime}');
-          }
-
-          return SocialAction(
-            actionId: post.actionId,
-            createdAt: post.createdAt,
-            platforms: post.platforms,
-            content: Content(
-              text: post.content.text,
-              hashtags: post.content.hashtags,
-              mentions: post.content.mentions,
-              link: post.content.link,
-              media: [defaultMedia],
-            ),
-            options: post.options,
-            platformData: post.platformData,
-            internal: Internal(
-              retryCount: post.internal.retryCount,
-              aiGenerated: post.internal.aiGenerated,
-              originalTranscription: post.internal.originalTranscription,
-              userPreferences: post.internal.userPreferences,
-              mediaIndexId: post.internal.mediaIndexId,
-              uiFlags: post.internal.uiFlags,
-              fallbackReason: 'default_media_assigned',
-            ),
-            mediaQuery: post.mediaQuery,
-          );
-        } else {
-          if (kDebugMode) {
-            print('⚠️ No recent media available for default assignment');
-          }
-        }
-      } catch (e) {
-        if (kDebugMode) {
-          print('❌ Failed to get recent media for default assignment: $e');
-        }
-      }
-    }
-
-    // No media assignment needed or possible
-    if (kDebugMode) {
-      print('ℹ️ No media inclusion needed');
-    }
-    return post;
-  }
-
-  /// Check if transcription suggests the user wants media included
-  bool _transcriptionReferencesMedia(String transcription) {
-    final lowerTranscription = transcription.toLowerCase();
-
-    final mediaKeywords = [
-      'picture',
-      'photo',
-      'image',
-      'pic',
-      'shot',
-      'video',
-      'clip',
-      'recording',
-      'last',
-      'recent',
-      'latest',
-      'newest',
-      'this picture',
-      'this photo',
-      'this image',
-      'my picture',
-      'my photo',
-      'my image',
-      'the picture',
-      'the photo',
-      'the image',
-    ];
-
-    final hasMediaKeyword =
-        mediaKeywords.any((keyword) => lowerTranscription.contains(keyword));
-
-    if (kDebugMode && hasMediaKeyword) {
-      final matchedKeywords = mediaKeywords
-          .where((keyword) => lowerTranscription.contains(keyword))
-          .toList();
-      print('🔍 Found media keywords: ${matchedKeywords.join(', ')}');
-    }
-
-    return hasMediaKeyword;
-  }
-
-  /// Get recent media from MediaCoordinator
-  Future<List<MediaItem>> _getRecentMediaFromCoordinator() async {
-    if (_mediaCoordinator == null) {
-      throw Exception('MediaCoordinator not available');
-    }
-
-    try {
-      // Get recent media (both images and videos)
-      final recentMediaMaps = await _mediaCoordinator!.getMediaForQuery(
-        '', // Empty search for general recent media
-        mediaTypes: ['image', 'video'],
-      );
-
-      // Convert to MediaItem objects
-      final recentMedia = recentMediaMaps.map((mediaMap) {
-        return MediaItem(
-          fileUri: mediaMap['file_uri'] ?? '',
-          mimeType: mediaMap['mime_type'] ?? 'image/jpeg',
-          deviceMetadata: DeviceMetadata(
-            creationTime:
-                mediaMap['timestamp'] ?? DateTime.now().toIso8601String(),
-            latitude: mediaMap['device_metadata']?['latitude'],
-            longitude: mediaMap['device_metadata']?['longitude'],
-            orientation: mediaMap['device_metadata']?['orientation'] ?? 1,
-            width: mediaMap['device_metadata']?['width'] ?? 0,
-            height: mediaMap['device_metadata']?['height'] ?? 0,
-            fileSizeBytes: mediaMap['device_metadata']?['file_size_bytes'] ?? 0,
-            duration: mediaMap['device_metadata']?['duration'] ?? 0,
-            bitrate: mediaMap['device_metadata']?['bitrate'],
-            samplingRate: mediaMap['device_metadata']?['sampling_rate'],
-            frameRate: mediaMap['device_metadata']?['frame_rate'],
-          ),
-        );
-      }).toList();
-
-      if (kDebugMode) {
-        print(
-            '📊 Retrieved ${recentMedia.length} recent media items from coordinator');
-      }
-
-      return recentMedia;
-    } catch (e) {
-      if (kDebugMode) {
-        print('❌ Failed to get recent media from coordinator: $e');
-      }
-      return [];
-    }
-  }
-
-  /// Extract hashtags from text
-  List<String> _extractHashtagsFromText(String text) {
-    final hashtagRegex = RegExp(r'#(\w+)');
-    return hashtagRegex
-        .allMatches(text)
-        .map((match) => match.group(1)!)
-        .toList();
-  }
-
-  /// Extract mentions from text
-  List<String> _extractMentionsFromText(String text) {
-    final mentionRegex = RegExp(r'@(\w+)');
-    return mentionRegex
-        .allMatches(text)
-        .map((match) => match.group(1)!)
-        .toList();
-  }
-
-  /// Auto-save draft
-  void _autoSaveDraft() {
-    if (_currentPost != null) {
-      _saveDraft();
-    }
-  }
-
-  /// Save draft to persistent storage (for auto-save, not finalized posts)
+  /// Save draft to persistent storage
   Future<void> _saveDraft() async {
-    if (_currentPost == null || _firestoreService == null) return;
+    if (_currentPost == null) return;
 
     try {
-      // Only auto-save if this is still a draft (not a finalized post)
-      // Finalized posts should only be saved via uploadFinalizedPost()
-      final isDraft = _currentPost!.actionId.startsWith('echo_') ||
-          _currentPost!.actionId.startsWith('enhanced_baseline_') ||
+      // Only auto-save if this is still a draft
+      final isDraft = _currentPost!.actionId.startsWith('baseline_') ||
           _currentPost!.actionId.startsWith('sanitized_') ||
-          _currentPost!.actionId.startsWith('fallback_');
+          _currentPost!.actionId.startsWith('echo_');
 
       if (isDraft) {
-        await _firestoreService!.saveAction(_currentPost!.toJson());
+        await _firestoreService.saveAction(_currentPost!.toJson());
         if (kDebugMode) {
-          print('💾 Draft auto-saved');
-          print('   Action ID: ${_currentPost!.actionId}');
-          print('   Is draft: $isDraft');
-        }
-      } else {
-        if (kDebugMode) {
-          print(
-              '⏭️ Skipping auto-save for finalized post: ${_currentPost!.actionId}');
+          print('💾 Draft auto-saved: ${_currentPost!.actionId}');
         }
       }
     } catch (e) {
@@ -1012,73 +751,19 @@ class SocialActionPostCoordinator extends ChangeNotifier {
     }
   }
 
-  /// Merge AI-generated post with existing post
-  SocialAction _mergeWithExistingPost(
-      SocialAction aiPost, SocialAction existingPost) {
-    return SocialAction(
-      actionId: existingPost.actionId,
-      createdAt: existingPost.createdAt,
-      platforms: aiPost.platforms.isNotEmpty
-          ? aiPost.platforms
-          : existingPost.platforms,
-      content: Content(
-        text: aiPost.content.text.isNotEmpty
-            ? aiPost.content.text
-            : existingPost.content.text,
-        hashtags: aiPost.content.hashtags.isNotEmpty
-            ? aiPost.content.hashtags
-            : existingPost.content.hashtags,
-        mentions: aiPost.content.mentions.isNotEmpty
-            ? aiPost.content.mentions
-            : existingPost.content.mentions,
-        link: aiPost.content.link ?? existingPost.content.link,
-        media: aiPost.content.media.isNotEmpty
-            ? aiPost.content.media
-            : existingPost.content.media,
-      ),
-      options: aiPost.options,
-      platformData: aiPost.platformData,
-      internal: Internal(
-        retryCount: existingPost.internal.retryCount,
-        aiGenerated: aiPost.internal.aiGenerated,
-        originalTranscription: aiPost.internal.originalTranscription,
-        userPreferences: existingPost.internal.userPreferences,
-        mediaIndexId: existingPost.internal.mediaIndexId,
-        uiFlags: existingPost.internal.uiFlags,
-        fallbackReason: aiPost.internal.fallbackReason,
-      ),
-      mediaQuery: aiPost.mediaQuery ?? existingPost.mediaQuery,
-    );
-  }
-
-  /// Replace media in current post (for media selection updates)
+  /// Replace media in current post
   Future<void> replaceMedia(List<MediaItem> media) async {
     if (_currentPost != null) {
-      _currentPost = SocialAction(
-        actionId: _currentPost!.actionId,
-        createdAt: _currentPost!.createdAt,
-        platforms: _currentPost!.platforms,
-        content: Content(
-          text: _currentPost!.content.text,
-          hashtags: _currentPost!.content.hashtags,
-          mentions: _currentPost!.content.mentions,
-          link: _currentPost!.content.link,
-          media: media, // Replace with new media
-        ),
-        options: _currentPost!.options,
-        platformData: _currentPost!.platformData,
-        internal: _currentPost!.internal,
-        mediaQuery: _currentPost!.mediaQuery,
+      _currentPost = _currentPost!.copyWith(
+        content: _currentPost!.content.copyWith(media: media),
       );
 
       _postState = isPostComplete ? PostState.ready : PostState.needsMedia;
-      await _saveDraft();
+      _triggerDebouncedSave();
       notifyListeners();
 
       if (kDebugMode) {
-        print('✅ Media replaced in coordinator');
-        print('   New media count: ${media.length}');
-        print('   Post complete: $isPostComplete');
+        print('✅ Media replaced: ${media.length} items');
       }
     } else {
       // If no current post, treat as pre-selected media
@@ -1087,13 +772,13 @@ class SocialActionPostCoordinator extends ChangeNotifier {
       notifyListeners();
 
       if (kDebugMode) {
-        print('✅ Pre-selected media updated');
-        print('   Pre-selected count: ${_preSelectedMedia.length}');
+        print(
+            '✅ Pre-selected media updated: ${_preSelectedMedia.length} items');
       }
     }
   }
 
-  /// Synchronize coordinator with an existing post (for cross-screen consistency)
+  /// Synchronize coordinator with an existing post
   void syncWithExistingPost(SocialAction existingPost) {
     _currentPost = existingPost;
     _currentTranscription = existingPost.internal.originalTranscription;
@@ -1108,11 +793,8 @@ class SocialActionPostCoordinator extends ChangeNotifier {
     notifyListeners();
 
     if (kDebugMode) {
-      print('🔄 Coordinator synced with existing post');
-      print('   Action ID: ${existingPost.actionId}');
-      print('   Content: "${existingPost.content.text}"');
-      print('   Media count: ${existingPost.content.media.length}');
-      print('   Platforms: ${existingPost.platforms.join(', ')}');
+      print(
+          '🔄 Coordinator synced with existing post: ${existingPost.actionId}');
     }
   }
 
@@ -1120,114 +802,57 @@ class SocialActionPostCoordinator extends ChangeNotifier {
   Future<void> updatePostSchedule(String newSchedule) async {
     if (_currentPost == null) return;
 
-    _currentPost = SocialAction(
-      actionId: _currentPost!.actionId,
-      createdAt: _currentPost!.createdAt,
-      platforms: _currentPost!.platforms,
-      content: _currentPost!.content,
+    _currentPost = _currentPost!.copyWith(
       options: Options(
         schedule: newSchedule,
         locationTag: _currentPost!.options.locationTag,
         visibility: _currentPost!.options.visibility,
         replyToPostId: _currentPost!.options.replyToPostId,
       ),
-      platformData: _currentPost!.platformData,
-      internal: _currentPost!.internal,
-      mediaQuery: _currentPost!.mediaQuery,
     );
 
-    await _saveDraft();
+    _triggerDebouncedSave();
     notifyListeners();
 
     if (kDebugMode) {
-      print('✅ Schedule updated via coordinator');
-      print('   New schedule: $newSchedule');
+      print('✅ Schedule updated via coordinator: $newSchedule');
     }
   }
 
-  /// Upload finalized post to Firestore (called when user confirms posting)
+  /// Upload finalized post to Firestore
   Future<void> uploadFinalizedPost() async {
-    if (_currentPost == null || _firestoreService == null) {
-      throw Exception('No post to upload or Firestore service unavailable');
+    if (_currentPost == null) {
+      throw Exception('No post to upload');
     }
 
     try {
-      await _firestoreService!.saveAction(_currentPost!.toJson());
+      await _firestoreService.saveAction(_currentPost!.toJson());
 
       if (kDebugMode) {
-        print('✅ Finalized post uploaded to Firestore');
-        print('   Action ID: ${_currentPost!.actionId}');
-        print('   Content: "${_currentPost!.content.text}"');
-        print('   Media count: ${_currentPost!.content.media.length}');
+        print('✅ Finalized post uploaded: ${_currentPost!.actionId}');
       }
     } catch (e) {
       if (kDebugMode) {
-        print('❌ Failed to upload finalized post to Firestore: $e');
-      }
-      rethrow;
-    }
-  }
-
-  /// Load existing post from Firestore into coordinator (for history/editing)
-  Future<void> loadPostFromFirestore(String actionId) async {
-    if (_firestoreService == null) {
-      throw Exception('Firestore service unavailable');
-    }
-
-    try {
-      final documentSnapshot = await _firestoreService!.getAction(actionId);
-      if (documentSnapshot != null && documentSnapshot.exists) {
-        final postData = documentSnapshot.data() as Map<String, dynamic>?;
-        if (postData != null) {
-          final loadedPost = SocialAction.fromJson(postData);
-
-          // Sync coordinator with loaded post
-          syncWithExistingPost(loadedPost);
-
-          if (kDebugMode) {
-            print('✅ Post loaded from Firestore into coordinator');
-            print('   Action ID: ${loadedPost.actionId}');
-            print('   Content: "${loadedPost.content.text}"');
-            print('   Media count: ${loadedPost.content.media.length}');
-          }
-        } else {
-          throw Exception('Post data is null');
-        }
-      } else {
-        throw Exception('Post not found in Firestore');
-      }
-    } catch (e) {
-      if (kDebugMode) {
-        print('❌ Failed to load post from Firestore: $e');
+        print('❌ Failed to upload finalized post: $e');
       }
       rethrow;
     }
   }
 
   /// Execute post across all selected social media platforms
-  /// Returns a map of platform -> success status
   Future<Map<String, bool>> executePostToSocialMedia() async {
     if (_currentPost == null) {
       throw Exception('No post to execute');
     }
 
-    if (_socialPostService == null) {
-      throw Exception('SocialPostService not available');
-    }
-
     try {
       if (kDebugMode) {
         print(
-            '🚀 Executing post across social media platforms via coordinator');
-        print('   Post ID: ${_currentPost!.actionId}');
-        print('   Platforms: ${_currentPost!.platforms.join(', ')}');
-        print('   Content: "${_currentPost!.content.text}"');
-        print('   Media count: ${_currentPost!.content.media.length}');
+            '🚀 Executing post across platforms: ${_currentPost!.platforms.join(', ')}');
       }
 
-      // Execute the post across all platforms
       final results =
-          await _socialPostService!.postToAllPlatforms(_currentPost!);
+          await _socialPostService.postToAllPlatforms(_currentPost!);
 
       if (kDebugMode) {
         print('✅ Social media posting completed');
@@ -1239,14 +864,13 @@ class SocialActionPostCoordinator extends ChangeNotifier {
       return results;
     } catch (e) {
       if (kDebugMode) {
-        print('❌ Failed to execute post across social media: $e');
+        print('❌ Failed to execute post: $e');
       }
       rethrow;
     }
   }
 
   /// Complete post workflow: Upload to Firestore + Execute on social media
-  /// This is the final step that should be called when user confirms posting
   Future<Map<String, bool>> finalizeAndExecutePost() async {
     if (_currentPost == null) {
       throw Exception('No post to finalize and execute');
@@ -1254,9 +878,7 @@ class SocialActionPostCoordinator extends ChangeNotifier {
 
     try {
       if (kDebugMode) {
-        print('🎯 Finalizing and executing post via coordinator');
-        print('   Action ID: ${_currentPost!.actionId}');
-        print('   Platforms: ${_currentPost!.platforms.join(', ')}');
+        print('🎯 Finalizing and executing post: ${_currentPost!.actionId}');
       }
 
       // Step 1: Upload finalized post to Firestore
@@ -1265,16 +887,8 @@ class SocialActionPostCoordinator extends ChangeNotifier {
       // Step 2: Execute post across social media platforms
       final executionResults = await executePostToSocialMedia();
 
-      // Step 3: Update post state based on results
+      // Step 3: Clean up coordinator state after successful posting
       final allSucceeded = executionResults.values.every((success) => success);
-
-      if (kDebugMode) {
-        print('✅ Post finalization and execution completed');
-        print('   All platforms succeeded: $allSucceeded');
-        print('   Individual results: $executionResults');
-      }
-
-      // Step 4: Clean up coordinator state after successful posting
       if (allSucceeded) {
         reset();
         if (kDebugMode) {
@@ -1291,19 +905,14 @@ class SocialActionPostCoordinator extends ChangeNotifier {
     }
   }
 
-  /// Check if post is ready for execution (has content, media if needed, and platforms selected)
+  /// Check if post is ready for execution
   bool get isReadyForExecution {
     if (_currentPost == null) return false;
 
     final hasContent = _currentPost!.content.text.isNotEmpty;
     final hasPlatforms = _currentPost!.platforms.isNotEmpty;
 
-    // Media is optional - some posts might be text-only
-    // But if mediaQuery exists, we should have resolved media
-    final mediaResolved = _currentPost!.mediaQuery == null ||
-        _currentPost!.content.media.isNotEmpty;
-
-    return hasContent && hasPlatforms && mediaResolved;
+    return hasContent && hasPlatforms && _isMediaRequirementMet;
   }
 
   /// Get execution readiness status with detailed feedback
@@ -1325,13 +934,17 @@ class SocialActionPostCoordinator extends ChangeNotifier {
       missingRequirements.add('No platforms selected');
     }
 
-    if (_currentPost!.mediaQuery != null &&
-        _currentPost!.content.media.isEmpty) {
-      missingRequirements.add('Media query exists but no media selected');
-    }
+    // Check platform-specific media requirements
+    if (!_isMediaRequirementMet) {
+      final requiresMediaPlatforms = _currentPost!.platforms
+          .where((platform) =>
+              _mediaRequiredPlatforms.contains(platform.toLowerCase()))
+          .toList();
 
-    if (_socialPostService == null) {
-      missingRequirements.add('Social posting service not available');
+      if (requiresMediaPlatforms.isNotEmpty) {
+        missingRequirements
+            .add('Media required for ${requiresMediaPlatforms.join(', ')}');
+      }
     }
 
     return PostExecutionReadiness(
@@ -1342,7 +955,7 @@ class SocialActionPostCoordinator extends ChangeNotifier {
 
   @override
   void dispose() {
-    _autoSaveTimer?.cancel();
+    _debounceTimer?.cancel();
     super.dispose();
   }
 }

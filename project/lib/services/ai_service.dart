@@ -4,27 +4,15 @@ import 'package:http/http.dart' as http;
 
 import '../models/social_action.dart';
 import 'media_coordinator.dart';
-import 'social_action_post_coordinator.dart';
 
 class AIService {
   static const String _openaiApiUrl =
       'https://api.openai.com/v1/chat/completions';
   final String _apiKey;
   MediaCoordinator? _mediaCoordinator;
-  SocialActionPostCoordinator? _postCoordinator;
 
   AIService(this._apiKey, [MediaCoordinator? mediaCoordinator])
       : _mediaCoordinator = mediaCoordinator;
-
-  /// Set the MediaCoordinator instance (called after both services are created)
-  void setMediaCoordinator(MediaCoordinator mediaCoordinator) {
-    _mediaCoordinator = mediaCoordinator;
-  }
-
-  /// Set the SocialActionPostCoordinator instance for robust JSON handling
-  void setPostCoordinator(SocialActionPostCoordinator postCoordinator) {
-    _postCoordinator = postCoordinator;
-  }
 
   /// Attempts to repair common JSON formatting issues
   String repairJson(String brokenJson) {
@@ -165,11 +153,7 @@ class AIService {
 
   /// Robust JSON parsing using the post coordinator's advanced repair strategies
   Map<String, dynamic> robustJsonParse(String jsonString) {
-    if (_postCoordinator != null) {
-      return _postCoordinator!.robustJsonParse(jsonString);
-    }
-
-    // Fallback to original repair logic if coordinator not available
+    // Use fallback JSON parsing since coordinator method was removed
     return _fallbackJsonParse(jsonString);
   }
 
@@ -235,7 +219,9 @@ class AIService {
 
     try {
       // Get media context for the prompt
-      var mediaContext = _mediaCoordinator?.getMediaContextForAi() ?? {};
+      var mediaContext = _mediaCoordinator != null
+          ? await _mediaCoordinator!.getMediaContextForAi()
+          : <String, dynamic>{};
 
       // If pre-selected media is provided, add it to the structured media context
       if (preSelectedMedia != null && preSelectedMedia.isNotEmpty) {
@@ -581,6 +567,9 @@ Your response must be valid JSON with this exact structure:
       }
     }
 
+    // CRITICAL: Ensure unified hashtag handling
+    _ensureUnifiedHashtagHandling(result, transcription, fallbacksApplied);
+
     // CRITICAL: Ensure media is included when available
     _ensureMediaInclusion(result, mediaContext, preSelectedMedia, transcription,
         fallbacksApplied);
@@ -598,12 +587,18 @@ Your response must be valid JSON with this exact structure:
 
     if (kDebugMode) {
       final mediaCount = (result['content']['media'] as List).length;
-      print('✅ Merge complete. Final media count: $mediaCount');
+      final hashtagCount = (result['content']['hashtags'] as List).length;
+      print(
+          '✅ Merge complete. Final media count: $mediaCount, hashtag count: $hashtagCount');
       if (mediaCount > 0) {
         final mediaUris = (result['content']['media'] as List)
             .map((m) => (m as Map)['file_uri'])
             .toList();
         print('📎 Final media: ${mediaUris.join(', ')}');
+      }
+      if (hashtagCount > 0) {
+        final hashtags = (result['content']['hashtags'] as List).cast<String>();
+        print('🏷️ Final hashtags: ${hashtags.join(', ')}');
       }
     }
 
@@ -918,5 +913,147 @@ Your response must be valid JSON with this exact structure:
     if (kDebugMode) {
       print('🔄 Updated platform_data with media: $fileUri');
     }
+  }
+
+  /// Ensures unified hashtag handling between text content and hashtag array
+  void _ensureUnifiedHashtagHandling(
+    Map<String, dynamic> result,
+    String transcription,
+    List<String> fallbacksApplied,
+  ) {
+    final content = result['content'] as Map<String, dynamic>;
+    final postText = content['text'] as String? ?? '';
+    final hashtagArray = content['hashtags'] as List<dynamic>? ?? [];
+
+    // Extract hashtags from text content (spoken hashtags)
+    final extractedHashtags = _extractHashtagsFromText(postText);
+
+    // Clean text content (remove hashtags for unified management)
+    final cleanText = _removeHashtagsFromText(postText);
+
+    // Merge extracted hashtags with ChatGPT's hashtag array
+    final gptHashtags =
+        hashtagArray.cast<String>().map((tag) => tag.toLowerCase()).toList();
+    final allHashtags = <String>{...extractedHashtags, ...gptHashtags}.toList();
+
+    // If no hashtags found, generate intelligent ones
+    if (allHashtags.isEmpty) {
+      final intelligentHashtags = _generateIntelligentHashtags(
+          cleanText.isNotEmpty ? cleanText : transcription);
+      allHashtags.addAll(intelligentHashtags);
+      fallbacksApplied.add('generated_intelligent_hashtags');
+    }
+
+    // Update content with unified hashtag handling
+    content['text'] = cleanText;
+    content['hashtags'] = allHashtags;
+
+    if (kDebugMode) {
+      print('🔄 Unified hashtag handling applied:');
+      print('   Original text: "$postText"');
+      print('   Clean text: "$cleanText"');
+      print('   Extracted hashtags: $extractedHashtags');
+      print('   ChatGPT hashtags: $gptHashtags');
+      print('   Final hashtags: $allHashtags');
+    }
+  }
+
+  /// Extract hashtags from text content (spoken hashtags)
+  List<String> _extractHashtagsFromText(String text) {
+    // Match hashtags in the format #hashtag or #HashTag
+    final hashtagRegex = RegExp(r'#([a-zA-Z0-9_]+)', multiLine: true);
+    final matches = hashtagRegex.allMatches(text);
+
+    final extractedHashtags = matches
+        .map((match) => match.group(1)!)
+        .where((hashtag) => hashtag.isNotEmpty)
+        .map((hashtag) => hashtag.toLowerCase()) // Normalize to lowercase
+        .toSet() // Remove duplicates
+        .toList();
+
+    return extractedHashtags;
+  }
+
+  /// Remove hashtags from text content (clean text for display)
+  String _removeHashtagsFromText(String text) {
+    // Remove hashtags in the format #hashtag or #HashTag
+    final hashtagRegex = RegExp(r'#[a-zA-Z0-9_]+\s*', multiLine: true);
+    final cleanText = text.replaceAll(hashtagRegex, '').trim();
+
+    // Clean up extra whitespace
+    return cleanText.replaceAll(RegExp(r'\s+'), ' ').trim();
+  }
+
+  /// Generate intelligent hashtags based on content analysis
+  List<String> _generateIntelligentHashtags(String text) {
+    final lowerText = text.toLowerCase();
+    final hashtags = <String>[];
+
+    // Content-based hashtag mapping
+    final hashtagMap = {
+      // General engagement
+      'photo': ['photography', 'photooftheday', 'picoftheday'],
+      'picture': ['photography', 'photooftheday', 'picoftheday'],
+      'selfie': ['selfie', 'selfieoftheday', 'me'],
+      'video': ['video', 'videooftheday', 'content'],
+
+      // Activities
+      'workout': ['fitness', 'workout', 'gym', 'health', 'fitlife'],
+      'travel': ['travel', 'wanderlust', 'adventure', 'explore'],
+      'food': ['food', 'foodie', 'delicious', 'yummy', 'foodstagram'],
+      'coffee': ['coffee', 'coffeetime', 'caffeine', 'morningfuel'],
+      'sunset': ['sunset', 'nature', 'sky', 'beautiful', 'golden'],
+      'beach': ['beach', 'ocean', 'waves', 'paradise', 'summer'],
+      'work': ['work', 'productivity', 'hustle', 'grind', 'business'],
+      'art': ['art', 'creative', 'artist', 'artwork', 'design'],
+      'music': ['music', 'song', 'musician', 'melody', 'sound'],
+
+      // Emotions/Moods
+      'happy': ['happy', 'joy', 'smile', 'positive', 'good'],
+      'excited': ['excited', 'thrilled', 'pumped', 'energy'],
+      'grateful': ['grateful', 'blessed', 'thankful', 'appreciation'],
+      'motivated': ['motivation', 'inspiration', 'goals', 'success'],
+
+      // Time-based
+      'monday': ['mondaymotivation', 'newweek', 'fresh'],
+      'friday': ['friday', 'weekend', 'tgif'],
+      'morning': ['morning', 'sunrise', 'newday', 'fresh'],
+      'night': ['night', 'evening', 'nighttime'],
+    };
+
+    // Find matching hashtags
+    for (final keyword in hashtagMap.keys) {
+      if (lowerText.contains(keyword)) {
+        hashtags.addAll(hashtagMap[keyword]!);
+        if (hashtags.length >= 6) break; // Limit to prevent overflow
+      }
+    }
+
+    // Add default hashtags if none found
+    if (hashtags.isEmpty) {
+      hashtags.addAll(['life', 'daily', 'moments', 'share']);
+    }
+
+    // Ensure we have 3-6 hashtags
+    final uniqueHashtags = hashtags.toSet().take(6).toList();
+
+    // Add generic hashtags if we have less than 3
+    if (uniqueHashtags.length < 3) {
+      final genericHashtags = [
+        'instagood',
+        'photooftheday',
+        'love',
+        'beautiful',
+        'amazing'
+      ];
+      for (final generic in genericHashtags) {
+        if (!uniqueHashtags.contains(generic)) {
+          uniqueHashtags.add(generic);
+          if (uniqueHashtags.length >= 3) break;
+        }
+      }
+    }
+
+    return uniqueHashtags;
   }
 }

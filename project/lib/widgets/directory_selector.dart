@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import '../services/media_coordinator.dart';
-import '../services/directory_service.dart'; // For MediaDirectory class
 import '../screens/directory_selection_screen.dart';
 import 'package:provider/provider.dart';
 

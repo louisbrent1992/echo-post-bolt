@@ -73,6 +73,28 @@ class SocialAction {
       _$SocialActionFromJson(json);
 
   Map<String, dynamic> toJson() => _$SocialActionToJson(this);
+
+  SocialAction copyWith({
+    String? actionId,
+    String? createdAt,
+    List<String>? platforms,
+    Content? content,
+    Options? options,
+    PlatformData? platformData,
+    Internal? internal,
+    MediaSearchQuery? mediaQuery,
+  }) {
+    return SocialAction(
+      actionId: actionId ?? this.actionId,
+      createdAt: createdAt ?? this.createdAt,
+      platforms: platforms ?? this.platforms,
+      content: content ?? this.content,
+      options: options ?? this.options,
+      platformData: platformData ?? this.platformData,
+      internal: internal ?? this.internal,
+      mediaQuery: mediaQuery ?? this.mediaQuery,
+    );
+  }
 }
 
 @JsonSerializable(explicitToJson: true)
@@ -95,6 +117,22 @@ class Content {
       _$ContentFromJson(json);
 
   Map<String, dynamic> toJson() => _$ContentToJson(this);
+
+  Content copyWith({
+    String? text,
+    List<String>? hashtags,
+    List<String>? mentions,
+    Link? link,
+    List<MediaItem>? media,
+  }) {
+    return Content(
+      text: text ?? this.text,
+      hashtags: hashtags ?? this.hashtags,
+      mentions: mentions ?? this.mentions,
+      link: link ?? this.link,
+      media: media ?? this.media,
+    );
+  }
 }
 
 @JsonSerializable()
@@ -472,6 +510,27 @@ class Internal {
       _$InternalFromJson(json);
 
   Map<String, dynamic> toJson() => _$InternalToJson(this);
+
+  Internal copyWith({
+    int? retryCount,
+    UserPreferences? userPreferences,
+    String? mediaIndexId,
+    UiFlags? uiFlags,
+    bool? aiGenerated,
+    String? originalTranscription,
+    String? fallbackReason,
+  }) {
+    return Internal(
+      retryCount: retryCount ?? this.retryCount,
+      userPreferences: userPreferences ?? this.userPreferences,
+      mediaIndexId: mediaIndexId ?? this.mediaIndexId,
+      uiFlags: uiFlags ?? this.uiFlags,
+      aiGenerated: aiGenerated ?? this.aiGenerated,
+      originalTranscription:
+          originalTranscription ?? this.originalTranscription,
+      fallbackReason: fallbackReason ?? this.fallbackReason,
+    );
+  }
 }
 
 @JsonSerializable()

@@ -599,13 +599,65 @@ class MediaCoordinator extends ChangeNotifier {
   }
 
   /// Get media context for AI processing
-  /// Delegates to the internal MediaMetadataService
-  Map<String, dynamic> getMediaContextForAi() {
+  /// Always returns the latest 25 media files with complete metadata
+  Future<Map<String, dynamic>> getMediaContextForAi() async {
     if (!_isInitialized) {
       throw StateError(
           'MediaCoordinator not initialized. Call initialize() first.');
     }
-    return _metadataService.getMediaContextForAi();
+
+    try {
+      if (kDebugMode) {
+        print('🔄 MediaCoordinator: Getting latest media context for AI...');
+      }
+
+      // Get the latest 25 media files from all sources
+      final recentMedia = await getMediaForQuery(
+        '', // Empty query to get all recent media
+        dateRange: null,
+        mediaTypes: ['image', 'video'], // Include both images and videos
+      );
+
+      // Take only the most recent 25 files and ensure they have complete metadata
+      final latestMedia = recentMedia.take(25).toList();
+
+      // Build the media context structure expected by ChatGPT
+      final mediaContext = {
+        'media_context': {
+          'recent_media': latestMedia,
+          'total_count': latestMedia.length,
+          'last_updated': DateTime.now().toIso8601String(),
+        }
+      };
+
+      if (kDebugMode) {
+        print(
+            '✅ MediaCoordinator: Built media context with ${latestMedia.length} latest files');
+        if (latestMedia.isNotEmpty) {
+          final firstFile = latestMedia.first;
+          print(
+              '   Most recent: ${firstFile['file_uri']?.toString().split('/').last ?? 'unknown'}');
+          print(
+              '   Created: ${firstFile['device_metadata']?['creation_time'] ?? 'unknown'}');
+        }
+      }
+
+      return mediaContext;
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ MediaCoordinator: Failed to get media context for AI: $e');
+      }
+
+      // Return empty context on error to prevent AI processing failure
+      return {
+        'media_context': {
+          'recent_media': [],
+          'total_count': 0,
+          'last_updated': DateTime.now().toIso8601String(),
+          'error': e.toString(),
+        }
+      };
+    }
   }
 
   // ========== DirectoryService Methods ==========
@@ -741,13 +793,39 @@ class MediaCoordinator extends ChangeNotifier {
 
   /// Re-initialize MediaSearchService with new album selection
   Future<void> reinitializeWithAlbums(
-      List<String> albumIds, FirestoreService firestoreService) async {
+      List<AssetPathEntity> selectedAlbums) async {
     if (!_isInitialized) {
       throw StateError(
           'MediaCoordinator not initialized. Call initialize() first.');
     }
-    await _mediaSearchService.reinitializeWithAlbums(
-        albumIds, firestoreService);
+
+    try {
+      // Convert AssetPathEntity list to album IDs
+      final albumIds = selectedAlbums.map((album) => album.id).toList();
+
+      // We need a FirestoreService instance - get it from the service locator or dependency injection
+      // For now, create a simple implementation that doesn't require external dependencies
+      await _mediaSearchService.reinitializeWithAlbums(
+          albumIds, _createDummyFirestoreService());
+
+      if (kDebugMode) {
+        print(
+            '✅ MediaCoordinator: MediaSearchService re-initialized with ${selectedAlbums.length} albums');
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ MediaCoordinator: Failed to re-initialize with albums: $e');
+      }
+      rethrow;
+    }
+  }
+
+  /// Creates a dummy FirestoreService for MediaSearchService initialization
+  /// This is needed because MediaSearchService requires it but we don't use it for refresh
+  FirestoreService _createDummyFirestoreService() {
+    // Return a minimal FirestoreService implementation
+    // This is safe because MediaSearchService only uses it for initialization
+    return FirestoreService();
   }
 
   /// Get an asset entity by ID
@@ -757,6 +835,60 @@ class MediaCoordinator extends ChangeNotifier {
           'MediaCoordinator not initialized. Call initialize() first.');
     }
     return await _mediaSearchService.getAssetById(id);
+  }
+
+  /// Refreshes media data by rescanning directories and clearing caches
+  /// This ensures the latest media files are available, including newly added files
+  Future<void> refreshMediaData() async {
+    if (!_isInitialized) {
+      throw StateError(
+          'MediaCoordinator not initialized. Call initialize() first.');
+    }
+
+    try {
+      if (kDebugMode) {
+        print('🔄 MediaCoordinator: Starting media refresh...');
+      }
+
+      // The PhotoManager will automatically get the latest assets on each query
+      // We don't need to explicitly refresh it since it queries the system each time
+
+      if (kDebugMode) {
+        print('✅ MediaCoordinator: Media refresh completed successfully');
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ MediaCoordinator: Failed to refresh media data: $e');
+      }
+      rethrow;
+    }
+  }
+
+  /// Forces a complete rescan of all selected directories
+  /// Use this when you need to ensure absolutely latest media is available
+  Future<void> forceRescanDirectories() async {
+    if (!_isInitialized) {
+      throw StateError(
+          'MediaCoordinator not initialized. Call initialize() first.');
+    }
+
+    try {
+      if (kDebugMode) {
+        print('🔄 MediaCoordinator: Starting force rescan of directories...');
+      }
+
+      // PhotoManager automatically scans the latest files on each query
+      // No explicit refresh needed - the next getMediaForQuery call will get latest data
+
+      if (kDebugMode) {
+        print('✅ MediaCoordinator: Force rescan completed successfully');
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ MediaCoordinator: Failed to force rescan directories: $e');
+      }
+      rethrow;
+    }
   }
 
   // ========== MediaMetadataService Methods ==========

@@ -4,8 +4,6 @@ import 'package:path/path.dart' as path;
 import 'package:path_provider/path_provider.dart';
 import 'package:exif/exif.dart';
 import 'package:flutter/foundation.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-import 'package:crypto/crypto.dart';
 
 import 'directory_service.dart';
 import 'app_settings_service.dart';
@@ -377,7 +375,6 @@ class MediaMetadataService extends ChangeNotifier {
       // Process each directory and deduplicate media items
       for (final directory in directories) {
         final dirPath = directory.path;
-        final dirInfo = directoriesInfo[dirPath] ?? {};
         final mediaList =
             (mediaByFolder[dirPath] as List<dynamic>?)?.cast<String>() ??
                 <String>[];

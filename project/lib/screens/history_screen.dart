@@ -3,13 +3,11 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
-import 'package:flutter/foundation.dart';
 
 import '../models/social_action.dart';
 import '../services/firestore_service.dart';
 import '../services/social_post_service.dart';
 import '../services/auth_service.dart';
-import '../screens/command_screen.dart';
 import '../widgets/social_icon.dart';
 
 class HistoryScreen extends StatefulWidget {

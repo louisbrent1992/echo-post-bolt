@@ -326,16 +326,4 @@ class PhotoManagerService extends ChangeNotifier {
     return supportedImageTypes.contains(mimeType) ||
         supportedVideoTypes.contains(mimeType);
   }
-
-  String _getMimeType(AssetEntity asset) {
-    // This method is kept for backward compatibility but should not be used
-    // Use _getMimeTypeFromFile or _getMimeTypeFromPath instead
-    if (asset.type == AssetType.image) {
-      return 'image/jpeg';
-    } else if (asset.type == AssetType.video) {
-      return 'video/mp4';
-    } else {
-      return 'application/octet-stream';
-    }
-  }
 }

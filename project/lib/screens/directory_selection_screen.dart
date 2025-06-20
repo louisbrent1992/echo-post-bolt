@@ -115,7 +115,8 @@ class _DirectorySelectionScreenState extends State<DirectorySelectionScreen> {
     if (_mediaCoordinator == null) return;
 
     try {
-      final directory = _directories.firstWhere(
+      // Validate directory exists
+      _directories.firstWhere(
         (d) => d.id == directoryId,
         orElse: () => throw Exception('Directory not found'),
       );

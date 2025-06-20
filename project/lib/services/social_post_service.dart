@@ -2,11 +2,107 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import '../models/social_action.dart';
+import '../services/social_action_post_coordinator.dart';
 import 'auth_service.dart';
 
 class SocialPostService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final FirebaseAuth _auth = FirebaseAuth.instance;
+  final SocialActionPostCoordinator? _coordinator;
+
+  SocialPostService({SocialActionPostCoordinator? coordinator})
+      : _coordinator = coordinator;
+
+  /// Format post content for specific platform with proper hashtag formatting
+  String _formatPostForPlatform(SocialAction action, String platform) {
+    // If coordinator is available, use its formatting method
+    if (_coordinator != null) {
+      // Temporarily sync the action with coordinator to use its formatting
+      final originalPost = _coordinator!.currentPost;
+      _coordinator!.syncWithExistingPost(action);
+      final formattedContent = _coordinator!.getFormattedPostContent(platform);
+
+      // Restore original post if it existed
+      if (originalPost != null) {
+        _coordinator!.syncWithExistingPost(originalPost);
+      }
+
+      return formattedContent;
+    }
+
+    // Fallback formatting if coordinator is not available
+    return _fallbackFormatPostForPlatform(action, platform);
+  }
+
+  /// Fallback post formatting when coordinator is not available
+  String _fallbackFormatPostForPlatform(SocialAction action, String platform) {
+    final baseText = action.content.text;
+    final hashtags = action.content.hashtags;
+
+    if (hashtags.isEmpty) return baseText;
+
+    switch (platform.toLowerCase()) {
+      case 'instagram':
+        // Instagram: hashtags at the end, separated by spaces, max 30 hashtags
+        final limitedHashtags = hashtags.take(30).toList();
+        return '$baseText\n\n${limitedHashtags.map((tag) => '#$tag').join(' ')}';
+
+      case 'twitter':
+        // Twitter: hashtags integrated naturally, max 280 chars total, 2-3 hashtags recommended
+        final limitedHashtags = hashtags.take(3).toList();
+        final hashtagText =
+            ' ${limitedHashtags.map((tag) => '#$tag').join(' ')}';
+        final combinedText = '$baseText$hashtagText';
+
+        // Ensure we don't exceed Twitter's character limit
+        if (combinedText.length > 280) {
+          final availableSpace = 280 - baseText.length - 1; // -1 for space
+          if (availableSpace > 0) {
+            var truncatedHashtags = '';
+            for (final tag in limitedHashtags) {
+              final tagWithHash = '#$tag ';
+              if (truncatedHashtags.length + tagWithHash.length <=
+                  availableSpace) {
+                truncatedHashtags += tagWithHash;
+              } else {
+                break;
+              }
+            }
+            return '$baseText ${truncatedHashtags.trim()}';
+          }
+          return baseText; // Return just text if no space for hashtags
+        }
+        return combinedText;
+
+      case 'facebook':
+        // Facebook: hashtags at the end, space-separated
+        return '$baseText\n\n${hashtags.map((tag) => '#$tag').join(' ')}';
+
+      case 'tiktok':
+        // TikTok: hashtags at the end, space-separated, max 100 chars for hashtags
+        var formattedHashtags = hashtags.map((tag) => '#$tag').join(' ');
+        if (formattedHashtags.length > 100) {
+          // Truncate if too long
+          final truncatedTags = <String>[];
+          var currentLength = 0;
+          for (final tag in hashtags) {
+            final tagWithHash = '#$tag ';
+            if (currentLength + tagWithHash.length <= 100) {
+              truncatedTags.add(tag);
+              currentLength += tagWithHash.length;
+            } else {
+              break;
+            }
+          }
+          formattedHashtags = truncatedTags.map((tag) => '#$tag').join(' ');
+        }
+        return '$baseText\n\n$formattedHashtags';
+
+      default:
+        // Default format: hashtags at the end, space-separated
+        return '$baseText\n\n${hashtags.map((tag) => '#$tag').join(' ')}';
+    }
+  }
 
   /// Posts the action to every platform listed with proper authentication verification
   Future<Map<String, bool>> postToAllPlatforms(SocialAction action,
@@ -139,10 +235,13 @@ class SocialPostService {
 
   /// Post to Facebook with proper API integration
   Future<void> _postToFacebook(SocialAction action) async {
+    final formattedContent = _formatPostForPlatform(action, 'facebook');
+
     if (kDebugMode) {
       print('📘 Posting to Facebook...');
-      print('  Text: ${action.content.text}');
+      print('  Original text: ${action.content.text}');
       print('  Hashtags: ${action.content.hashtags.join(', ')}');
+      print('  Formatted content: $formattedContent');
       print('  Media count: ${action.content.media.length}');
     }
 
@@ -161,10 +260,13 @@ class SocialPostService {
 
   /// Post to Instagram with proper API integration
   Future<void> _postToInstagram(SocialAction action) async {
+    final formattedContent = _formatPostForPlatform(action, 'instagram');
+
     if (kDebugMode) {
       print('📷 Posting to Instagram...');
-      print('  Text: ${action.content.text}');
+      print('  Original text: ${action.content.text}');
       print('  Hashtags: ${action.content.hashtags.join(', ')}');
+      print('  Formatted content: $formattedContent');
       print('  Media count: ${action.content.media.length}');
     }
 
@@ -183,10 +285,14 @@ class SocialPostService {
 
   /// Post to Twitter/X with proper API integration
   Future<void> _postToTwitter(SocialAction action) async {
+    final formattedContent = _formatPostForPlatform(action, 'twitter');
+
     if (kDebugMode) {
       print('🐦 Posting to Twitter/X...');
-      print('  Text: ${action.content.text}');
+      print('  Original text: ${action.content.text}');
       print('  Hashtags: ${action.content.hashtags.join(', ')}');
+      print('  Formatted content: $formattedContent');
+      print('  Character count: ${formattedContent.length}/280');
       print('  Media count: ${action.content.media.length}');
     }
 
@@ -205,10 +311,13 @@ class SocialPostService {
 
   /// Post to TikTok with proper API integration
   Future<void> _postToTikTok(SocialAction action) async {
+    final formattedContent = _formatPostForPlatform(action, 'tiktok');
+
     if (kDebugMode) {
       print('🎵 Posting to TikTok...');
-      print('  Text: ${action.content.text}');
+      print('  Original text: ${action.content.text}');
       print('  Hashtags: ${action.content.hashtags.join(', ')}');
+      print('  Formatted content: $formattedContent');
       print('  Media count: ${action.content.media.length}');
     }
 
@@ -217,7 +326,7 @@ class SocialPostService {
 
     // Simulate occasional API failures (4% chance)
     if (DateTime.now().millisecond % 25 == 0) {
-      throw Exception('TikTok video upload timeout');
+      throw Exception('TikTok video processing timeout');
     }
 
     if (kDebugMode) {

@@ -307,19 +307,4 @@ class PostPreview extends StatelessWidget {
       ),
     );
   }
-
-  Color _getPlatformColor(String platform) {
-    switch (platform) {
-      case 'facebook':
-        return Colors.blue.shade700;
-      case 'instagram':
-        return Colors.pink.shade400;
-      case 'twitter':
-        return Colors.lightBlue.shade400;
-      case 'tiktok':
-        return Colors.black87;
-      default:
-        return Colors.grey.shade600;
-    }
-  }
 }

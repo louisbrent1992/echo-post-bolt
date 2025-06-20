@@ -135,11 +135,6 @@ class DirectoryService extends ChangeNotifier {
     }
   }
 
-  /// Helper to decode URL-encoded values
-  String _decodeValue(String value) {
-    return Uri.decodeComponent(value);
-  }
-
   /// Helper to encode values for URL storage
   String _encodeValue(String value) {
     return Uri.encodeComponent(value);

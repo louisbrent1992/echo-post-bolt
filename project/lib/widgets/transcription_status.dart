@@ -32,19 +32,16 @@ class TranscriptionStatus extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      width: MediaQuery.of(context).size.width * 0.85,
+      width: double.infinity,
+      margin: const EdgeInsets.symmetric(horizontal: 20),
       constraints: const BoxConstraints(
         minHeight: 60,
         maxHeight: 120,
       ),
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.6),
+        color: Colors.black.withValues(alpha: 0.7),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: Colors.white.withValues(alpha: 0.2),
-          width: 1,
-        ),
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -105,12 +102,8 @@ class TranscriptionStatus extends StatelessWidget {
                     vertical: 4,
                   ),
                   decoration: BoxDecoration(
-                    color: const Color(0xFFFF0080).withValues(alpha: 0.2),
+                    color: const Color(0xFFFF0080).withValues(alpha: 0.15),
                     borderRadius: BorderRadius.circular(16),
-                    border: Border.all(
-                      color: const Color(0xFFFF0080),
-                      width: 1,
-                    ),
                   ),
                   child: Text(
                     '${maxRecordingDuration - recordingDuration}s',

@@ -1,7 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
 import 'ripple_circle.dart';
-import '../services/auth_service.dart';
 
 enum SocialPlatform {
   instagram,
@@ -79,19 +77,6 @@ class _SocialIconState extends State<SocialIcon> with TickerProviderStateMixin {
       case SocialPlatform.tiktok:
         return Icons
             .play_circle_fill; // TikTok play icon - represents video content
-    }
-  }
-
-  String _getLabel() {
-    switch (widget.platform) {
-      case SocialPlatform.facebook:
-        return 'FB';
-      case SocialPlatform.instagram:
-        return 'IG';
-      case SocialPlatform.twitter:
-        return 'X';
-      case SocialPlatform.tiktok:
-        return 'TT';
     }
   }
 

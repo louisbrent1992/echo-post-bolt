@@ -11,16 +11,14 @@ import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter/foundation.dart';
 
 import '../models/social_action.dart';
-import '../services/firestore_service.dart';
 import '../services/ai_service.dart';
 import '../services/media_coordinator.dart';
 import '../services/social_action_post_coordinator.dart';
 import '../screens/history_screen.dart';
-import '../screens/command_screen.dart';
+import '../screens/media_selection_screen.dart';
 import '../widgets/post_content_box.dart';
 import '../widgets/unified_action_button.dart';
 import '../widgets/scheduling_status.dart';
-import '../screens/media_selection_screen.dart';
 import '../widgets/unified_media_buttons.dart';
 import '../screens/directory_selection_screen.dart';
 import '../widgets/social_icon.dart';
@@ -129,7 +127,7 @@ class _ReviewPostScreenState extends State<ReviewPostScreen> {
 
   // Coordinators for validation and state synchronization
   late final MediaCoordinator _mediaCoordinator;
-  late final SocialActionPostCoordinator _postCoordinator;
+  SocialActionPostCoordinator? _postCoordinator;
 
   // Systematic grid spacing constants (multiples of 6 for visual harmony)
   static const double _gridUnit = 6.0;
@@ -149,12 +147,8 @@ class _ReviewPostScreenState extends State<ReviewPostScreen> {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    // Access MediaCoordinator only - SocialActionPostCoordinator is accessed via Consumer
     _mediaCoordinator = Provider.of<MediaCoordinator>(context, listen: false);
-    _postCoordinator =
-        Provider.of<SocialActionPostCoordinator>(context, listen: false);
-
-    // CRITICAL: Sync coordinator with current action for bidirectional state management
-    _postCoordinator.syncWithExistingPost(_action);
 
     _validateMediaOnLoad();
   }
@@ -237,11 +231,11 @@ class _ReviewPostScreenState extends State<ReviewPostScreen> {
 
     if (result != null) {
       try {
-        // CRITICAL: Update through coordinator for bidirectional sync
-        await _postCoordinator.updatePostContent(result);
+        // Direct coordinator update - no deferral needed with architectural fix
+        await _postCoordinator!.updatePostContent(result);
 
         // Get the updated post from coordinator
-        final updatedPost = _postCoordinator.currentPost;
+        final updatedPost = _postCoordinator!.currentPost;
         if (updatedPost != null) {
           setState(() {
             _action = updatedPost;
@@ -284,9 +278,10 @@ class _ReviewPostScreenState extends State<ReviewPostScreen> {
 
   Future<void> _editSchedule() async {
     final now = DateTime.now();
-    final initialDate = _action.options.schedule == 'now'
+    final currentAction = _postCoordinator?.currentPost ?? _action;
+    final initialDate = currentAction.options.schedule == 'now'
         ? now
-        : DateTime.parse(_action.options.schedule);
+        : DateTime.parse(currentAction.options.schedule);
 
     final pickedDate = await showDatePicker(
       context: context,
@@ -312,11 +307,11 @@ class _ReviewPostScreenState extends State<ReviewPostScreen> {
 
         try {
           // CRITICAL: Update through coordinator for centralized state management
-          await _postCoordinator
+          await _postCoordinator!
               .updatePostSchedule(scheduledDateTime.toIso8601String());
 
           // Get the updated post from coordinator
-          final updatedPost = _postCoordinator.currentPost;
+          final updatedPost = _postCoordinator!.currentPost;
           if (updatedPost != null) {
             setState(() {
               _action = updatedPost;
@@ -358,7 +353,7 @@ class _ReviewPostScreenState extends State<ReviewPostScreen> {
 
   Future<void> _confirmAndPost() async {
     // Check execution readiness first
-    final readiness = _postCoordinator.executionReadiness;
+    final readiness = _postCoordinator!.executionReadiness;
     if (!readiness.isReady) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -380,7 +375,7 @@ class _ReviewPostScreenState extends State<ReviewPostScreen> {
 
     try {
       // CRITICAL: Use coordinator's centralized post execution
-      final results = await _postCoordinator.finalizeAndExecutePost();
+      final results = await _postCoordinator!.finalizeAndExecutePost();
 
       setState(() {
         _postResults = results;
@@ -470,47 +465,6 @@ class _ReviewPostScreenState extends State<ReviewPostScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Posting failed: $e')),
         );
-      }
-    }
-  }
-
-  Future<void> _cancelPost() async {
-    final navigator = Navigator.of(context);
-
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: Colors.black.withValues(alpha: 0.9), // Dark background
-        title:
-            const Text('Discard Post?', style: TextStyle(color: Colors.white)),
-        content: const Text('Are you sure you want to discard this post?',
-            style: TextStyle(color: Colors.white70)),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child:
-                const Text('CANCEL', style: TextStyle(color: Colors.white70)),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('DISCARD', style: TextStyle(color: Colors.red)),
-          ),
-        ],
-      ),
-    );
-
-    if (confirmed == true) {
-      // CRITICAL: Reset coordinator state instead of direct Firestore deletion
-      // The coordinator manages all post state, including cleanup
-      _postCoordinator.reset();
-
-      if (kDebugMode) {
-        print('✅ Post discarded via coordinator reset');
-      }
-
-      if (mounted) {
-        // Navigate back to CommandScreen with clean state
-        Navigator.pop(context);
       }
     }
   }
@@ -686,10 +640,10 @@ User voice instruction: "$transcription"''';
   Future<void> _applyTextEdit(String newText, List<dynamic> newHashtags) async {
     try {
       // CRITICAL: Update through coordinator for centralized state management
-      await _postCoordinator.updatePostContent(newText.trim());
+      await _postCoordinator!.updatePostContent(newText.trim());
 
       // Get the updated post from coordinator
-      final updatedPost = _postCoordinator.currentPost;
+      final updatedPost = _postCoordinator!.currentPost;
       if (updatedPost != null) {
         setState(() {
           _action = updatedPost;
@@ -728,30 +682,97 @@ User voice instruction: "$transcription"''';
     }
   }
 
+  Future<void> _editHashtags(List<String> newHashtags) async {
+    try {
+      // Direct coordinator update - no deferral needed with architectural fix
+      await _postCoordinator!.updatePostHashtags(newHashtags);
+
+      // Get the updated post from coordinator
+      final updatedPost = _postCoordinator!.currentPost;
+      if (updatedPost != null) {
+        setState(() {
+          _action = updatedPost;
+        });
+
+        if (kDebugMode) {
+          print('✅ Hashtags updated via coordinator');
+          print('   New hashtags: $newHashtags');
+          print('   Total hashtags: ${newHashtags.length}');
+        }
+
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                newHashtags.isEmpty
+                    ? 'All hashtags removed 🏷️'
+                    : 'Hashtags updated! ${newHashtags.length} tags 🏷️',
+              ),
+              duration: const Duration(seconds: 2),
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ Failed to update hashtags via coordinator: $e');
+      }
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to update hashtags: $e'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      body: _isPosting
-          ? _buildLoadingView()
-          : Container(
-              decoration: const BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [
-                    Colors.black,
-                    Color(0xFF1A1A1A),
-                  ],
+    return Consumer<SocialActionPostCoordinator>(
+      builder: (context, coordinator, child) {
+        // Set the coordinator reference for use in other methods
+        _postCoordinator = coordinator;
+
+        // CRITICAL: Sync coordinator with current action for bidirectional state management
+        // Only sync if the coordinator doesn't already have this action
+        if (coordinator.currentPost?.actionId != _action.actionId) {
+          // Use post-frame callback to avoid calling during build
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            coordinator.syncWithExistingPost(_action);
+          });
+        }
+
+        return Scaffold(
+          body: _isPosting
+              ? _buildLoadingView()
+              : Container(
+                  decoration: const BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [
+                        Colors.black,
+                        Color(0xFF1A1A1A),
+                      ],
+                    ),
+                  ),
+                  child: SafeArea(
+                    child: _buildGridLayout(coordinator),
+                  ),
                 ),
-              ),
-              child: SafeArea(
-                child: _buildGridLayout(),
-              ),
-            ),
+        );
+      },
     );
   }
 
-  Widget _buildGridLayout() {
+  Widget _buildGridLayout(SocialActionPostCoordinator coordinator) {
+    // Use coordinator's current post if available, otherwise use local action
+    final currentAction = coordinator.currentPost ?? _action;
+
     return Column(
       children: [
         // Header section (60px height)
@@ -771,17 +792,18 @@ User voice instruction: "$transcription"''';
                     height: _spacing4), // 24px - consistent top spacing
 
                 // Media preview (if available) or placeholder
-                _buildMediaSection(),
+                _buildMediaSection(currentAction),
 
                 // Post content box (main text/hashtags)
                 const SizedBox(
                     height:
                         _spacing1), // 6px - reduced spacing between media buttons and post content (matching CommandScreen)
                 PostContentBox(
-                  action: _action,
+                  action: currentAction,
                   isRecording: _isRecording,
                   isProcessingVoice: _isProcessingVoice,
                   onEditText: _editCaption,
+                  onEditHashtags: _editHashtags,
                   onVoiceEdit:
                       _isRecording ? _stopVoiceRecording : _startVoiceRecording,
                 ),
@@ -808,13 +830,10 @@ User voice instruction: "$transcription"''';
               // Scheduling status area (upper part)
               Expanded(
                 flex: 2,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 20),
-                  child: Center(
-                    child: SchedulingStatus(
-                      schedule: _action.options.schedule,
-                      onEditSchedule: _editSchedule,
-                    ),
+                child: Center(
+                  child: SchedulingStatus(
+                    schedule: currentAction.options.schedule,
+                    onEditSchedule: _editSchedule,
                   ),
                 ),
               ),
@@ -863,7 +882,7 @@ User voice instruction: "$transcription"''';
     );
   }
 
-  Widget _buildMediaSection() {
+  Widget _buildMediaSection(SocialAction action) {
     return Column(
       children: [
         // Media preview area - full width, edge to edge
@@ -880,9 +899,9 @@ User voice instruction: "$transcription"''';
               ),
             ],
           ),
-          child: _action.content.media.isEmpty
+          child: action.content.media.isEmpty
               ? _buildMediaPlaceholder()
-              : _buildMediaPreview(),
+              : _buildMediaPreview(action),
         ),
 
         const SizedBox(height: _spacing2), // 12px - consistent spacing
@@ -891,7 +910,7 @@ User voice instruction: "$transcription"''';
         UnifiedMediaButtons(
           onDirectorySelection: _navigateToDirectorySelection,
           onMediaSelection: _navigateToMediaSelection,
-          hasMedia: _action.content.media.isNotEmpty,
+          hasMedia: action.content.media.isNotEmpty,
         ),
 
         const SizedBox(
@@ -901,8 +920,8 @@ User voice instruction: "$transcription"''';
     );
   }
 
-  Widget _buildMediaPreview() {
-    final mediaItem = _action.content.media.first;
+  Widget _buildMediaPreview(SocialAction action) {
+    final mediaItem = action.content.media.first;
     final isVideo = mediaItem.mimeType.startsWith('video/');
 
     return Stack(
@@ -1012,21 +1031,22 @@ User voice instruction: "$transcription"''';
 
   Future<void> _navigateToMediaSelection() async {
     try {
+      final currentAction = _postCoordinator?.currentPost ?? _action;
       final updatedAction = await Navigator.push<SocialAction>(
         context,
         MaterialPageRoute(
           builder: (context) => MediaSelectionScreen(
-            action: _action,
+            action: currentAction,
           ),
         ),
       );
 
       if (updatedAction != null) {
         // CRITICAL: Update through coordinator for bidirectional sync
-        await _postCoordinator.replaceMedia(updatedAction.content.media);
+        await _postCoordinator!.replaceMedia(updatedAction.content.media);
 
         // Get the updated post from coordinator
-        final updatedPost = _postCoordinator.currentPost;
+        final updatedPost = _postCoordinator!.currentPost;
         if (updatedPost != null) {
           setState(() {
             _action = updatedPost;
@@ -1065,31 +1085,47 @@ User voice instruction: "$transcription"''';
   }
 
   Widget _buildLoadingView() {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          const CircularProgressIndicator(),
-          const SizedBox(height: 16),
-          Text(
-            'Posting to your social networks...',
-            style: Theme.of(context).textTheme.titleMedium,
-          ),
-          const SizedBox(height: 8),
-          Text(
-            'Please wait while we process your request',
-            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  color: Theme.of(context).colorScheme.outline,
+    return Container(
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [
+            Colors.black,
+            Color(0xFF1A1A1A),
+          ],
+        ),
+      ),
+      child: SafeArea(
+        child: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const CircularProgressIndicator(
+                color: Color(0xFFFF0080),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'Posting to your social networks...',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w600,
                 ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Please wait while we process your request',
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.7),
+                  fontSize: 14,
+                ),
+              ),
+            ],
           ),
-        ],
+        ),
       ),
     );
-  }
-
-  String _formatDateTime(DateTime dateTime) {
-    final formatter = DateFormat('MMM d, yyyy \'at\' h:mm a');
-    return formatter.format(dateTime);
   }
 
   void _navigateToDirectorySelection() {

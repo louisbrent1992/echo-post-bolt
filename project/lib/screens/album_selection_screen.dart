@@ -97,9 +97,13 @@ class _AlbumSelectionScreenState extends State<AlbumSelectionScreen> {
       await firestoreService
           .updateSelectedMediaAlbums(_selectedAlbumIds.toList());
 
+      // Convert selected album IDs back to AssetPathEntity objects
+      final selectedAlbums = _availableAlbums
+          .where((album) => _selectedAlbumIds.contains(album.id))
+          .toList();
+
       // Re-initialize the media search service with new albums
-      await mediaCoordinator.reinitializeWithAlbums(
-          _selectedAlbumIds.toList(), firestoreService);
+      await mediaCoordinator.reinitializeWithAlbums(selectedAlbums);
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

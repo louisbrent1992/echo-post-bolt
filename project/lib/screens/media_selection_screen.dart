@@ -59,6 +59,13 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
     });
 
     try {
+      // CRITICAL: Always refresh media data when screen opens to ensure latest files are shown
+      await _mediaCoordinator.refreshMediaData();
+
+      if (kDebugMode) {
+        print('🔄 MediaSelectionScreen: Refreshed media data on screen open');
+      }
+
       // Initialize filters from MediaSearchQuery if available
       if (widget.action.mediaQuery != null) {
         final query = widget.action.mediaQuery!;
@@ -83,7 +90,7 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
           widget.action.content.media.first.fileUri.isNotEmpty) {
         final mediaItem = widget.action.content.media.first;
         if (await _mediaCoordinator.validateMediaURI(mediaItem.fileUri)) {
-          // Get media candidates from query first
+          // Get media candidates from query first (this will now get the latest data)
           final additionalCandidates = await _mediaCoordinator.getMediaForQuery(
             '', // Empty search to get recent media
             dateRange: null,
@@ -140,7 +147,7 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
           _isLoading = false;
         });
       } else {
-        // No candidates provided, get latest image as fallback
+        // No candidates provided, get latest image as fallback (this will now get the latest data)
         final latestImage = await _mediaCoordinator
             .getLatestImageInDirectory(widget.action.mediaQuery?.directoryPath);
 
@@ -151,7 +158,7 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
             _isLoading = false;
           });
         } else {
-          // If no latest image found, apply filters to search for any media
+          // If no latest image found, apply filters to search for any media (this will now get the latest data)
           await _applyFilters();
         }
       }
@@ -318,6 +325,44 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
     }
   }
 
+  /// Refreshes the media list by rescanning directories
+  Future<void> _refreshMedia() async {
+    try {
+      if (kDebugMode) {
+        print('🔄 MediaSelectionScreen: User triggered refresh');
+      }
+
+      // Force refresh the media data
+      await _mediaCoordinator.refreshMediaData();
+
+      // Re-apply current filters to get the latest data
+      await _applyFilters();
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Media refreshed! 🔄'),
+            duration: Duration(seconds: 2),
+          ),
+        );
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ MediaSelectionScreen: Refresh failed: $e');
+      }
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to refresh media: $e'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -359,119 +404,136 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
           child: _isLoading
               ? const Center(
                   child: CircularProgressIndicator(color: Color(0xFFFF0080)))
-              : Column(
-                  children: [
-                    // Dynamic query status display (only show if actively searching)
-                    if (_searchTerms.isNotEmpty && _mediaCandidates.isNotEmpty)
-                      Padding(
-                        padding: const EdgeInsets.all(16.0),
-                        child: Container(
-                          padding: const EdgeInsets.all(12),
-                          decoration: BoxDecoration(
-                            color: Colors.black.withValues(alpha: 0.6),
-                            borderRadius: BorderRadius.circular(8),
-                            border: Border.all(
-                              color: Colors.white.withValues(alpha: 0.2),
-                            ),
-                          ),
-                          child: Row(
-                            children: [
-                              const Icon(
-                                Icons.search,
-                                color: Color(0xFFFF0080),
-                                size: 18,
-                              ),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: Text(
-                                  'Found ${_mediaCandidates.length} result${_mediaCandidates.length == 1 ? '' : 's'} for "${_searchTerms.join(', ')}"',
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.bold,
-                                    color: Colors.white,
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-
-                    // Source indicator
-                    _buildSourceIndicator(),
-
-                    // Filters section (collapsible)
-                    if (_showFilters) _buildFiltersSection(),
-
-                    // Media grid - always show grid when we have candidates
-                    Expanded(
-                      child: _mediaCandidates.isNotEmpty
-                          ? _buildMediaGrid() // Always show grid when we have candidates
-                          : _selectedMedia != null
-                              ? _buildSingleMediaPreview() // Only show single preview as fallback
-                              : Center(
-                                  child: Column(
-                                    mainAxisAlignment: MainAxisAlignment.center,
-                                    children: [
-                                      Icon(
-                                        Icons.photo_library_outlined,
-                                        size: 64,
-                                        color:
-                                            Colors.white.withValues(alpha: 0.6),
-                                      ),
-                                      const SizedBox(height: 16),
-                                      const Text(
-                                        'No media available',
-                                        style: TextStyle(
-                                          color: Colors.white,
-                                          fontSize: 18,
-                                          fontWeight: FontWeight.w600,
-                                        ),
-                                      ),
-                                      const SizedBox(height: 8),
-                                      Text(
-                                        'Try enabling custom directories or adjusting filters',
-                                        style: TextStyle(
-                                          color: Colors.white
-                                              .withValues(alpha: 0.7),
-                                          fontSize: 14,
-                                        ),
-                                        textAlign: TextAlign.center,
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                    ),
-
-                    // Confirm button
-                    SafeArea(
-                      child: Padding(
-                        padding: const EdgeInsets.all(16.0),
-                        child: SizedBox(
-                          width: double.infinity,
-                          child: ElevatedButton(
-                            onPressed: _selectedMedia != null
-                                ? _confirmSelection
-                                : null,
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: const Color(0xFFFF0080),
-                              foregroundColor: Colors.white,
-                              padding: const EdgeInsets.symmetric(vertical: 16),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(12),
+              : RefreshIndicator(
+                  onRefresh: _refreshMedia,
+                  color: const Color(0xFFFF0080),
+                  backgroundColor: Colors.black,
+                  child: Column(
+                    children: [
+                      // Dynamic query status display (only show if actively searching)
+                      if (_searchTerms.isNotEmpty &&
+                          _mediaCandidates.isNotEmpty)
+                        Padding(
+                          padding: const EdgeInsets.all(16.0),
+                          child: Container(
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: Colors.black.withValues(alpha: 0.6),
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(
+                                color: Colors.white.withValues(alpha: 0.2),
                               ),
                             ),
-                            child: const Text(
-                              'Confirm Selection',
-                              style: TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.w600,
-                              ),
+                            child: Row(
+                              children: [
+                                const Icon(
+                                  Icons.search,
+                                  color: Color(0xFFFF0080),
+                                  size: 18,
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    'Found ${_mediaCandidates.length} result${_mediaCandidates.length == 1 ? '' : 's'} for "${_searchTerms.join(', ')}"',
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      color: Colors.white,
+                                    ),
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
                         ),
+
+                      // Source indicator
+                      _buildSourceIndicator(),
+
+                      // Filters section (collapsible)
+                      if (_showFilters) _buildFiltersSection(),
+
+                      // Media grid - always show grid when we have candidates
+                      Expanded(
+                        child: _mediaCandidates.isNotEmpty
+                            ? _buildMediaGrid() // Always show grid when we have candidates
+                            : _selectedMedia != null
+                                ? _buildSingleMediaPreview() // Only show single preview as fallback
+                                : SingleChildScrollView(
+                                    physics:
+                                        const AlwaysScrollableScrollPhysics(),
+                                    child: SizedBox(
+                                      height:
+                                          MediaQuery.of(context).size.height *
+                                              0.5,
+                                      child: Center(
+                                        child: Column(
+                                          mainAxisAlignment:
+                                              MainAxisAlignment.center,
+                                          children: [
+                                            Icon(
+                                              Icons.photo_library_outlined,
+                                              size: 64,
+                                              color: Colors.white
+                                                  .withValues(alpha: 0.6),
+                                            ),
+                                            const SizedBox(height: 16),
+                                            const Text(
+                                              'No media available',
+                                              style: TextStyle(
+                                                color: Colors.white,
+                                                fontSize: 18,
+                                                fontWeight: FontWeight.w600,
+                                              ),
+                                            ),
+                                            const SizedBox(height: 8),
+                                            Text(
+                                              'Pull down to refresh or try enabling custom directories',
+                                              style: TextStyle(
+                                                color: Colors.white
+                                                    .withValues(alpha: 0.7),
+                                                fontSize: 14,
+                                              ),
+                                              textAlign: TextAlign.center,
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                  ),
                       ),
-                    ),
-                  ],
+
+                      // Confirm button
+                      SafeArea(
+                        child: Padding(
+                          padding: const EdgeInsets.all(16.0),
+                          child: SizedBox(
+                            width: double.infinity,
+                            child: ElevatedButton(
+                              onPressed: _selectedMedia != null
+                                  ? _confirmSelection
+                                  : null,
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: const Color(0xFFFF0080),
+                                foregroundColor: Colors.white,
+                                padding:
+                                    const EdgeInsets.symmetric(vertical: 16),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                              ),
+                              child: const Text(
+                                'Confirm Selection',
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
         ),
       ),
@@ -1189,30 +1251,6 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
           ),
         );
       },
-    );
-  }
-
-  Widget _buildMetadataRow(IconData icon, String text) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8.0),
-      child: Row(
-        children: [
-          Icon(
-            icon,
-            size: 16,
-            color: Theme.of(context).colorScheme.primary,
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              text,
-              style: Theme.of(context).textTheme.bodyMedium,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-        ],
-      ),
     );
   }
 
