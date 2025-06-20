@@ -22,6 +22,7 @@ import '../widgets/scheduling_status.dart';
 import '../widgets/unified_media_buttons.dart';
 import '../screens/directory_selection_screen.dart';
 import '../widgets/social_icon.dart';
+import '../constants/typography.dart';
 
 class VideoPlayerWidget extends StatefulWidget {
   final String fileUri;
@@ -794,10 +795,7 @@ User voice instruction: "$transcription"''';
                 // Media preview (if available) or placeholder
                 _buildMediaSection(currentAction),
 
-                // Post content box (main text/hashtags)
-                const SizedBox(
-                    height:
-                        _spacing1), // 6px - reduced spacing between media buttons and post content (matching CommandScreen)
+                // Post content box (main text/hashtags) - removed spacing for upward movement
                 PostContentBox(
                   action: currentAction,
                   isRecording: _isRecording,
@@ -810,7 +808,7 @@ User voice instruction: "$transcription"''';
 
                 const SizedBox(
                     height:
-                        _spacing5), // 30px - proportional spacing to scheduling area (matching CommandScreen)
+                        _spacing3), // Reduced from _spacing5 (30px) to _spacing3 (18px) for closer dialog integration
 
                 // Scheduling moved to bottom area for cleaner layout
 
@@ -824,7 +822,8 @@ User voice instruction: "$transcription"''';
 
         // Bottom unified action area (scheduling + confirmation)
         SizedBox(
-          height: 180, // Height to accommodate scheduling status + button
+          height:
+              226, // Increased from 212 to 226 (+14px) to accommodate larger dialogs
           child: Column(
             children: [
               // Scheduling status area (upper part)
@@ -915,7 +914,7 @@ User voice instruction: "$transcription"''';
 
         const SizedBox(
             height:
-                _spacing2), // 12px - consistent spacing after buttons (matching CommandScreen)
+                0), // Reduced from _spacing2 (12px) to 0px for upward movement
       ],
     );
   }
@@ -958,7 +957,7 @@ User voice instruction: "$transcription"''';
               '${mediaItem.deviceMetadata.width} × ${mediaItem.deviceMetadata.height}',
               style: const TextStyle(
                 color: Colors.white,
-                fontSize: 11,
+                fontSize: AppTypography.small,
                 fontWeight: FontWeight.w500,
               ),
             ),
@@ -985,7 +984,7 @@ User voice instruction: "$transcription"''';
               'Your image will appear here',
               style: TextStyle(
                 color: Colors.grey.shade600,
-                fontSize: 16,
+                fontSize: AppTypography.large,
                 fontWeight: FontWeight.w500,
               ),
             ),
@@ -994,7 +993,7 @@ User voice instruction: "$transcription"''';
               'Use the buttons below to select directory and media',
               style: TextStyle(
                 color: Colors.grey.shade500,
-                fontSize: 12,
+                fontSize: AppTypography.small,
               ),
             ),
           ],
@@ -1020,7 +1019,7 @@ User voice instruction: "$transcription"''';
               'Video Preview',
               style: TextStyle(
                 color: Colors.grey.shade600,
-                fontSize: 12,
+                fontSize: AppTypography.small,
               ),
             ),
           ],
@@ -1109,7 +1108,7 @@ User voice instruction: "$transcription"''';
                 'Posting to your social networks...',
                 style: const TextStyle(
                   color: Colors.white,
-                  fontSize: 18,
+                  fontSize: AppTypography.large,
                   fontWeight: FontWeight.w600,
                 ),
               ),
@@ -1118,7 +1117,7 @@ User voice instruction: "$transcription"''';
                 'Please wait while we process your request',
                 style: TextStyle(
                   color: Colors.white.withValues(alpha: 0.7),
-                  fontSize: 14,
+                  fontSize: AppTypography.body,
                 ),
               ),
             ],

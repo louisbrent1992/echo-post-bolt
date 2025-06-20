@@ -21,6 +21,7 @@ import '../screens/media_selection_screen.dart';
 import '../screens/review_post_screen.dart';
 import '../screens/history_screen.dart';
 import '../screens/directory_selection_screen.dart';
+import '../constants/typography.dart';
 
 /// Recording states for voice capture workflow
 enum RecordingState { idle, recording, processing, ready }
@@ -1299,7 +1300,6 @@ class _CommandScreenState extends State<CommandScreen>
               children: [
                 const SizedBox(height: _spacing4),
                 _buildCommandMediaSection(coordinator),
-                const SizedBox(height: _spacing1),
                 PostContentBox(
                   action: coordinator.currentPost ?? _createEmptyAction(),
                   isRecording: _recordingState == RecordingState.recording,
@@ -1311,14 +1311,13 @@ class _CommandScreenState extends State<CommandScreen>
                       ? _stopVoiceEditing
                       : _startVoiceEditing,
                 ),
-                const SizedBox(height: _spacing5),
-                const SizedBox(height: _spacing2),
+                const SizedBox(height: 0),
               ],
             ),
           ),
         ),
         SizedBox(
-          height: 180,
+          height: 226,
           child: Column(
             children: [
               Expanded(
@@ -1391,7 +1390,7 @@ class _CommandScreenState extends State<CommandScreen>
           onMediaSelection: _navigateToMediaSelection,
           hasMedia: coordinator.hasMedia,
         ),
-        const SizedBox(height: _spacing2),
+        const SizedBox(height: 0),
       ],
     );
   }
@@ -1457,7 +1456,7 @@ class _CommandScreenState extends State<CommandScreen>
                     '${mediaItem.deviceMetadata.width} × ${mediaItem.deviceMetadata.height}',
                     style: const TextStyle(
                       color: Colors.white,
-                      fontSize: 12,
+                      fontSize: AppTypography.small,
                       fontWeight: FontWeight.w500,
                     ),
                   ),
@@ -1474,7 +1473,7 @@ class _CommandScreenState extends State<CommandScreen>
                         'Pre-selected',
                         style: TextStyle(
                           color: Colors.white,
-                          fontSize: 10,
+                          fontSize: AppTypography.small,
                           fontWeight: FontWeight.w600,
                         ),
                       ),
@@ -1533,7 +1532,7 @@ class _CommandScreenState extends State<CommandScreen>
               'Your image will appear here',
               style: TextStyle(
                 color: Colors.white.withValues(alpha: 0.95),
-                fontSize: 16,
+                fontSize: AppTypography.large,
                 fontWeight: FontWeight.w500,
               ),
             ),

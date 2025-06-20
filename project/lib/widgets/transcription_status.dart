@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../constants/typography.dart';
 
 enum TranscriptionContext {
   recording,
@@ -9,7 +10,7 @@ enum TranscriptionContext {
   addMediaReady,
 }
 
-class TranscriptionStatus extends StatelessWidget {
+class TranscriptionStatus extends StatefulWidget {
   final String transcription;
   final bool isProcessing;
   final bool isRecording;
@@ -30,18 +31,72 @@ class TranscriptionStatus extends StatelessWidget {
   });
 
   @override
+  State<TranscriptionStatus> createState() => _TranscriptionStatusState();
+}
+
+class _TranscriptionStatusState extends State<TranscriptionStatus>
+    with TickerProviderStateMixin {
+  late AnimationController _pulseController;
+  late Animation<double> _pulseAnimation;
+
+  @override
+  void initState() {
+    super.initState();
+    _pulseController = AnimationController(
+      duration: const Duration(milliseconds: 1500),
+      vsync: this,
+    );
+
+    _pulseAnimation = Tween<double>(
+      begin: 0.8,
+      end: 1.0,
+    ).animate(CurvedAnimation(
+      parent: _pulseController,
+      curve: Curves.easeInOut,
+    ));
+
+    if (widget.isRecording || widget.isProcessing) {
+      _pulseController.repeat(reverse: true);
+    }
+  }
+
+  @override
+  void didUpdateWidget(TranscriptionStatus oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if ((widget.isRecording || widget.isProcessing) &&
+        !(oldWidget.isRecording || oldWidget.isProcessing)) {
+      _pulseController.repeat(reverse: true);
+    } else if (!(widget.isRecording || widget.isProcessing) &&
+        (oldWidget.isRecording || oldWidget.isProcessing)) {
+      _pulseController.stop();
+      _pulseController.reset();
+    }
+  }
+
+  @override
+  void dispose() {
+    _pulseController.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     return Container(
       width: double.infinity,
       margin: const EdgeInsets.symmetric(horizontal: 20),
       constraints: const BoxConstraints(
-        minHeight: 60,
-        maxHeight: 120,
+        minHeight: 106,
+        maxHeight: 166,
       ),
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: Colors.black.withValues(alpha: 0.7),
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: const BorderRadius.only(
+          topLeft: Radius.circular(0),
+          topRight: Radius.circular(0),
+          bottomLeft: Radius.circular(12),
+          bottomRight: Radius.circular(12),
+        ),
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -50,96 +105,65 @@ class TranscriptionStatus extends StatelessWidget {
           // Status indicator
           Row(
             children: [
-              if (isRecording) ...[
-                // Recording indicator with pulsing animation
-                Container(
-                  width: 12,
-                  height: 12,
-                  decoration: const BoxDecoration(
-                    color: Color(0xFFFF0080),
-                    shape: BoxShape.circle,
-                  ),
-                ),
-                const SizedBox(width: 8),
-              ] else if (isProcessing) ...[
-                const SizedBox(
-                  width: 12,
-                  height: 12,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    valueColor: AlwaysStoppedAnimation<Color>(
-                      Color(0xFFFFD700),
+              AnimatedBuilder(
+                animation: _pulseAnimation,
+                builder: (context, child) {
+                  return Transform.scale(
+                    scale: (widget.isRecording || widget.isProcessing)
+                        ? _pulseAnimation.value
+                        : 1.0,
+                    child: Icon(
+                      _getStatusIcon(),
+                      color: _getStatusColor(),
+                      size: 16,
                     ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-              ] else if (transcription.isNotEmpty ||
-                  this.context == TranscriptionContext.reviewReady ||
-                  this.context == TranscriptionContext.confirmReady ||
-                  this.context == TranscriptionContext.addMediaReady) ...[
-                Icon(
-                  _getContextIcon(),
-                  color: _getContextColor(),
-                  size: 12,
-                ),
-                const SizedBox(width: 8),
-              ],
-              Expanded(
-                child: Text(
-                  _getStatusText(),
-                  style: TextStyle(
-                    color: _getTextColor(),
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                  ),
+                  );
+                },
+              ),
+              const SizedBox(width: 8),
+              Text(
+                _getStatusText(),
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.9),
+                  fontSize: AppTypography.small,
+                  fontWeight: FontWeight.w600,
                 ),
               ),
-              // Recording timer on the right side
-              if (isRecording) ...[
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 4,
-                  ),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFFF0080).withValues(alpha: 0.15),
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                  child: Text(
-                    '${maxRecordingDuration - recordingDuration}s',
-                    style: const TextStyle(
-                      color: Color(0xFFFF0080),
-                      fontWeight: FontWeight.bold,
-                      fontSize: 14,
-                    ),
+              if (widget.isRecording) ...[
+                const Spacer(),
+                Text(
+                  '${widget.recordingDuration}s / ${widget.maxRecordingDuration}s',
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.7),
+                    fontSize: AppTypography.small,
+                    fontWeight: FontWeight.w500,
                   ),
                 ),
               ],
             ],
           ),
+          const SizedBox(height: 8),
 
-          if (transcription.isNotEmpty) ...[
-            const SizedBox(height: 8),
-            Flexible(
-              child: Text(
-                transcription,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 14,
-                  height: 1.3,
-                ),
-                maxLines: 3,
-                overflow: TextOverflow.ellipsis,
+          // Content
+          Flexible(
+            child: Text(
+              _getDisplayText(),
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.8),
+                fontSize: AppTypography.body,
+                height: 1.3,
               ),
+              maxLines: 3,
+              overflow: TextOverflow.ellipsis,
             ),
-          ],
+          ),
         ],
       ),
     );
   }
 
-  IconData _getContextIcon() {
-    switch (context) {
+  IconData _getStatusIcon() {
+    switch (widget.context) {
       case TranscriptionContext.recording:
         return Icons.mic;
       case TranscriptionContext.processing:
@@ -155,8 +179,8 @@ class TranscriptionStatus extends StatelessWidget {
     }
   }
 
-  Color _getContextColor() {
-    switch (context) {
+  Color _getStatusColor() {
+    switch (widget.context) {
       case TranscriptionContext.recording:
         return const Color(0xFFFF0080);
       case TranscriptionContext.processing:
@@ -170,29 +194,19 @@ class TranscriptionStatus extends StatelessWidget {
     }
   }
 
-  Color _getTextColor() {
-    if (isRecording) {
-      return const Color(0xFFFF0080);
-    } else if (isProcessing) {
-      return const Color(0xFFFFD700);
-    } else {
-      return _getContextColor();
-    }
-  }
-
   String _getStatusText() {
     // Use custom message if provided
-    if (customMessage != null && customMessage!.isNotEmpty) {
-      return customMessage!;
+    if (widget.customMessage != null && widget.customMessage!.isNotEmpty) {
+      return widget.customMessage!;
     }
 
     // Default messages based on state and context
-    if (isRecording) {
+    if (widget.isRecording) {
       return 'Recording your voice command...';
-    } else if (isProcessing) {
+    } else if (widget.isProcessing) {
       return 'Processing your voice command...';
-    } else if (transcription.isNotEmpty) {
-      switch (context) {
+    } else if (widget.transcription.isNotEmpty) {
+      switch (widget.context) {
         case TranscriptionContext.completed:
           return 'What you said:';
         case TranscriptionContext.reviewReady:
@@ -205,7 +219,7 @@ class TranscriptionStatus extends StatelessWidget {
           return 'What you said:';
       }
     } else {
-      switch (context) {
+      switch (widget.context) {
         case TranscriptionContext.reviewReady:
           return 'Tap the button below to review your post';
         case TranscriptionContext.confirmReady:
@@ -215,6 +229,14 @@ class TranscriptionStatus extends StatelessWidget {
         default:
           return 'Tap and hold the button below to start recording';
       }
+    }
+  }
+
+  String _getDisplayText() {
+    if (widget.transcription.isNotEmpty) {
+      return widget.transcription;
+    } else {
+      return _getStatusText();
     }
   }
 }

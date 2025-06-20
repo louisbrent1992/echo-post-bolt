@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../constants/typography.dart';
 
 class UnifiedMediaButtons extends StatelessWidget {
   final VoidCallback onDirectorySelection;
@@ -34,7 +35,7 @@ class UnifiedMediaButtons extends StatelessWidget {
                 directoryName ?? 'Select Directory',
                 style: const TextStyle(
                   fontWeight: FontWeight.w500,
-                  fontSize: 13,
+                  fontSize: AppTypography.body,
                 ),
                 overflow: TextOverflow.ellipsis,
               ),
@@ -59,7 +60,7 @@ class UnifiedMediaButtons extends StatelessWidget {
                 hasMedia ? 'Change Media' : 'Select Media',
                 style: const TextStyle(
                   fontWeight: FontWeight.w500,
-                  fontSize: 13,
+                  fontSize: AppTypography.body,
                 ),
               ),
               onPressed: onMediaSelection,

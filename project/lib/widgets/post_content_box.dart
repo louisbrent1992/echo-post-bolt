@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import '../models/social_action.dart';
+import '../constants/typography.dart';
 
 /// Pure presentation widget for post content - no internal state management
 /// All state comes from coordinators via parent widgets
@@ -34,7 +35,13 @@ class PostContentBox extends StatelessWidget {
       decoration: BoxDecoration(
         color: Colors.black.withValues(
             alpha: 0.7), // Translucent black like record button labels
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: const BorderRadius.only(
+          topLeft: Radius.circular(16), // Rounded top corners
+          topRight: Radius.circular(16),
+          bottomLeft:
+              Radius.circular(0), // Sharp bottom corners to blend with dialog
+          bottomRight: Radius.circular(0),
+        ),
         // No border for clean, subtle appearance
       ),
       child: Column(
@@ -53,11 +60,31 @@ class PostContentBox extends StatelessWidget {
                 'Post Content',
                 style: TextStyle(
                   color: Colors.white.withValues(alpha: 0.95),
-                  fontSize: 16,
+                  fontSize:
+                      AppTypography.large, // Large font for primary header
                   fontWeight: FontWeight.w600,
                 ),
               ),
               const Spacer(),
+              // Voice dictation button - CRITICAL functionality
+              if (onVoiceEdit != null)
+                IconButton(
+                  onPressed: onVoiceEdit,
+                  icon: Icon(
+                    isRecording ? Icons.stop : Icons.mic,
+                    color: isRecording
+                        ? const Color(0xFFFF0080)
+                        : (isProcessingVoice
+                            ? Colors.orange
+                            : Colors.white.withValues(alpha: 0.7)),
+                    size: 18,
+                  ),
+                  tooltip: isRecording
+                      ? 'Stop recording'
+                      : (isProcessingVoice
+                          ? 'Processing...'
+                          : 'Voice dictation'),
+                ),
               if (onEditText != null)
                 IconButton(
                   onPressed: onEditText,
@@ -87,7 +114,7 @@ class PostContentBox extends StatelessWidget {
                 caption,
                 style: const TextStyle(
                   color: Colors.white,
-                  fontSize: 16,
+                  fontSize: AppTypography.body, // Body font for main content
                   height: 1.4,
                 ),
               ),
@@ -107,7 +134,8 @@ class PostContentBox extends StatelessWidget {
                 'Your post content will appear here',
                 style: TextStyle(
                   color: Colors.white.withValues(alpha: 0.6),
-                  fontSize: 14,
+                  fontSize:
+                      AppTypography.body, // Body font for placeholder text
                   fontStyle: FontStyle.italic,
                 ),
               ),
@@ -139,7 +167,7 @@ class PostContentBox extends StatelessWidget {
               'Hashtags',
               style: TextStyle(
                 color: Colors.white.withValues(alpha: 0.95),
-                fontSize: 12,
+                fontSize: AppTypography.small, // Small font for label
                 fontWeight: FontWeight.w600,
               ),
             ),
@@ -148,7 +176,7 @@ class PostContentBox extends StatelessWidget {
               '(${hashtags.length})',
               style: TextStyle(
                 color: Colors.white.withValues(alpha: 0.6),
-                fontSize: 11,
+                fontSize: AppTypography.small, // Small font for count
               ),
             ),
             const Spacer(),
@@ -190,7 +218,8 @@ class PostContentBox extends StatelessWidget {
                           '#$hashtag',
                           style: TextStyle(
                             color: Colors.white.withValues(alpha: 0.9),
-                            fontSize: 12,
+                            fontSize: AppTypography
+                                .small, // Small font for hashtag chips
                             fontWeight: FontWeight.w500,
                           ),
                         ),
@@ -211,7 +240,7 @@ class PostContentBox extends StatelessWidget {
               'Hashtags will be formatted automatically for each platform when posted',
               style: TextStyle(
                 color: Colors.white.withValues(alpha: 0.5),
-                fontSize: 10,
+                fontSize: AppTypography.small, // Small font for helper text
                 fontStyle: FontStyle.italic,
               ),
               textAlign: TextAlign.center,
@@ -231,7 +260,7 @@ class PostContentBox extends StatelessWidget {
               'No hashtags yet - speak hashtags like "#photography #nature" or edit manually',
               style: TextStyle(
                 color: Colors.white.withValues(alpha: 0.6),
-                fontSize: 12,
+                fontSize: AppTypography.small, // Small font for helper text
                 fontStyle: FontStyle.italic,
               ),
             ),

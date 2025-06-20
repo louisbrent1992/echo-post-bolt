@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'ripple_circle.dart';
+import '../constants/typography.dart';
 
 enum SocialPlatform {
   instagram,
@@ -243,7 +244,8 @@ class SocialIconsRow extends StatelessWidget {
                             color: isSelected
                                 ? color
                                 : Colors.white.withValues(alpha: 0.7),
-                            fontSize: 6, // Smaller text for circular layout
+                            fontSize:
+                                AppTypography.small, // Small font for labels
                             fontWeight: FontWeight.w500,
                           ),
                         ),
@@ -376,7 +378,7 @@ class TitleHeader extends StatelessWidget {
           style: titleStyle ??
               const TextStyle(
                 color: Colors.white,
-                fontSize: 18,
+                fontSize: AppTypography.large, // Large font for titles
                 fontWeight: FontWeight.w600,
               ),
         ),

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../services/media_coordinator.dart';
 import '../screens/directory_selection_screen.dart';
 import 'package:provider/provider.dart';
+import '../constants/typography.dart';
 
 class DirectorySelector extends StatefulWidget {
   const DirectorySelector({super.key});
@@ -106,7 +107,7 @@ class _DirectorySelectorState extends State<DirectorySelector> {
                 _getStatusText(),
                 style: const TextStyle(
                   color: Colors.white,
-                  fontSize: 12,
+                  fontSize: AppTypography.small,
                   fontWeight: FontWeight.w500,
                 ),
                 maxLines: 1,

@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'ripple_circle.dart';
+import '../constants/typography.dart';
 
 enum UnifiedButtonState {
   // Recording states
@@ -353,7 +354,7 @@ class _UnifiedActionButtonState extends State<UnifiedActionButton>
                     _getLabel(),
                     style: const TextStyle(
                       color: Colors.white,
-                      fontSize: 12,
+                      fontSize: AppTypography.small,
                       fontWeight: FontWeight.w500,
                     ),
                   ),
