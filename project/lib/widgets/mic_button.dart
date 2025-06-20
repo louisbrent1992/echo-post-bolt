@@ -162,67 +162,76 @@ class _MicButtonState extends State<MicButton> with TickerProviderStateMixin {
               widget.onRecordStop();
             }
           : null,
-      child: Stack(
-        alignment: Alignment.center,
-        clipBehavior: Clip.none,
-        children: [
-          // Voice-responsive ripple effect (only when speaking)
-          if (_shouldShowRipples)
-            Positioned.fill(
-              child: VoiceResponsiveRipple(
-                color: const Color(0xFFFF0080),
-                size: 60,
-                amplitude: widget.amplitude,
-                rippleCount: 3,
-              ),
-            ),
-
-          // Main button with voice-responsive glow
-          AnimatedBuilder(
-            animation: Listenable.merge([_scaleAnimation, _glowAnimation]),
-            builder: (context, child) {
-              double scale = _scaleAnimation.value;
-              if (isRecording) {
-                // Add subtle pulse based on voice amplitude
-                final voicePulse = 1.0 + (widget.amplitude * 0.1);
-                scale *= _glowAnimation.value * voicePulse;
-              }
-
-              return Transform.scale(
-                scale: scale,
-                child: Container(
-                  width: 80,
-                  height: 80,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: _getButtonColor(),
-                    boxShadow: _getShadows(),
-                  ),
-                  child: isProcessing
-                      ? const Center(
-                          child: SizedBox(
-                            width: 32,
-                            height: 32,
-                            child: CircularProgressIndicator(
-                              color: Colors.white,
-                              strokeWidth: 3,
-                            ),
-                          ),
-                        )
-                      : Icon(_getIcon(), color: Colors.white, size: 36),
+      child: SizedBox(
+        // Constrain all states to the same overall size
+        width: 120,
+        height: 120,
+        child: Stack(
+          alignment: Alignment.center,
+          clipBehavior: Clip.none,
+          children: [
+            // Voice-responsive ripple effect (only when speaking) - constrained to fit
+            if (_shouldShowRipples)
+              Positioned.fill(
+                child: VoiceResponsiveRipple(
+                  color: const Color(0xFFFF0080),
+                  size: 50, // Reduced from 60 to fit within 120px bounds
+                  amplitude: widget.amplitude,
+                  rippleCount: 3,
                 ),
-              );
-            },
-          ),
+              ),
 
-          // Voice level indicator ring (only when recording)
-          if (isRecording)
-            VoiceLevelRing(
-              amplitude: widget.amplitude,
-              baseSize: 100,
-              color: const Color(0xFFFF0080),
+            // Main button with voice-responsive glow - constrained scaling
+            AnimatedBuilder(
+              animation: Listenable.merge([_scaleAnimation, _glowAnimation]),
+              builder: (context, child) {
+                double scale = _scaleAnimation.value;
+                if (isRecording) {
+                  // Reduced amplitude effect to maintain consistent bounds
+                  final voicePulse =
+                      1.0 + (widget.amplitude * 0.05); // Reduced from 0.1
+                  scale *= _glowAnimation.value * voicePulse;
+                }
+
+                // Ensure scale never exceeds bounds that would break the 120px container
+                scale = scale.clamp(0.8, 1.2);
+
+                return Transform.scale(
+                  scale: scale,
+                  child: Container(
+                    width: 80,
+                    height: 80,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: _getButtonColor(),
+                      boxShadow: _getShadows(),
+                    ),
+                    child: isProcessing
+                        ? const Center(
+                            child: SizedBox(
+                              width: 32,
+                              height: 32,
+                              child: CircularProgressIndicator(
+                                color: Colors.white,
+                                strokeWidth: 3,
+                              ),
+                            ),
+                          )
+                        : Icon(_getIcon(), color: Colors.white, size: 36),
+                  ),
+                );
+              },
             ),
-        ],
+
+            // Voice level indicator ring (only when recording) - constrained size
+            if (isRecording)
+              VoiceLevelRing(
+                amplitude: widget.amplitude,
+                baseSize: 90, // Reduced from 100 to fit within 120px bounds
+                color: const Color(0xFFFF0080),
+              ),
+          ],
+        ),
       ),
     );
   }

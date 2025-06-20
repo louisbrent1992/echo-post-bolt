@@ -68,23 +68,26 @@ class _SocialIconState extends State<SocialIcon> with TickerProviderStateMixin {
 
   IconData _getIconData() {
     switch (widget.platform) {
-      case SocialPlatform.instagram:
-        return Icons.camera_alt; // Using built-in icon, can replace with custom
       case SocialPlatform.facebook:
-        return Icons.facebook;
+        return Icons.facebook; // Facebook icon
+      case SocialPlatform.instagram:
+        return Icons
+            .photo_camera; // Instagram camera icon - more representative
       case SocialPlatform.twitter:
-        return Icons.close; // X icon for Twitter/X
+        return Icons
+            .tag; // X/Twitter icon - hashtag represents social media/Twitter
       case SocialPlatform.tiktok:
-        return Icons.music_note; // Placeholder for TikTok
+        return Icons
+            .play_circle_fill; // TikTok play icon - represents video content
     }
   }
 
   String _getLabel() {
     switch (widget.platform) {
-      case SocialPlatform.instagram:
-        return 'IG';
       case SocialPlatform.facebook:
         return 'FB';
+      case SocialPlatform.instagram:
+        return 'IG';
       case SocialPlatform.twitter:
         return 'X';
       case SocialPlatform.tiktok:
@@ -96,63 +99,58 @@ class _SocialIconState extends State<SocialIcon> with TickerProviderStateMixin {
   Widget build(BuildContext context) {
     return GestureDetector(
       onTap: widget.onTap,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
+      child: Stack(
+        alignment: Alignment.center,
         children: [
-          Stack(
-            alignment: Alignment.center,
-            children: [
-              // Ripple effect when selected
-              if (widget.isSelected)
-                RippleCircle(
-                  color: const Color(0xFFFF0080),
-                  size: widget.size,
-                  duration: const Duration(milliseconds: 1200),
-                ),
-
-              // Icon container
-              AnimatedBuilder(
-                animation: _scaleAnimation,
-                builder: (context, child) {
-                  return Transform.scale(
-                    scale: _scaleAnimation.value,
-                    child: Container(
-                      width: widget.size,
-                      height: widget.size,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: widget.isSelected
-                            ? Colors.transparent
-                            : Colors.white,
-                        border: widget.isSelected
-                            ? Border.all(
-                                color: const Color(0xFFFF0080),
-                                width: 2,
-                              )
-                            : null,
-                      ),
-                      child: Icon(
-                        _getIconData(),
-                        color: widget.isSelected
-                            ? const Color(0xFFFF0080)
-                            : Colors.black,
-                        size: widget.size * 0.5,
-                      ),
-                    ),
-                  );
-                },
-              ),
-            ],
-          ),
-          const SizedBox(height: 4),
-          // Platform label
-          Text(
-            _getLabel(),
-            style: const TextStyle(
-              color: Color(0xFFEEEEEE),
-              fontSize: 10,
-              fontWeight: FontWeight.w500,
+          // Ripple effect when selected
+          if (widget.isSelected)
+            RippleCircle(
+              color: const Color(0xFFFF0080),
+              size: widget.size *
+                  1.2, // Slightly larger ripple for better visual effect
+              duration: const Duration(milliseconds: 1200),
             ),
+
+          // Icon container
+          AnimatedBuilder(
+            animation: _scaleAnimation,
+            builder: (context, child) {
+              return Transform.scale(
+                scale: _scaleAnimation.value,
+                child: Container(
+                  width: widget.size,
+                  height: widget.size,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color:
+                        widget.isSelected ? Colors.transparent : Colors.white,
+                    border: widget.isSelected
+                        ? Border.all(
+                            color: const Color(0xFFFF0080),
+                            width: 2,
+                          )
+                        : null,
+                    boxShadow: widget.isSelected
+                        ? [
+                            BoxShadow(
+                              color: const Color(0xFFFF0080)
+                                  .withAlpha((0.3 * 255).round()),
+                              blurRadius: 8,
+                              spreadRadius: 1,
+                            ),
+                          ]
+                        : null,
+                  ),
+                  child: Icon(
+                    _getIconData(),
+                    color: widget.isSelected
+                        ? const Color(0xFFFF0080)
+                        : Colors.black,
+                    size: widget.size * 0.5,
+                  ),
+                ),
+              );
+            },
           ),
         ],
       ),
@@ -163,11 +161,13 @@ class _SocialIconState extends State<SocialIcon> with TickerProviderStateMixin {
 class SocialIconsRow extends StatefulWidget {
   final List<String> selectedPlatforms;
   final Function(String) onPlatformToggle;
+  final double? maxHeight; // Add height constraint parameter
 
   const SocialIconsRow({
     super.key,
     required this.selectedPlatforms,
     required this.onPlatformToggle,
+    this.maxHeight,
   });
 
   @override
@@ -180,8 +180,8 @@ class _SocialIconsRowState extends State<SocialIconsRow>
   late List<Animation<double>> _introAnimations;
 
   final List<SocialPlatform> _platforms = [
-    SocialPlatform.instagram,
     SocialPlatform.facebook,
+    SocialPlatform.instagram,
     SocialPlatform.twitter,
     SocialPlatform.tiktok,
   ];
@@ -202,8 +202,8 @@ class _SocialIconsRowState extends State<SocialIconsRow>
       ).animate(CurvedAnimation(
         parent: _introController,
         curve: Interval(
-          index * 0.2,
-          0.8 + (index * 0.05),
+          index * 0.15, // Reduced overlap for more staggered effect
+          0.7 + (index * 0.075), // Adjusted timing
           curve: Curves.easeOutBack,
         ),
       ));
@@ -221,10 +221,10 @@ class _SocialIconsRowState extends State<SocialIconsRow>
 
   String _platformToString(SocialPlatform platform) {
     switch (platform) {
-      case SocialPlatform.instagram:
-        return 'instagram';
       case SocialPlatform.facebook:
         return 'facebook';
+      case SocialPlatform.instagram:
+        return 'instagram';
       case SocialPlatform.twitter:
         return 'twitter';
       case SocialPlatform.tiktok:
@@ -317,33 +317,64 @@ class _SocialIconsRowState extends State<SocialIconsRow>
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-      children: List.generate(_platforms.length, (index) {
-        final platform = _platforms[index];
-        final platformString = _platformToString(platform);
+    // Calculate responsive sizing based on screen dimensions
+    final screenSize = MediaQuery.of(context).size;
+    final maxAllowedHeight = widget.maxHeight ??
+        (screenSize.height * 0.1); // 1/10th of screen height
 
-        return AnimatedBuilder(
-          animation: _introAnimations[index],
-          builder: (context, child) {
-            // Clamp the animation value to ensure opacity stays within valid range
-            final animationValue =
-                _introAnimations[index].value.clamp(0.0, 1.0);
+    // Calculate optimal icon size that fits within height constraint
+    // Account for icon + label + spacing
+    final availableHeight =
+        maxAllowedHeight - 32; // Reserve space for padding and spacing
+    final iconSize = (availableHeight * 0.7)
+        .clamp(32.0, 48.0); // Icon takes 70% of available height
 
-            return Transform.scale(
-              scale: animationValue,
-              child: Opacity(
-                opacity: animationValue,
-                child: SocialIcon(
-                  platform: platform,
-                  isSelected: widget.selectedPlatforms.contains(platformString),
-                  onTap: () => _handlePlatformTap(platformString),
-                ),
+    return ConstrainedBox(
+      constraints: BoxConstraints(
+        maxHeight: maxAllowedHeight,
+      ),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(
+            vertical: 12), // Minimized vertical padding
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+          crossAxisAlignment:
+              CrossAxisAlignment.center, // Ensure consistent vertical alignment
+          children: List.generate(_platforms.length, (index) {
+            final platform = _platforms[index];
+            final platformString = _platformToString(platform);
+
+            return Expanded(
+              child: AnimatedBuilder(
+                animation: _introAnimations[index],
+                builder: (context, child) {
+                  // Ensure animation value stays within valid range
+                  final animationValue =
+                      _introAnimations[index].value.clamp(0.0, 1.0);
+
+                  // Use consistent positioning - no transform during animation to maintain layout
+                  return Opacity(
+                    opacity: animationValue,
+                    child: Transform.scale(
+                      scale: 0.8 +
+                          (0.2 *
+                              animationValue), // Subtle scale from 80% to 100%
+                      child: SocialIcon(
+                        platform: platform,
+                        isSelected:
+                            widget.selectedPlatforms.contains(platformString),
+                        onTap: () => _handlePlatformTap(platformString),
+                        size: iconSize,
+                      ),
+                    ),
+                  );
+                },
               ),
             );
-          },
-        );
-      }),
+          }),
+        ),
+      ),
     );
   }
 }

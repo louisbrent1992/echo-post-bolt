@@ -20,79 +20,80 @@ class PostPreview extends StatelessWidget {
       return _buildEmptyState(context);
     }
 
-    return Container(
-      width: MediaQuery.of(context).size.width * 0.9,
-      constraints: const BoxConstraints(
-        maxHeight: 500,
-        minHeight: 200,
-      ),
-      margin: const EdgeInsets.symmetric(horizontal: 20),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.1),
-            blurRadius: 20,
-            offset: const Offset(0, 10),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // Header with platforms
-          _buildPlatformsHeader(context),
+    return AspectRatio(
+      aspectRatio: 1.0, // Instagram square aspect ratio
+      child: Container(
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.1),
+              blurRadius: 20,
+              offset: const Offset(0, 10),
+            ),
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Header with platforms (compact for square layout)
+            _buildPlatformsHeader(context),
 
-          // Media preview if available
-          if (action!.content.media.isNotEmpty) _buildMediaPreview(context),
+            // Media preview if available - now takes more space in square format
+            if (action!.content.media.isNotEmpty)
+              Expanded(
+                flex: 3,
+                child: _buildMediaPreview(context),
+              ),
 
-          // Content area
-          Flexible(
-            child: _buildContentArea(context),
-          ),
+            // Content area - adjusts based on media presence
+            Expanded(
+              flex: action!.content.media.isNotEmpty ? 2 : 4,
+              child: _buildContentArea(context),
+            ),
 
-          // Action buttons
-          _buildActionButtons(context),
-        ],
+            // Action buttons (compact)
+            _buildActionButtons(context),
+          ],
+        ),
       ),
     );
   }
 
   Widget _buildEmptyState(BuildContext context) {
-    return Container(
-      width: MediaQuery.of(context).size.width * 0.9,
-      height: 200,
-      margin: const EdgeInsets.symmetric(horizontal: 20),
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.1),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: Colors.white.withValues(alpha: 0.3),
-          width: 1,
+    return AspectRatio(
+      aspectRatio: 1.0, // Instagram square aspect ratio
+      child: Container(
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.1),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: Colors.white.withValues(alpha: 0.3),
+            width: 1,
+          ),
         ),
-      ),
-      child: const Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              Icons.post_add,
-              color: Colors.white,
-              size: 48,
-            ),
-            SizedBox(height: 16),
-            Text(
-              'Your post preview will appear here',
-              style: TextStyle(
+        child: const Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(
+                Icons.post_add,
                 color: Colors.white,
-                fontSize: 16,
-                fontWeight: FontWeight.w500,
+                size: 48,
               ),
-              textAlign: TextAlign.center,
-            ),
-          ],
+              SizedBox(height: 16),
+              Text(
+                'Your post preview will appear here',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w500,
+                ),
+                textAlign: TextAlign.center,
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -100,7 +101,7 @@ class PostPreview extends StatelessWidget {
 
   Widget _buildPlatformsHeader(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
         color: Colors.grey.shade50,
         borderRadius: const BorderRadius.only(
@@ -113,26 +114,26 @@ class PostPreview extends StatelessWidget {
           Icon(
             Icons.share,
             color: Colors.grey.shade600,
-            size: 16,
+            size: 14,
           ),
-          const SizedBox(width: 8),
+          const SizedBox(width: 6),
           Text(
             'Posting to: ',
             style: TextStyle(
               color: Colors.grey.shade600,
-              fontSize: 12,
+              fontSize: 11,
               fontWeight: FontWeight.w500,
             ),
           ),
           Expanded(
             child: Wrap(
-              spacing: 4,
+              spacing: 3,
               children: action!.platforms.map((platform) {
                 return Chip(
                   label: Text(
                     platform.substring(0, 1).toUpperCase() +
                         platform.substring(1),
-                    style: const TextStyle(fontSize: 10),
+                    style: const TextStyle(fontSize: 9),
                   ),
                   backgroundColor:
                       _getPlatformColor(platform).withValues(alpha: 0.1),
@@ -153,7 +154,6 @@ class PostPreview extends StatelessWidget {
     final isVideo = mediaItem.mimeType.startsWith('video/');
 
     return Container(
-      height: 200,
       width: double.infinity,
       decoration: BoxDecoration(
         color: Colors.grey.shade100,
@@ -167,7 +167,7 @@ class PostPreview extends StatelessWidget {
             ClipRRect(
               child: Image.file(
                 File(Uri.parse(mediaItem.fileUri).path),
-                fit: BoxFit.cover,
+                fit: BoxFit.cover, // Maintains square aspect ratio
                 errorBuilder: (context, error, stackTrace) {
                   return _buildMediaPlaceholder(isVideo);
                 },

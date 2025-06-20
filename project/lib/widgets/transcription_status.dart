@@ -3,11 +3,17 @@ import 'package:flutter/material.dart';
 class TranscriptionStatus extends StatelessWidget {
   final String transcription;
   final bool isProcessing;
+  final bool isRecording;
+  final int recordingDuration;
+  final int maxRecordingDuration;
 
   const TranscriptionStatus({
     super.key,
     required this.transcription,
     this.isProcessing = false,
+    this.isRecording = false,
+    this.recordingDuration = 0,
+    this.maxRecordingDuration = 30,
   });
 
   @override
@@ -34,7 +40,18 @@ class TranscriptionStatus extends StatelessWidget {
           // Status indicator
           Row(
             children: [
-              if (isProcessing) ...[
+              if (isRecording) ...[
+                // Recording indicator with pulsing animation
+                Container(
+                  width: 12,
+                  height: 12,
+                  decoration: const BoxDecoration(
+                    color: Color(0xFFFF0080),
+                    shape: BoxShape.circle,
+                  ),
+                ),
+                const SizedBox(width: 8),
+              ] else if (isProcessing) ...[
                 const SizedBox(
                   width: 12,
                   height: 12,
@@ -54,14 +71,43 @@ class TranscriptionStatus extends StatelessWidget {
                 ),
                 const SizedBox(width: 8),
               ],
-              Text(
-                _getStatusText(),
-                style: const TextStyle(
-                  color: Color(0xFFFFD700),
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
+              Expanded(
+                child: Text(
+                  _getStatusText(),
+                  style: TextStyle(
+                    color: isRecording
+                        ? const Color(0xFFFF0080)
+                        : const Color(0xFFFFD700),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
               ),
+              // Recording timer on the right side
+              if (isRecording) ...[
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 4,
+                  ),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFFF0080).withValues(alpha: 0.2),
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(
+                      color: const Color(0xFFFF0080),
+                      width: 1,
+                    ),
+                  ),
+                  child: Text(
+                    '${maxRecordingDuration - recordingDuration}s',
+                    style: const TextStyle(
+                      color: Color(0xFFFF0080),
+                      fontWeight: FontWeight.bold,
+                      fontSize: 14,
+                    ),
+                  ),
+                ),
+              ],
             ],
           ),
 
@@ -86,7 +132,9 @@ class TranscriptionStatus extends StatelessWidget {
   }
 
   String _getStatusText() {
-    if (isProcessing) {
+    if (isRecording) {
+      return 'Recording your voice command...';
+    } else if (isProcessing) {
       return 'Processing your voice command...';
     } else if (transcription.isNotEmpty) {
       return 'What you said:';

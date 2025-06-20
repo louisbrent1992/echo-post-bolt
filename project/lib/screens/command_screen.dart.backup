@@ -1372,128 +1372,103 @@ class _CommandScreenState extends State<CommandScreen>
   }
 
   Widget _buildMainContent() {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final screenHeight = constraints.maxHeight;
-        final availableHeight =
-            screenHeight - 32; // Account for top/bottom padding
+    return Column(
+      children: [
+        // Top section - Social Icons with responsive height constraint
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final screenHeight = MediaQuery.of(context).size.height;
+            final maxIconHeight = screenHeight * 0.1; // 1/10th of screen height
 
-        // Calculate proportional heights for the three main sections
-        final topSectionHeight =
-            screenHeight * 0.12; // Social icons + directory selector
-        final bottomSectionHeight =
-            screenHeight * 0.25; // Recording area + transcription
-        final middleSectionHeight =
-            availableHeight - topSectionHeight - bottomSectionHeight;
+            return Container(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+              child: SocialIconsRow(
+                selectedPlatforms: _currentAction?.platforms ?? [],
+                onPlatformToggle: _togglePlatform,
+                maxHeight: maxIconHeight,
+              ),
+            );
+          },
+        ),
 
-        return Column(
-          children: [
-            // Top section - Social Icons + Directory Selector
-            SizedBox(
-              height: topSectionHeight,
-              child: Column(
-                children: [
-                  // Social Icons with responsive height constraint
-                  Expanded(
-                    flex: 2,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 20, vertical: 8),
-                      child: SocialIconsRow(
-                        selectedPlatforms: _currentAction?.platforms ?? [],
-                        onPlatformToggle: _togglePlatform,
-                        maxHeight: topSectionHeight * 0.6,
-                      ),
-                    ),
-                  ),
-                  // Directory selector
-                  const Expanded(
-                    flex: 1,
-                    child: DirectorySelector(),
-                  ),
-                ],
+        // Directory selector (positioned underneath social icons)
+        const DirectorySelector(),
+
+        // Middle section - Post Preview (main content area)
+        Expanded(
+          child: Container(
+            padding: const EdgeInsets.symmetric(vertical: 20),
+            child: Center(
+              child: PostPreview(
+                action: _currentAction,
+                onReviewMedia: _navigateToMediaSelection,
+                onReviewPost: _navigateToReviewPost,
               ),
             ),
+          ),
+        ),
 
-            // Middle section - Post Preview (Instagram-square-style)
-            SizedBox(
-              height: middleSectionHeight,
-              child: Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-                child: Center(
-                  child: AspectRatio(
-                    aspectRatio: 1.0, // Instagram square aspect ratio
-                    child: Container(
-                      constraints: BoxConstraints(
-                        maxWidth: constraints.maxWidth * 0.85,
-                        maxHeight: middleSectionHeight * 0.9,
+        // Transcription status (smaller dialog below center)
+        if (_transcription.isNotEmpty ||
+            _recordingState == RecordingState.processing)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 20),
+            child: TranscriptionStatus(
+              transcription: _transcription,
+              isProcessing: _recordingState == RecordingState.processing,
+            ),
+          ),
+
+        // Bottom section - Microphone (fixed positioning with safe area)
+        SafeArea(
+          minimum: const EdgeInsets.only(bottom: 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Recording timer
+              if (_recordingState == RecordingState.recording)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 16),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 8,
+                    ),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFF0080).withValues(alpha: 0.2),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(
+                        color: const Color(0xFFFF0080),
+                        width: 1,
                       ),
-                      child: PostPreview(
-                        action: _currentAction,
-                        onReviewMedia: _navigateToMediaSelection,
-                        onReviewPost: _navigateToReviewPost,
+                    ),
+                    child: Text(
+                      '${_maxRecordingDuration - _recordingDuration}s',
+                      style: const TextStyle(
+                        color: Color(0xFFFF0080),
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16,
                       ),
                     ),
                   ),
                 ),
-              ),
-            ),
 
-            // Bottom section - Transcription + Recording
-            SizedBox(
-              height: bottomSectionHeight,
-              child: Column(
-                children: [
-                  // Transcription status (upper part of bottom section) - now includes recording timer
-                  if (_transcription.isNotEmpty ||
-                      _recordingState == RecordingState.processing ||
-                      _recordingState == RecordingState.recording)
-                    Expanded(
-                      flex: 2,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 20),
-                        child: Center(
-                          child: TranscriptionStatus(
-                            transcription: _transcription,
-                            isProcessing:
-                                _recordingState == RecordingState.processing,
-                            isRecording:
-                                _recordingState == RecordingState.recording,
-                            recordingDuration: _recordingDuration,
-                            maxRecordingDuration: _maxRecordingDuration,
-                          ),
-                        ),
-                      ),
-                    )
-                  else
-                    const Expanded(flex: 2, child: SizedBox()),
-
-                  // Recording area (lower part of bottom section) - timer removed
-                  Expanded(
-                    flex: 3,
-                    child: SafeArea(
-                      minimum: const EdgeInsets.only(bottom: 16),
-                      child: Center(
-                        child: SizedBox(
-                          width: bottomSectionHeight * 0.6,
-                          height: bottomSectionHeight * 0.6,
-                          child: MicButton(
-                            state: _recordingState,
-                            amplitude: normalizedAmplitude,
-                            onRecordStart: _startRecording,
-                            onRecordStop: _stopRecording,
-                          ),
-                        ),
-                      ),
-                    ),
+              // Microphone button with fixed center position
+              SizedBox(
+                height: 140, // Fixed height to contain the button and ripple
+                child: Center(
+                  child: MicButton(
+                    state: _recordingState,
+                    amplitude: normalizedAmplitude,
+                    onRecordStart: _startRecording,
+                    onRecordStop: _stopRecording,
                   ),
-                ],
+                ),
               ),
-            ),
-          ],
-        );
-      },
+            ],
+          ),
+        ),
+      ],
     );
   }
 }

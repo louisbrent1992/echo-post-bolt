@@ -333,6 +333,10 @@ class _VoiceResponsiveRippleState extends State<VoiceResponsiveRipple>
       return const SizedBox.shrink();
     }
 
+    // Constrain the maximum size to respect parent bounds
+    final maxSize =
+        widget.size * 2.0; // Reduced from 2.8 to better fit in 120px container
+
     return Stack(
       alignment: Alignment.center,
       children: List.generate(widget.rippleCount, (index) {
@@ -340,7 +344,7 @@ class _VoiceResponsiveRippleState extends State<VoiceResponsiveRipple>
           animation: _controllers[index],
           builder: (context, child) {
             return CustomPaint(
-              size: Size(widget.size * 2.8, widget.size * 2.8),
+              size: Size(maxSize, maxSize),
               painter: VoiceRipplePainter(
                 radius: _radiusAnimations[index].value,
                 opacity: _opacityAnimations[index].value,
@@ -419,8 +423,9 @@ class VoiceLevelRing extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Scale ring size based on amplitude
-    final ringSize = baseSize + (amplitude * 20);
+    // Scale ring size based on amplitude but constrain to reasonable bounds
+    final ringSize = (baseSize + (amplitude * 15)).clamp(
+        baseSize * 0.9, baseSize * 1.1); // Reduced scaling and added bounds
     final opacity = (amplitude * 0.6 + 0.1).clamp(0.1, 0.7);
     final strokeWidth = 1.0 + (amplitude * 2.0);
 

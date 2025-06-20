@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import '../models/social_action.dart';
 import '../services/media_coordinator.dart';
 import '../services/firestore_service.dart';
+import '../widgets/social_icon.dart';
 
 class MediaSelectionScreen extends StatefulWidget {
   final SocialAction action;
@@ -165,20 +166,21 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
   }
 
   Future<void> _fetchMedia() async {
+    if (_searchTerms.isEmpty) return;
+
     setState(() {
       _isSearching = true;
     });
 
     try {
-      final candidates = await _mediaCoordinator.getMediaForQuery(
+      final results = await _mediaCoordinator.getMediaForQuery(
         _searchTerms.join(' '),
         dateRange: _dateRange,
         mediaTypes: _mediaType != null ? [_mediaType!] : null,
       );
 
       setState(() {
-        _mediaCandidates = candidates;
-        _selectedMedia = null;
+        _mediaCandidates = results;
         _isSearching = false;
       });
     } catch (e) {
@@ -187,9 +189,33 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
       });
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to search media: $e')),
+          SnackBar(content: Text('Search failed: $e')),
         );
       }
+    }
+  }
+
+  void _togglePlatform(String platform) {
+    // Update the action's platforms when toggled
+    final updatedPlatforms = List<String>.from(widget.action.platforms);
+    if (updatedPlatforms.contains(platform)) {
+      updatedPlatforms.remove(platform);
+    } else {
+      updatedPlatforms.add(platform);
+    }
+
+    // Note: In a real implementation, you might want to update the parent
+    // or use a callback to notify about platform changes
+    // For now, we'll just show a snackbar to indicate the change
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(updatedPlatforms.contains(platform)
+              ? '$platform added to selection'
+              : '$platform removed from selection'),
+          duration: const Duration(seconds: 1),
+        ),
+      );
     }
   }
 
@@ -292,6 +318,34 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
           ? const Center(child: CircularProgressIndicator())
           : Column(
               children: [
+                // Social media icons section at the top
+                LayoutBuilder(
+                  builder: (context, constraints) {
+                    final screenHeight = MediaQuery.of(context).size.height;
+                    final maxIconHeight =
+                        screenHeight * 0.1; // 1/10th of screen height
+
+                    return Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 20, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withAlpha((0.05 * 255).round()),
+                        border: Border(
+                          bottom: BorderSide(
+                            color: Colors.grey.withAlpha((0.2 * 255).round()),
+                            width: 0.5,
+                          ),
+                        ),
+                      ),
+                      child: SocialIconsRow(
+                        selectedPlatforms: widget.action.platforms,
+                        onPlatformToggle: _togglePlatform,
+                        maxHeight: maxIconHeight,
+                      ),
+                    );
+                  },
+                ),
+
                 // Dynamic query status display (only show if actively searching)
                 if (_searchTerms.isNotEmpty && _mediaCandidates.isNotEmpty)
                   Padding(
@@ -596,48 +650,191 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
     final isVideo = media['mime_type'].toString().startsWith('video/');
 
     return Column(
-      mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        Padding(
-          padding: const EdgeInsets.all(16.0),
-          child: Text(
-            'Confirm this ${isVideo ? 'video' : 'photo'}?',
-            style: Theme.of(context).textTheme.titleLarge,
-            textAlign: TextAlign.center,
-          ),
-        ),
+        // Instagram-like post preview
         Expanded(
-          child: Padding(
-            padding: const EdgeInsets.all(16.0),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(12),
-              child: Image.file(
-                File(Uri.parse(media['file_uri']).path),
-                fit: BoxFit.contain,
-              ),
-            ),
-          ),
-        ),
-        Padding(
-          padding: const EdgeInsets.all(16.0),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _buildMetadataRow(
-                Icons.calendar_today,
-                'Created: ${_formatDate(media['device_metadata']?['creation_time'] as String?)}',
-              ),
-              if (media['device_metadata']?['latitude'] != null &&
-                  media['device_metadata']?['longitude'] != null)
-                _buildMetadataRow(
-                  Icons.location_on,
-                  'Location: ${media['device_metadata']!['latitude'].toStringAsFixed(4)}, ${media['device_metadata']!['longitude'].toStringAsFixed(4)}',
+          child: Container(
+            margin: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(16),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withAlpha((0.1 * 255).round()),
+                  blurRadius: 20,
+                  offset: const Offset(0, 10),
                 ),
-              _buildMetadataRow(
-                Icons.aspect_ratio,
-                'Dimensions: ${media['device_metadata']?['width'] ?? 'Unknown'} × ${media['device_metadata']?['height'] ?? 'Unknown'}',
-              ),
-            ],
+              ],
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Large media preview taking up majority of space
+                Expanded(
+                  flex: 3, // Takes up 3/4 of the available space
+                  child: ClipRRect(
+                    borderRadius: const BorderRadius.only(
+                      topLeft: Radius.circular(16),
+                      topRight: Radius.circular(16),
+                    ),
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        Image.file(
+                          File(Uri.parse(media['file_uri']).path),
+                          fit: BoxFit.cover,
+                          errorBuilder: (context, error, stackTrace) {
+                            return Container(
+                              color: Colors.grey.shade300,
+                              child: Center(
+                                child: Column(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    Icon(
+                                      isVideo
+                                          ? Icons.videocam_off
+                                          : Icons.broken_image,
+                                      color: Colors.grey.shade600,
+                                      size: 48,
+                                    ),
+                                    const SizedBox(height: 8),
+                                    Text(
+                                      'Failed to load ${isVideo ? 'video' : 'image'}',
+                                      style: TextStyle(
+                                        color: Colors.grey.shade600,
+                                        fontSize: 14,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+
+                        // Video play button overlay
+                        if (isVideo)
+                          const Center(
+                            child: Icon(
+                              Icons.play_circle_fill,
+                              color: Colors.white,
+                              size: 64,
+                              shadows: [
+                                Shadow(
+                                  blurRadius: 10.0,
+                                  color: Colors.black54,
+                                ),
+                              ],
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
+
+                // Post content area (text and hashtags)
+                Expanded(
+                  flex: 1, // Takes up 1/4 of the available space
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // Post text
+                        if (widget.action.content.text.isNotEmpty) ...[
+                          Expanded(
+                            child: SingleChildScrollView(
+                              child: Text(
+                                widget.action.content.text,
+                                style: const TextStyle(
+                                  fontSize: 16,
+                                  height: 1.4,
+                                  color: Colors.black87,
+                                ),
+                              ),
+                            ),
+                          ),
+                          if (widget.action.content.hashtags.isNotEmpty)
+                            const SizedBox(height: 12),
+                        ],
+
+                        // Hashtags
+                        if (widget.action.content.hashtags.isNotEmpty) ...[
+                          Wrap(
+                            spacing: 6,
+                            runSpacing: 6,
+                            children: widget.action.content.hashtags.map((tag) {
+                              return Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 8, vertical: 4),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFFF0080)
+                                      .withAlpha((0.1 * 255).round()),
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(
+                                    color: const Color(0xFFFF0080)
+                                        .withAlpha((0.3 * 255).round()),
+                                  ),
+                                ),
+                                child: Text(
+                                  '#$tag',
+                                  style: const TextStyle(
+                                    color: Color(0xFFFF0080),
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
+                              );
+                            }).toList(),
+                          ),
+                        ],
+
+                        // If no content, show placeholder
+                        if (widget.action.content.text.isEmpty &&
+                            widget.action.content.hashtags.isEmpty) ...[
+                          Expanded(
+                            child: Center(
+                              child: Container(
+                                padding: const EdgeInsets.all(16),
+                                decoration: BoxDecoration(
+                                  color: Colors.orange
+                                      .withAlpha((0.1 * 255).round()),
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(
+                                    color: Colors.orange
+                                        .withAlpha((0.3 * 255).round()),
+                                  ),
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(
+                                      Icons.edit,
+                                      color: Colors.orange.shade700,
+                                      size: 20,
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Flexible(
+                                      child: Text(
+                                        'Add caption on review page',
+                                        style: TextStyle(
+                                          color: Colors.orange.shade700,
+                                          fontSize: 14,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ],
