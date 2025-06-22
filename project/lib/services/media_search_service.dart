@@ -4,7 +4,6 @@ import 'package:exif/exif.dart';
 import 'dart:io';
 import 'package:path/path.dart' as path;
 import '../utils/date_parser.dart';
-import 'firestore_service.dart';
 import 'package:flutter/foundation.dart';
 
 class LocalMedia {
@@ -42,21 +41,12 @@ class MediaSearchService extends ChangeNotifier {
   List<LocalMedia> _mediaIndex = [];
   bool _isInitialized = false;
   final DateParser _dateParser = DateParser();
-  FirestoreService? _firestoreService;
-
-  // Set the FirestoreService instance
-  void setFirestoreService(FirestoreService firestoreService) {
-    _firestoreService = firestoreService;
-  }
 
   // Initialize the media index with error handling and album selection
-  Future<void> initialize({FirestoreService? firestoreService}) async {
+  Future<void> initialize() async {
     if (_isInitialized) return;
 
     try {
-      // Use provided service or stored one
-      final service = firestoreService ?? _firestoreService;
-
       // Check if we have permission without requesting it
       final PermissionState permissionState =
           await PhotoManager.getPermissionState(
@@ -77,10 +67,10 @@ class MediaSearchService extends ChangeNotifier {
         return;
       }
 
-      // Get user-selected album IDs
-      final selectedAlbumIds = await _getUserSelectedAlbumIds(service, albums);
+      // Use "All Photos" album as default (no Firestore dependency)
+      final selectedAlbumIds = await _getDefaultAlbumIds(albums);
 
-      // Filter albums to only those selected by user
+      // Filter albums to only those selected
       final chosenAlbums =
           albums.where((album) => selectedAlbumIds.contains(album.id)).toList();
 
@@ -132,20 +122,7 @@ class MediaSearchService extends ChangeNotifier {
   }
 
   // Get user-selected album IDs with fallback to "All Photos"
-  Future<List<String>> _getUserSelectedAlbumIds(
-      FirestoreService? service, List<AssetPathEntity> albums) async {
-    try {
-      if (service != null) {
-        final selectedIds = await service.getSelectedMediaAlbums();
-        if (selectedIds.isNotEmpty) {
-          return selectedIds;
-        }
-      }
-    } catch (e) {
-      // Continue to fallback
-    }
-
-    // Fallback to "All Photos" album ID
+  Future<List<String>> _getDefaultAlbumIds(List<AssetPathEntity> albums) async {
     try {
       final allPhotosAlbum = albums.firstWhere(
         (album) => album.isAll,
@@ -173,11 +150,10 @@ class MediaSearchService extends ChangeNotifier {
   }
 
   // Re-initialize with new album selection
-  Future<void> reinitializeWithAlbums(
-      List<String> albumIds, FirestoreService firestoreService) async {
+  Future<void> reinitializeWithAlbums(List<String> albumIds) async {
     _isInitialized = false;
     _mediaIndex = [];
-    await initialize(firestoreService: firestoreService);
+    await initialize();
   }
 
   // Build the media index from asset entities with error handling

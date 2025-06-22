@@ -5,7 +5,6 @@ import 'package:flutter/foundation.dart';
 
 import '../models/social_action.dart';
 import '../services/media_coordinator.dart';
-import '../services/firestore_service.dart';
 import '../services/video_validation_service.dart';
 import '../screens/directory_selection_screen.dart';
 import '../widgets/social_icon.dart';

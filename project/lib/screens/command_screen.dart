@@ -717,6 +717,9 @@ class _CommandScreenState extends State<CommandScreen>
         // Update coordinator with new media - use replaceMedia to allow overriding pre-selected images
         await _postCoordinator?.replaceMedia(updatedAction.content.media);
 
+        // Clear the needsMediaSelection flag since media has been selected
+        _postCoordinator?.clearNeedsMediaSelection();
+
         if (shouldLogNav) {
           print('✅ Media selection completed via coordinator');
         }
