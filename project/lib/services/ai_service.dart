@@ -9,7 +9,7 @@ class AIService {
   static const String _openaiApiUrl =
       'https://api.openai.com/v1/chat/completions';
   final String _apiKey;
-  MediaCoordinator? _mediaCoordinator;
+  final MediaCoordinator? _mediaCoordinator;
 
   AIService(this._apiKey, [MediaCoordinator? mediaCoordinator])
       : _mediaCoordinator = mediaCoordinator;
@@ -218,7 +218,7 @@ class AIService {
     }
 
     try {
-      // Get media context for the prompt
+      // Get media context for the prompt (includes existing post context if editing)
       var mediaContext = _mediaCoordinator != null
           ? await _mediaCoordinator!.getMediaContextForAi()
           : <String, dynamic>{};
@@ -261,10 +261,8 @@ class AIService {
         }
       }
 
-      final messages = [
-        {
-          'role': 'system',
-          'content': '''
+      // SINGLE SYSTEM PROMPT - ChatGPT handles editing vs creation based on context
+      const systemPrompt = '''
 You are a social media content creator and JSON generator for the EchoPost app.
 
 Your task is to transform a spoken transcription into an engaging, platform-ready social media post and generate a complete SocialAction object as JSON.
@@ -278,93 +276,65 @@ Your task is to transform a spoken transcription into an engaging, platform-read
    - Use compelling language, emojis where appropriate, and clear calls-to-action
    - Keep posts concise but engaging (Instagram: 125-150 chars optimal, Twitter: under 280)
 
-2. **HASHTAG REQUIREMENTS (MANDATORY):**
+2. **MEDIA TYPE HANDLING (CRITICAL):**
+   - ALWAYS check the mime_type of media files to determine their type
+   - For images: mime_type starts with "image/" (e.g., "image/jpeg")
+   - For videos: mime_type starts with "video/" (e.g., "video/mp4")
+   - NEVER use a video when an image is requested, or vice versa
+   - When user asks for "picture" or "photo", only use media with image/* mime types
+   - When user asks for "video" or "clip", only use media with video/* mime types
+   - Check device_metadata.duration and frame_rate (present for videos, null for images)
+   - If no media of the requested type is found, do not include any media
+
+3. **HASHTAG REQUIREMENTS (MANDATORY):**
    - ALWAYS generate relevant hashtags and include them in the "hashtags" array
    - Include 3-8 hashtags that are relevant to the content
    - Mix popular hashtags with niche ones for better reach
    - Consider trending hashtags when relevant
    - Examples: ["travel", "sunset", "photography", "wanderlust", "nature"]
 
-3. **CONTENT ENHANCEMENT:**
+4. **CONTENT ENHANCEMENT:**
    - Add context and emotion that may be missing from the transcription
    - Include relevant emojis to increase engagement
    - Create compelling captions that encourage interaction
    - Transform casual speech into polished social media content
 
+5. **EDITING MODE:**
+   - If editing_mode is true in the media context, modify the existing post based on the voice instruction
+   - Preserve what should stay, change what needs to be changed
+   - If user says "change the caption to..." → Replace the text entirely
+   - If user says "add..." → Append to existing content
+   - If user says "remove..." → Remove specified elements
+   - If user gives general feedback → Intelligently modify while preserving intent
+
 **EXAMPLE TRANSFORMATIONS:**
 - Transcription: "posting a picture of my coffee"
 - Enhanced Post: "Starting my Monday with the perfect brew ☕️ Nothing beats that first sip of morning motivation! What's fueling your week? #MondayMotivation #CoffeeLovers #MorningRitual #CoffeeTime #Productivity"
 
-- Transcription: "sharing my workout video"  
-- Enhanced Post: "Crushing today's workout! 💪 Remember: progress over perfection. Every rep counts, every day matters. Who's joining me tomorrow? #FitnessJourney #WorkoutMotivation #HealthyLifestyle #FitLife #NoExcuses"
+**REQUIRED JSON STRUCTURE:**
+You MUST return a complete JSON object with this exact structure:
 
-You will receive these fields from the user:
-- "transcription": a string containing the spoken command (TRANSFORM THIS!)
-- "media_context": an object containing available media files from the user's device, with recent_media sorted by creation time (newest first)
-- "pre_selected_media": (optional) media items that the user has already selected before recording
-
-**CRITICAL MEDIA SELECTION RULES:**
-
-1. **PRIORITY ORDER FOR MEDIA SELECTION:**
-   a) If pre_selected_media is provided, ALWAYS include these items in content.media array - these are user's explicit choices
-   b) If transcription references specific media (e.g., "last picture", "recent photo", "newest image", "latest video"), DIRECTLY select from media_context.recent_media array
-   c) Only create media_query if no suitable media is found in the context AND media is clearly needed
-
-2. **DIRECT MEDIA REFERENCE HANDLING:**
-   When the user says phrases like:
-   - "post my last picture" → Select media_context.recent_media[0] (most recent)
-   - "share my recent photo" → Select media_context.recent_media[0] (most recent)  
-   - "upload my newest image" → Select media_context.recent_media[0] (most recent)
-   - "post the latest video" → Select first video from media_context.recent_media
-   - "share my last 3 photos" → Select first 3 images from media_context.recent_media
-
-3. **CONTENT.MEDIA STRUCTURE:**
-   When including media in content.media, use this exact structure:
-   ```json
-   {
-     "file_uri": "file:///path/to/media.jpg",
-     "mime_type": "image/jpeg",
-     "device_metadata": {
-       "creation_time": "2024-01-15T10:30:00.000Z",
-       "latitude": 40.7128,
-       "longitude": -74.0060,
-       "orientation": 1,
-       "width": 1920,
-       "height": 1080,
-       "file_size_bytes": 2048576
-     }
-   }
-   ```
-
-4. **MEDIA_QUERY vs CONTENT.MEDIA:**
-   - Use content.media when you have specific media from context to include
-   - Use media_query only when no suitable media found but media is needed
-   - NEVER use both content.media and media_query for the same content type
-
-**RESPONSE FORMAT:**
-Your response must be valid JSON with this exact structure:
-
-```json
 {
   "action_id": "echo_[timestamp]",
-  "created_at": "[ISO8601 timestamp]", 
-  "platforms": ["instagram", "twitter", "facebook", "tiktok"],
+  "created_at": "[ISO8601 timestamp]",
+  "platforms": ["facebook", "instagram", "youtube", "twitter", "tiktok"],
   "content": {
-    "text": "[ENHANCED social media post - NOT raw transcription]",
-    "hashtags": ["MANDATORY", "relevant", "hashtags", "array"],
-    "mentions": ["relevant_accounts"],
+    "text": "[enhanced social media content]",
+    "hashtags": ["hashtag1", "hashtag2", "hashtag3"],
+    "mentions": [],
     "link": null,
-    "media": [...]
+    "media": []
   },
   "options": {
     "schedule": "now",
-    "location_tag": null,
     "visibility": {
-      "instagram": "public",
-      "twitter": "public", 
       "facebook": "public",
+      "instagram": "public",
+      "youtube": "public", 
+      "twitter": "public",
       "tiktok": "public"
     },
+    "location_tag": null,
     "reply_to_post_id": null
   },
   "platform_data": {
@@ -392,13 +362,26 @@ Your response must be valid JSON with this exact structure:
       "audio_file_uri": null,
       "scheduled_time": null
     },
+    "youtube": {
+      "post_here": false,
+      "channel_id": "",
+      "privacy": "public",
+      "video_category_id": "22",
+      "video_file_uri": null,
+      "thumbnail_uri": null,
+      "scheduled_time": null,
+      "tags": null,
+      "enable_comments": true,
+      "enable_ratings": true,
+      "made_for_kids": false
+    },
     "twitter": {
-      "post_here": true,
+      "post_here": false,
       "alt_texts": [],
       "tweet_mode": "extended",
       "media_type": null,
       "media_file_uri": null,
-      "media_duration": null,
+      "media_duration": 0,
       "tweet_link": null,
       "scheduled_time": null
     },
@@ -418,7 +401,7 @@ Your response must be valid JSON with this exact structure:
   "internal": {
     "retry_count": 0,
     "ai_generated": true,
-    "original_transcription": "[exact user transcription]",
+    "original_transcription": "[original voice transcription]",
     "user_preferences": {
       "default_platforms": [],
       "default_hashtags": []
@@ -432,22 +415,38 @@ Your response must be valid JSON with this exact structure:
   },
   "media_query": null
 }
-```
 
-**REQUIREMENTS:**
-- ALWAYS transform transcription into engaging social media content
-- ALWAYS include relevant hashtags in the hashtags array (3-8 hashtags minimum)
-- Always include all platform_data objects (facebook, instagram, twitter, tiktok) even if post_here is false
-- Focus on engagement, clarity, and platform optimization
-'''
+**PLATFORM SELECTION RULES:**
+- If media is available: Include all platforms ["facebook", "instagram", "youtube", "twitter", "tiktok"]
+- If no media: Focus on text platforms ["facebook", "twitter"]
+- Set "post_here": true for selected platforms in platform_data
+- Instagram, YouTube, and TikTok require media, so only include them if media is present
+
+**MEDIA HANDLING:**
+- If media context includes recent_media or pre_selected_media, populate the "media" array
+- Set appropriate media_file_uri in platform_data for platforms that will post
+- For videos: set media_type to "video" and populate video_file_uri
+- For images: set media_type to "image" and populate media_file_uri
+- YouTube only supports videos, so only include YouTube if video content is available
+
+**RESPONSE FORMAT:** Return only valid JSON with the complete SocialAction structure.
+''';
+
+      final messages = [
+        {
+          'role': 'system',
+          'content': systemPrompt,
         },
         {
           'role': 'user',
-          'content': json.encode({
-            'transcription': transcription,
-            'media_context': mediaContext,
-          })
-        }
+          'content': '''
+User's voice transcription: "$transcription"
+
+Media Context: ${json.encode(mediaContext)}
+
+Generate a complete SocialAction JSON object based on this input.
+''',
+        },
       ];
 
       final response = await http.post(
@@ -570,7 +569,7 @@ Your response must be valid JSON with this exact structure:
     // CRITICAL: Ensure unified hashtag handling
     _ensureUnifiedHashtagHandling(result, transcription, fallbacksApplied);
 
-    // CRITICAL: Ensure media is included when available
+    // CRITICAL: Ensure media is included when available and validates media context
     _ensureMediaInclusion(result, mediaContext, preSelectedMedia, transcription,
         fallbacksApplied);
 
@@ -613,7 +612,7 @@ Your response must be valid JSON with this exact structure:
     return {
       'action_id': actionId,
       'created_at': timestamp,
-      'platforms': ['instagram', 'twitter', 'facebook', 'tiktok'],
+      'platforms': ['facebook', 'instagram', 'youtube', 'twitter', 'tiktok'],
       'content': {
         'text': transcription, // Fallback to original transcription
         'hashtags': <String>[],
@@ -624,9 +623,10 @@ Your response must be valid JSON with this exact structure:
       'options': {
         'schedule': 'now',
         'visibility': {
-          'instagram': 'public',
-          'twitter': 'public',
           'facebook': 'public',
+          'instagram': 'public',
+          'youtube': 'public',
+          'twitter': 'public',
           'tiktok': 'public',
         },
         'location_tag': null,
@@ -656,6 +656,19 @@ Your response must be valid JSON with this exact structure:
           'video_file_uri': null,
           'audio_file_uri': null,
           'scheduled_time': null,
+        },
+        'youtube': {
+          'post_here': false,
+          'channel_id': '',
+          'privacy': 'public',
+          'video_category_id': '22',
+          'video_file_uri': null,
+          'thumbnail_uri': null,
+          'scheduled_time': null,
+          'tags': null,
+          'enable_comments': true,
+          'enable_ratings': true,
+          'made_for_kids': false
         },
         'twitter': {
           'post_here': false,
@@ -762,7 +775,124 @@ Your response must be valid JSON with this exact structure:
     }
   }
 
-  /// CRITICAL: Ensures media is included when available
+  /// Checks if transcription suggests the user wants media included
+  bool _transcriptionReferencesMedia(String transcription) {
+    final lowerTranscription = transcription.toLowerCase();
+
+    // Separate keywords by media type
+    final imageKeywords = [
+      'picture',
+      'photo',
+      'image',
+      'pic',
+      'shot',
+      'this picture',
+      'this photo',
+      'this image',
+      'my picture',
+      'my photo',
+      'my image',
+      'the picture',
+      'the photo',
+      'the image',
+    ];
+
+    final videoKeywords = [
+      'video',
+      'clip',
+      'recording',
+      'this video',
+      'this clip',
+      'my video',
+      'my clip',
+      'the video',
+      'the clip',
+    ];
+
+    // Generic keywords that don't specify type
+    final genericKeywords = [
+      'last',
+      'recent',
+      'latest',
+      'newest',
+    ];
+
+    // Check for specific media type first
+    final hasImageKeyword =
+        imageKeywords.any((keyword) => lowerTranscription.contains(keyword));
+    final hasVideoKeyword =
+        videoKeywords.any((keyword) => lowerTranscription.contains(keyword));
+    final hasGenericKeyword =
+        genericKeywords.any((keyword) => lowerTranscription.contains(keyword));
+
+    if (kDebugMode) {
+      if (hasImageKeyword) {
+        final matchedKeywords = imageKeywords
+            .where((keyword) => lowerTranscription.contains(keyword))
+            .toList();
+        print('🔍 Found image keywords: ${matchedKeywords.join(', ')}');
+      }
+      if (hasVideoKeyword) {
+        final matchedKeywords = videoKeywords
+            .where((keyword) => lowerTranscription.contains(keyword))
+            .toList();
+        print('🔍 Found video keywords: ${matchedKeywords.join(', ')}');
+      }
+      if (hasGenericKeyword) {
+        final matchedKeywords = genericKeywords
+            .where((keyword) => lowerTranscription.contains(keyword))
+            .toList();
+        print('🔍 Found generic keywords: ${matchedKeywords.join(', ')}');
+      }
+    }
+
+    // Return true if any media type is referenced
+    return hasImageKeyword || hasVideoKeyword || hasGenericKeyword;
+  }
+
+  /// Get the requested media type from transcription
+  String? _getRequestedMediaType(String transcription) {
+    final lowerTranscription = transcription.toLowerCase();
+
+    final imageKeywords = [
+      'picture',
+      'photo',
+      'image',
+      'pic',
+      'shot',
+      'this picture',
+      'this photo',
+      'this image',
+      'my picture',
+      'my photo',
+      'my image',
+      'the picture',
+      'the photo',
+      'the image',
+    ];
+
+    final videoKeywords = [
+      'video',
+      'clip',
+      'recording',
+      'this video',
+      'this clip',
+      'my video',
+      'my clip',
+      'the video',
+      'the clip',
+    ];
+
+    if (imageKeywords.any((keyword) => lowerTranscription.contains(keyword))) {
+      return 'image';
+    }
+    if (videoKeywords.any((keyword) => lowerTranscription.contains(keyword))) {
+      return 'video';
+    }
+    return null;
+  }
+
+  /// CRITICAL: Ensures media is included when available and validates media context
   void _ensureMediaInclusion(
     Map<String, dynamic> result,
     Map<String, dynamic> mediaContext,
@@ -770,119 +900,113 @@ Your response must be valid JSON with this exact structure:
     String transcription,
     List<String> fallbacksApplied,
   ) {
-    final contentMedia = result['content']['media'] as List<dynamic>;
+    // If media already exists in the result, validate it
+    final resultContent = result['content'] as Map<String, dynamic>;
+    final existingMedia = resultContent['media'] as List? ?? [];
 
-    // Priority 1: Pre-selected media (user's explicit choice)
-    if (preSelectedMedia != null && preSelectedMedia.isNotEmpty) {
+    if (existingMedia.isNotEmpty) {
       if (kDebugMode) {
-        print('📎 Using ${preSelectedMedia.length} pre-selected media items');
+        print('📎 Media already present in result: ${existingMedia.length}');
       }
-
-      result['content']['media'] = preSelectedMedia
-          .map((media) => {
-                'file_uri': media.fileUri,
-                'mime_type': media.mimeType,
-                'device_metadata': {
-                  'creation_time': media.deviceMetadata.creationTime,
-                  'latitude': media.deviceMetadata.latitude,
-                  'longitude': media.deviceMetadata.longitude,
-                  'orientation': media.deviceMetadata.orientation,
-                  'width': media.deviceMetadata.width,
-                  'height': media.deviceMetadata.height,
-                  'file_size_bytes': media.deviceMetadata.fileSizeBytes,
-                  'duration': media.deviceMetadata.duration,
-                  'bitrate': media.deviceMetadata.bitrate,
-                  'sampling_rate': media.deviceMetadata.samplingRate,
-                  'frame_rate': media.deviceMetadata.frameRate,
-                },
-              })
-          .toList();
       return;
     }
 
-    // Priority 2: ChatGPT's media selection (if valid and not empty)
-    if (contentMedia.isNotEmpty) {
+    // Check if we're in voice dictation mode
+    final isVoiceDictation = mediaContext['isVoiceDictation'] as bool? ?? false;
+
+    // In voice dictation mode, only include media if explicitly referenced
+    if (isVoiceDictation && !_transcriptionReferencesMedia(transcription)) {
       if (kDebugMode) {
-        print('✅ Using ${contentMedia.length} ChatGPT-selected media items');
+        print('🎤 Voice dictation mode - skipping media inclusion');
       }
-      return; // Keep ChatGPT's selection
+      return;
     }
 
-    // Priority 3: Smart fallback to most recent media
-    final recentMedia =
-        mediaContext['media_context']?['recent_media'] as List<dynamic>? ?? [];
+    // Check if transcription references media
+    if (_transcriptionReferencesMedia(transcription)) {
+      // Get all available media sources
+      final recentMedia = mediaContext['recent_media'] as List? ?? [];
+      final mediaByDate = mediaContext['mediaByDate'] as List? ?? [];
+      final mediaByLocation = mediaContext['mediaByLocation'] as List? ?? [];
+      final preSelectedMediaList = preSelectedMedia
+              ?.map((item) => {
+                    'file_uri': item.fileUri,
+                    'mime_type': item.mimeType,
+                    'timestamp': item.deviceMetadata.creationTime,
+                    'device_metadata': item.deviceMetadata.toJson(),
+                    'pre_selected': true,
+                  })
+              .toList() ??
+          [];
 
-    if (recentMedia.isNotEmpty && _transcriptionSuggestsMedia(transcription)) {
-      final latestMedia = recentMedia.first as Map<String, dynamic>;
+      // Combine all media sources, prioritizing in this order:
+      // 1. Pre-selected media
+      // 2. Recent media
+      // 3. Media by date
+      // 4. Media by location
+      final allAvailableMedia = {
+        ...preSelectedMediaList,
+        ...recentMedia,
+        ...mediaByDate,
+        ...mediaByLocation,
+      }.toList(); // Remove duplicates based on file_uri
 
+      if (allAvailableMedia.isEmpty) {
+        if (kDebugMode) {
+          print('⚠️ No media available in any context');
+        }
+        fallbacksApplied.add('no_media_available');
+        result['needs_media_selection'] = true;
+        return;
+      }
+
+      // Get requested media type
+      final requestedType = _getRequestedMediaType(transcription);
+      if (requestedType != null) {
+        final matchingMedia = allAvailableMedia
+            .where((media) => _mediaMatchesType(media, requestedType))
+            .take(4) // Limit to 4 matching media items
+            .toList();
+
+        if (matchingMedia.isNotEmpty) {
+          resultContent['media'] = matchingMedia;
+          if (kDebugMode) {
+            print(
+                '📎 Added ${matchingMedia.length} matching media items of type: $requestedType');
+            print(
+                '   Sources: ${_getMediaSources(matchingMedia, preSelectedMediaList)}');
+          }
+          return;
+        }
+      }
+
+      // If no specific type requested or no matching media found, use most recent
+      resultContent['media'] = [allAvailableMedia.first];
       if (kDebugMode) {
-        print('🔄 FALLBACK: Using most recent media as default');
-        print('   File: ${latestMedia['file_uri']}');
+        print('📎 Added most recent media item as fallback');
         print(
-            '   Reason: ChatGPT omitted media, but transcription suggests media is wanted');
+            '   Source: ${_getMediaSource(allAvailableMedia.first, preSelectedMediaList)}');
       }
-
-      result['content']
-          ['media'] = [_convertMediaContextToMediaItem(latestMedia)];
-      fallbacksApplied.add('used_latest_media');
-      return;
-    }
-
-    if (kDebugMode) {
-      print(
-          '⚠️ No media included - no pre-selected, no ChatGPT selection, and transcription doesn\'t suggest media');
     }
   }
 
-  /// Checks if transcription suggests the user wants media included
-  bool _transcriptionSuggestsMedia(String transcription) {
-    final lowerTranscription = transcription.toLowerCase();
-
-    final mediaKeywords = [
-      'picture',
-      'photo',
-      'image',
-      'pic',
-      'shot',
-      'video',
-      'clip',
-      'recording',
-      'last',
-      'recent',
-      'latest',
-      'newest',
-      'this',
-      'that',
-      'my',
-    ];
-
-    return mediaKeywords.any((keyword) => lowerTranscription.contains(keyword));
+  /// Helper to identify media source for debugging
+  String _getMediaSource(
+      Map<String, dynamic> media, List<dynamic> preSelectedMedia) {
+    if (media['pre_selected'] == true) return 'pre-selected';
+    if (media['source'] == 'date') return 'by-date';
+    if (media['source'] == 'location') return 'by-location';
+    return 'recent';
   }
 
-  /// Converts media context item to MediaItem format
-  Map<String, dynamic> _convertMediaContextToMediaItem(
-      Map<String, dynamic> contextItem) {
-    final deviceMetadata =
-        contextItem['device_metadata'] as Map<String, dynamic>? ?? {};
-
-    return {
-      'file_uri': contextItem['file_uri'] ?? '',
-      'mime_type': contextItem['mime_type'] ?? 'image/jpeg',
-      'device_metadata': {
-        'creation_time':
-            contextItem['timestamp'] ?? DateTime.now().toIso8601String(),
-        'latitude': deviceMetadata['latitude'],
-        'longitude': deviceMetadata['longitude'],
-        'orientation': deviceMetadata['orientation'] ?? 1,
-        'width': deviceMetadata['width'] ?? 0,
-        'height': deviceMetadata['height'] ?? 0,
-        'file_size_bytes': deviceMetadata['file_size_bytes'] ?? 0,
-        'duration': deviceMetadata['duration'] ?? 0,
-        'bitrate': deviceMetadata['bitrate'],
-        'sampling_rate': deviceMetadata['sampling_rate'],
-        'frame_rate': deviceMetadata['frame_rate'],
-      },
-    };
+  /// Helper to summarize media sources for debugging
+  String _getMediaSources(List<dynamic> media, List<dynamic> preSelectedMedia) {
+    final sources = media
+        .map(
+            (m) => _getMediaSource(m as Map<String, dynamic>, preSelectedMedia))
+        .toSet()
+        .toList();
+    return sources.join(', ');
   }
 
   /// Updates platform_data to reflect the actual media being used
@@ -902,6 +1026,13 @@ Your response must be valid JSON with this exact structure:
     instagramData['media_type'] = isVideo ? 'video' : 'image';
     if (isVideo) {
       instagramData['video_file_uri'] = fileUri;
+    }
+
+    // Update YouTube platform data (video only)
+    if (isVideo) {
+      final youtubeData =
+          result['platform_data']['youtube'] as Map<String, dynamic>;
+      youtubeData['video_file_uri'] = fileUri;
     }
 
     // Update Twitter platform data
@@ -1055,5 +1186,13 @@ Your response must be valid JSON with this exact structure:
     }
 
     return uniqueHashtags;
+  }
+
+  /// Check if media matches requested type
+  bool _mediaMatchesType(Map<String, dynamic> media, String requestedType) {
+    final mimeType = (media['mime_type'] as String? ?? '').toLowerCase();
+    return requestedType == 'image'
+        ? mimeType.startsWith('image/')
+        : mimeType.startsWith('video/');
   }
 }

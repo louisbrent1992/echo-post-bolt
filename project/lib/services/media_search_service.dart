@@ -57,9 +57,11 @@ class MediaSearchService extends ChangeNotifier {
       // Use provided service or stored one
       final service = firestoreService ?? _firestoreService;
 
-      // Request permission
+      // Check if we have permission without requesting it
       final PermissionState permissionState =
-          await PhotoManager.requestPermissionExtend();
+          await PhotoManager.getPermissionState(
+        requestOption: const PermissionRequestOption(),
+      );
       if (!permissionState.hasAccess) {
         _isInitialized = true; // Mark as initialized even without permission
         return;

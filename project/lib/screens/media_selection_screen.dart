@@ -6,8 +6,10 @@ import 'package:flutter/foundation.dart';
 import '../models/social_action.dart';
 import '../services/media_coordinator.dart';
 import '../services/firestore_service.dart';
+import '../services/video_validation_service.dart';
 import '../screens/directory_selection_screen.dart';
 import '../widgets/social_icon.dart';
+import '../widgets/video_preview_widget.dart';
 
 class MediaSelectionScreen extends StatefulWidget {
   final SocialAction action;
@@ -39,6 +41,10 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
   late final TextEditingController _searchController;
   bool _isSearching = false;
 
+  // Debug message throttling
+  static DateTime? _lastInitLog;
+  static DateTime? _lastRefreshLog;
+
   @override
   void initState() {
     super.initState();
@@ -59,12 +65,29 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
     });
 
     try {
-      // CRITICAL: Always refresh media data when screen opens to ensure latest files are shown
+      // Only log initialization details occasionally to prevent spam
+      final now = DateTime.now();
+      final shouldLogInit =
+          _lastInitLog == null || now.difference(_lastInitLog!).inMinutes > 5;
+
+      if (kDebugMode && shouldLogInit) {
+        print(
+            '🔄 MediaSelectionScreen: Starting initialization with directory compliance enforcement');
+        print(
+            '   Custom directories enabled: ${_mediaCoordinator.isCustomDirectoriesEnabled}');
+        if (_mediaCoordinator.isCustomDirectoriesEnabled) {
+          final enabledDirs = _mediaCoordinator.enabledDirectories;
+          print(
+              '   Enabled directories: ${enabledDirs.map((d) => d.displayName).join(', ')}');
+        }
+        _lastInitLog = now;
+      }
+
+      // CRITICAL: Force complete cache invalidation before ANY media operations
       await _mediaCoordinator.refreshMediaData();
 
-      if (kDebugMode) {
-        print('🔄 MediaSelectionScreen: Refreshed media data on screen open');
-      }
+      // Add a small delay to ensure cache invalidation is complete
+      await Future.delayed(const Duration(milliseconds: 100));
 
       // Initialize filters from MediaSearchQuery if available
       if (widget.action.mediaQuery != null) {
@@ -84,20 +107,29 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
         });
       }
 
-      // Check if we have an explicit file URI - but when coming from ReviewPostScreen,
-      // we want to show the grid to allow changing media, not just preview existing media
+      // Check if we have an explicit file URI and validate it
       if (widget.action.content.media.isNotEmpty &&
           widget.action.content.media.first.fileUri.isNotEmpty) {
         final mediaItem = widget.action.content.media.first;
-        if (await _mediaCoordinator.validateMediaURI(mediaItem.fileUri)) {
-          // Get media candidates from query first (this will now get the latest data)
+
+        // Double validation: both URI and directory compliance
+        final isUriValid =
+            await _mediaCoordinator.validateMediaURI(mediaItem.fileUri);
+        final isInAllowedDirectory =
+            _mediaCoordinator.isCustomDirectoriesEnabled
+                ? await _mediaCoordinator
+                    .isFileInEnabledDirectory(mediaItem.fileUri)
+                : true;
+
+        if (isUriValid && isInAllowedDirectory) {
+          // Get fresh media candidates (this will enforce directory compliance)
           final additionalCandidates = await _mediaCoordinator.getMediaForQuery(
             '', // Empty search to get recent media
             dateRange: null,
             mediaTypes: null,
           );
 
-          // Create existing media candidate
+          // Create existing media candidate with full validation
           final existingMediaAsCandidate = {
             'id': 'current',
             'file_uri': mediaItem.fileUri,
@@ -112,57 +144,97 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
             }
           };
 
-          // Deduplicate: check if existing media is already in additional candidates
+          // Deduplicate and validate all candidates
           final existingUri = mediaItem.fileUri;
           final deduplicatedCandidates = additionalCandidates
               .where((candidate) => candidate['file_uri'] != existingUri)
+              .where((candidate) =>
+                  !_mediaCoordinator.isCustomDirectoriesEnabled ||
+                  _mediaCoordinator.enabledDirectories.any((dir) =>
+                      (candidate['file_uri'] as String).startsWith(dir.path)))
               .toList();
 
           setState(() {
-            // Add current media as first item, then deduplicated additional candidates
             _mediaCandidates = [
               existingMediaAsCandidate,
               ...deduplicatedCandidates
             ];
-            _selectedMedia =
-                existingMediaAsCandidate; // Pre-select the current media
+            _selectedMedia = existingMediaAsCandidate;
             _isLoading = false;
           });
 
+          if (kDebugMode && shouldLogInit) {
+            print(
+                '✅ MediaSelectionScreen: Loaded ${_mediaCandidates.length} candidates (existing media retained)');
+          }
+          return;
+        } else {
           if (kDebugMode) {
             print(
-                '🔍 MediaSelectionScreen: Loaded ${_mediaCandidates.length} candidates (${deduplicatedCandidates.length} additional + 1 existing)');
+                '🚫 MediaSelectionScreen: Existing media no longer allowed (URI valid: $isUriValid, Directory allowed: $isInAllowedDirectory)');
           }
+        }
+      }
 
+      // Handle initial candidates with strict validation
+      if (widget.initialCandidates != null &&
+          widget.initialCandidates!.isNotEmpty) {
+        final validatedCandidates = <Map<String, dynamic>>[];
+        int excludedCount = 0;
+
+        for (final candidate in widget.initialCandidates!) {
+          final fileUri = candidate['file_uri'] as String;
+
+          // Double validation: both URI and directory compliance
+          final isUriValid = await _mediaCoordinator.validateMediaURI(fileUri);
+          final isInAllowedDirectory =
+              _mediaCoordinator.isCustomDirectoriesEnabled
+                  ? await _mediaCoordinator.isFileInEnabledDirectory(fileUri)
+                  : true;
+
+          if (isUriValid && isInAllowedDirectory) {
+            validatedCandidates.add(candidate);
+          } else {
+            excludedCount++;
+          }
+        }
+
+        if (validatedCandidates.isNotEmpty) {
+          setState(() {
+            _mediaCandidates = validatedCandidates;
+            _selectedMedia = null;
+            _isLoading = false;
+          });
+
+          if (kDebugMode && shouldLogInit && excludedCount > 0) {
+            print(
+                '🚫 MediaSelectionScreen: Excluded $excludedCount initial candidates from disabled directories');
+          }
           return;
         }
       }
 
-      // Use initial candidates if provided, otherwise get latest image as fallback
-      if (widget.initialCandidates != null &&
-          widget.initialCandidates!.isNotEmpty) {
+      // Fallback: Get latest media with strict directory compliance
+      final latestMedia = await _mediaCoordinator.getMediaForQuery(
+        '',
+        mediaTypes: ['image', 'video'],
+        directory: widget.action.mediaQuery?.directoryPath,
+      );
+
+      if (latestMedia.isNotEmpty) {
         setState(() {
-          _mediaCandidates = widget.initialCandidates!;
+          _mediaCandidates = latestMedia;
           _selectedMedia = null;
           _isLoading = false;
         });
       } else {
-        // No candidates provided, get latest image as fallback (this will now get the latest data)
-        final latestImage = await _mediaCoordinator
-            .getLatestImageInDirectory(widget.action.mediaQuery?.directoryPath);
-
-        if (latestImage != null) {
-          setState(() {
-            _mediaCandidates = [latestImage];
-            _selectedMedia = null;
-            _isLoading = false;
-          });
-        } else {
-          // If no latest image found, apply filters to search for any media (this will now get the latest data)
-          await _applyFilters();
-        }
+        // If no media found, apply filters to search for any media
+        await _applyFilters();
       }
     } catch (e) {
+      if (kDebugMode) {
+        print('❌ MediaSelectionScreen initialization error: $e');
+      }
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Failed to initialize screen: $e')),
@@ -172,6 +244,102 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
         _isLoading = false;
       });
     }
+  }
+
+  /// Centralized media refresh function used by both initialization and pull-to-refresh
+  Future<void> _refreshMediaData({bool showFeedback = true}) async {
+    try {
+      // Only log refresh details occasionally to prevent spam
+      final now = DateTime.now();
+      final shouldLogRefresh = _lastRefreshLog == null ||
+          now.difference(_lastRefreshLog!).inMinutes > 2;
+
+      if (kDebugMode && shouldLogRefresh) {
+        print('🔄 MediaSelectionScreen: Starting media refresh...');
+        _lastRefreshLog = now;
+      }
+
+      // Show immediate feedback if requested
+      if (showFeedback && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Row(
+              children: [
+                SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                  ),
+                ),
+                SizedBox(width: 12),
+                Text('Refreshing media cache...'),
+              ],
+            ),
+            duration: Duration(seconds: 2),
+            backgroundColor: Color(0xFFFF0080),
+          ),
+        );
+      }
+
+      // Comprehensive refresh that clears all PhotoManager caches
+      await _mediaCoordinator.refreshMediaData();
+
+      // Re-apply current filters to get the latest data with fresh cache
+      await _applyFilters();
+
+      if (kDebugMode && shouldLogRefresh) {
+        print('✅ MediaSelectionScreen: Media refresh completed successfully');
+        print('   New media count: ${_mediaCandidates.length}');
+      }
+
+      // Show success feedback if requested
+      if (showFeedback && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Row(
+              children: [
+                const Icon(Icons.check_circle, color: Colors.white, size: 20),
+                const SizedBox(width: 8),
+                Text('Media refreshed! Found ${_mediaCandidates.length} items'),
+              ],
+            ),
+            duration: const Duration(seconds: 2),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ MediaSelectionScreen: Media refresh failed: $e');
+      }
+
+      if (showFeedback && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Row(
+              children: [
+                const Icon(Icons.error, color: Colors.white, size: 20),
+                const SizedBox(width: 8),
+                Expanded(child: Text('Failed to refresh: $e')),
+              ],
+            ),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 4),
+            action: SnackBarAction(
+              label: 'RETRY',
+              textColor: Colors.white,
+              onPressed: () => _refreshMediaData(showFeedback: true),
+            ),
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _refreshMedia() async {
+    await _refreshMediaData(showFeedback: true);
   }
 
   Future<void> _applyFilters() async {
@@ -262,7 +430,7 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
           height: (deviceMetadata['height'] as num?)?.toInt() ?? 0,
           fileSizeBytes:
               (deviceMetadata['file_size_bytes'] as num?)?.toInt() ?? 0,
-          duration: deviceMetadata['duration']?.toDouble(),
+          duration: (deviceMetadata['duration'] as num?)?.toDouble(),
           bitrate: (deviceMetadata['bitrate'] as num?)?.toInt(),
           samplingRate: (deviceMetadata['sampling_rate'] as num?)?.toInt(),
           frameRate: deviceMetadata['frame_rate']?.toDouble(),
@@ -270,43 +438,16 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
       );
 
       // Update the action with the new media item
-      final updatedAction = SocialAction(
-        actionId: widget.action.actionId,
-        createdAt: widget.action.createdAt,
-        platforms: widget.action.platforms,
-        content: Content(
-          text: widget.action.content.text,
-          hashtags: widget.action.content.hashtags,
-          mentions: widget.action.content.mentions,
-          link: widget.action.content.link,
+      final updatedAction = widget.action.copyWith(
+        content: widget.action.content.copyWith(
           media: [mediaItem],
         ),
-        options: widget.action.options,
-        platformData: widget.action.platformData,
-        internal: widget.action.internal,
-        mediaQuery: widget.action.mediaQuery,
       );
 
-      // Only save to Firestore if this is NOT a temporary action (pre-selection)
-      final isTemporaryAction = widget.action.actionId.startsWith('temp_');
-      if (!isTemporaryAction) {
-        // Save the updated action to Firestore for real actions
-        final firestoreService =
-            Provider.of<FirestoreService>(context, listen: false);
-        await firestoreService.updateAction(
-          updatedAction.actionId,
-          updatedAction.toJson(),
-        );
-
-        if (kDebugMode) {
-          print(
-              '💾 Updated action saved to Firestore: ${updatedAction.actionId}');
-        }
-      } else {
-        if (kDebugMode) {
-          print(
-              '🔄 Skipping Firestore update for temporary action: ${updatedAction.actionId}');
-        }
+      if (kDebugMode) {
+        print('✅ Media selection confirmed:');
+        print('   File URI: ${mediaItem.fileUri}');
+        print('   MIME type: ${mediaItem.mimeType}');
       }
 
       // Return the updated action to the previous screen
@@ -319,45 +460,7 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
       });
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to confirm selection: $e')),
-        );
-      }
-    }
-  }
-
-  /// Refreshes the media list by rescanning directories
-  Future<void> _refreshMedia() async {
-    try {
-      if (kDebugMode) {
-        print('🔄 MediaSelectionScreen: User triggered refresh');
-      }
-
-      // Force refresh the media data
-      await _mediaCoordinator.refreshMediaData();
-
-      // Re-apply current filters to get the latest data
-      await _applyFilters();
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Media refreshed! 🔄'),
-            duration: Duration(seconds: 2),
-          ),
-        );
-      }
-    } catch (e) {
-      if (kDebugMode) {
-        print('❌ MediaSelectionScreen: Refresh failed: $e');
-      }
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to refresh media: $e'),
-            backgroundColor: Colors.red,
-            duration: const Duration(seconds: 3),
-          ),
+          SnackBar(content: Text('Failed to update action: $e')),
         );
       }
     }
@@ -408,124 +511,123 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
                   onRefresh: _refreshMedia,
                   color: const Color(0xFFFF0080),
                   backgroundColor: Colors.black,
-                  child: Column(
-                    children: [
+                  child: CustomScrollView(
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    slivers: [
                       // Dynamic query status display (only show if actively searching)
                       if (_searchTerms.isNotEmpty &&
                           _mediaCandidates.isNotEmpty)
-                        Padding(
-                          padding: const EdgeInsets.all(16.0),
-                          child: Container(
-                            padding: const EdgeInsets.all(12),
-                            decoration: BoxDecoration(
-                              color: Colors.black.withValues(alpha: 0.6),
-                              borderRadius: BorderRadius.circular(8),
-                              border: Border.all(
-                                color: Colors.white.withValues(alpha: 0.2),
-                              ),
-                            ),
-                            child: Row(
-                              children: [
-                                const Icon(
-                                  Icons.search,
-                                  color: Color(0xFFFF0080),
-                                  size: 18,
+                        SliverToBoxAdapter(
+                          child: Padding(
+                            padding: const EdgeInsets.all(16.0),
+                            child: Container(
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: Colors.black.withValues(alpha: 0.6),
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(
+                                  color: Colors.white.withValues(alpha: 0.2),
                                 ),
-                                const SizedBox(width: 8),
-                                Expanded(
-                                  child: Text(
-                                    'Found ${_mediaCandidates.length} result${_mediaCandidates.length == 1 ? '' : 's'} for "${_searchTerms.join(', ')}"',
-                                    style: const TextStyle(
-                                      fontWeight: FontWeight.bold,
-                                      color: Colors.white,
+                              ),
+                              child: Row(
+                                children: [
+                                  const Icon(
+                                    Icons.search,
+                                    color: Color(0xFFFF0080),
+                                    size: 18,
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Text(
+                                      'Found ${_mediaCandidates.length} result${_mediaCandidates.length == 1 ? '' : 's'} for "${_searchTerms.join(', ')}"',
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                        color: Colors.white,
+                                      ),
                                     ),
                                   ),
-                                ),
-                              ],
+                                ],
+                              ),
                             ),
                           ),
                         ),
 
                       // Source indicator
-                      _buildSourceIndicator(),
+                      SliverToBoxAdapter(child: _buildSourceIndicator()),
 
                       // Filters section (collapsible)
-                      if (_showFilters) _buildFiltersSection(),
+                      if (_showFilters)
+                        SliverToBoxAdapter(child: _buildFiltersSection()),
 
-                      // Media grid - always show grid when we have candidates
-                      Expanded(
-                        child: _mediaCandidates.isNotEmpty
-                            ? _buildMediaGrid() // Always show grid when we have candidates
-                            : _selectedMedia != null
-                                ? _buildSingleMediaPreview() // Only show single preview as fallback
-                                : SingleChildScrollView(
-                                    physics:
-                                        const AlwaysScrollableScrollPhysics(),
-                                    child: SizedBox(
-                                      height:
-                                          MediaQuery.of(context).size.height *
-                                              0.5,
-                                      child: Center(
-                                        child: Column(
-                                          mainAxisAlignment:
-                                              MainAxisAlignment.center,
-                                          children: [
-                                            Icon(
-                                              Icons.photo_library_outlined,
-                                              size: 64,
-                                              color: Colors.white
-                                                  .withValues(alpha: 0.6),
-                                            ),
-                                            const SizedBox(height: 16),
-                                            const Text(
-                                              'No media available',
-                                              style: TextStyle(
-                                                color: Colors.white,
-                                                fontSize: 18,
-                                                fontWeight: FontWeight.w600,
-                                              ),
-                                            ),
-                                            const SizedBox(height: 8),
-                                            Text(
-                                              'Pull down to refresh or try enabling custom directories',
-                                              style: TextStyle(
-                                                color: Colors.white
-                                                    .withValues(alpha: 0.7),
-                                                fontSize: 14,
-                                              ),
-                                              textAlign: TextAlign.center,
-                                            ),
-                                          ],
+                      // Media grid or empty state
+                      _mediaCandidates.isNotEmpty
+                          ? _buildMediaGridSliver()
+                          : _selectedMedia != null
+                              ? SliverToBoxAdapter(
+                                  child: _buildSingleMediaPreview())
+                              : SliverFillRemaining(
+                                  hasScrollBody: false,
+                                  child: Center(
+                                    child: Column(
+                                      mainAxisAlignment:
+                                          MainAxisAlignment.center,
+                                      children: [
+                                        Icon(
+                                          Icons.photo_library_outlined,
+                                          size: 64,
+                                          color: Colors.white
+                                              .withValues(alpha: 0.6),
                                         ),
-                                      ),
+                                        const SizedBox(height: 16),
+                                        const Text(
+                                          'No media available',
+                                          style: TextStyle(
+                                            color: Colors.white,
+                                            fontSize: 18,
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 8),
+                                        Text(
+                                          'Pull down to refresh and scan for new files',
+                                          style: TextStyle(
+                                            color: Colors.white
+                                                .withValues(alpha: 0.7),
+                                            fontSize: 14,
+                                          ),
+                                          textAlign: TextAlign.center,
+                                        ),
+                                      ],
                                     ),
                                   ),
-                      ),
-
-                      // Confirm button
-                      SafeArea(
-                        child: Padding(
-                          padding: const EdgeInsets.all(16.0),
-                          child: SizedBox(
-                            width: double.infinity,
-                            child: ElevatedButton(
-                              onPressed: _selectedMedia != null
-                                  ? _confirmSelection
-                                  : null,
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: const Color(0xFFFF0080),
-                                foregroundColor: Colors.white,
-                                padding:
-                                    const EdgeInsets.symmetric(vertical: 16),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(12),
                                 ),
-                              ),
-                              child: const Text(
-                                'Confirm Selection',
-                                style: TextStyle(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.w600,
+
+                      // Confirm button - fixed at bottom
+                      SliverToBoxAdapter(
+                        child: SafeArea(
+                          child: Padding(
+                            padding: const EdgeInsets.all(16.0),
+                            child: SizedBox(
+                              width: double.infinity,
+                              child: ElevatedButton(
+                                onPressed: _selectedMedia != null
+                                    ? _confirmSelection
+                                    : null,
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: const Color(0xFFFF0080),
+                                  foregroundColor: Colors.white,
+                                  padding:
+                                      const EdgeInsets.symmetric(vertical: 16),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                ),
+                                child: const Text(
+                                  'Confirm Selection',
+                                  style: TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w600,
+                                  ),
                                 ),
                               ),
                             ),
@@ -609,15 +711,15 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
               '🔄 MediaSelectionScreen: Refreshing media after directory changes');
         }
 
-        // Clear current media and reload
+        // Clear current media and reload with full refresh
         setState(() {
           _isLoading = true;
           _mediaCandidates.clear();
           _selectedMedia = null;
         });
 
-        // Re-initialize the screen with new directory settings
-        await _initializeScreen();
+        // Re-initialize with full refresh
+        await _refreshMediaData(showFeedback: true);
       } else {
         if (kDebugMode) {
           print(
@@ -1086,177 +1188,320 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
     );
   }
 
-  Widget _buildMediaGrid() {
+  Widget _buildMediaGridSliver() {
     if (_mediaCandidates.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              Icons.search_off,
-              size: 64,
-              color: Theme.of(context).colorScheme.outline,
-            ),
-            const SizedBox(height: 16),
-            Text(
-              'No media found',
-              style: Theme.of(context).textTheme.titleMedium,
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'Try adjusting your search or filters',
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: Theme.of(context).colorScheme.outline,
-                  ),
-            ),
-          ],
+      return SliverToBoxAdapter(
+        child: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(
+                Icons.search_off,
+                size: 64,
+                color: Colors.white.withValues(alpha: 0.6),
+              ),
+              const SizedBox(height: 16),
+              const Text(
+                'No media found',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Try adjusting your search or filters',
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.7),
+                  fontSize: 14,
+                ),
+              ),
+            ],
+          ),
         ),
       );
     }
 
-    return GridView.builder(
+    return SliverPadding(
       padding: const EdgeInsets.all(8),
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 3,
-        crossAxisSpacing: 8,
-        mainAxisSpacing: 8,
-      ),
-      itemCount: _mediaCandidates.length,
-      itemBuilder: (context, index) {
-        final media = _mediaCandidates[index];
-        final isSelected =
-            _selectedMedia != null && _selectedMedia!['id'] == media['id'];
-        final isVideo = media['mime_type'].toString().startsWith('video/');
+      sliver: SliverGrid(
+        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+          crossAxisCount: 2, // Changed to 2 columns for better video preview
+          crossAxisSpacing: 8,
+          mainAxisSpacing: 8,
+          childAspectRatio: 0.8, // Adjusted for video info display
+        ),
+        delegate: SliverChildBuilderDelegate(
+          (context, index) {
+            final media = _mediaCandidates[index];
+            final isSelected =
+                _selectedMedia != null && _selectedMedia!['id'] == media['id'];
+            final isVideo = media['mime_type'].toString().startsWith('video/');
 
-        return GestureDetector(
-          onTap: () {
-            setState(() {
-              _selectedMedia = media;
-            });
+            if (isVideo) {
+              // Use enhanced video preview widget for videos
+              return VideoPreviewWidget(
+                mediaItem: media,
+                selectedPlatforms: widget.action.platforms,
+                isSelected: isSelected,
+                onTap: () {
+                  setState(() {
+                    _selectedMedia = media;
+                  });
+
+                  // Show video compatibility info if there are platform warnings
+                  if (widget.action.platforms.isNotEmpty) {
+                    _showVideoCompatibilityInfo(media);
+                  }
+                },
+              );
+            } else {
+              // Use existing image preview for images
+              return _buildImagePreview(media, isSelected);
+            }
           },
-          child: Stack(
-            fit: StackFit.expand,
-            children: [
-              // Media thumbnail with error handling
-              ClipRRect(
-                borderRadius: BorderRadius.circular(8),
-                child: Image.file(
-                  File(Uri.parse(media['file_uri']).path),
-                  fit: BoxFit.cover,
-                  errorBuilder: (context, error, stackTrace) {
-                    return Container(
-                      color: Colors.grey.shade300,
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(
-                            isVideo ? Icons.videocam_off : Icons.broken_image,
-                            color: Colors.grey.shade600,
-                            size: 32,
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            'Failed to load',
-                            style: TextStyle(
-                              color: Colors.grey.shade600,
-                              fontSize: 10,
-                            ),
-                            textAlign: TextAlign.center,
-                          ),
-                        ],
-                      ),
-                    );
-                  },
-                ),
-              ),
+          childCount: _mediaCandidates.length,
+        ),
+      ),
+    );
+  }
 
-              // Video indicator
-              if (isVideo)
-                Positioned(
-                  top: 4,
-                  right: 4,
-                  child: Container(
-                    padding: const EdgeInsets.all(4),
-                    decoration: BoxDecoration(
-                      color: Colors.black.withAlpha((0.6 * 255).round()),
-                      borderRadius: BorderRadius.circular(4),
+  /// Enhanced image preview widget
+  Widget _buildImagePreview(Map<String, dynamic> media, bool isSelected) {
+    return GestureDetector(
+      onTap: () {
+        setState(() {
+          _selectedMedia = media;
+        });
+      },
+      child: Container(
+        decoration: BoxDecoration(
+          border: Border.all(
+            color: isSelected
+                ? const Color(0xFFFF0080)
+                : Colors.white.withValues(alpha: 0.3),
+            width: isSelected ? 3 : 1,
+          ),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            // Image thumbnail
+            ClipRRect(
+              borderRadius: BorderRadius.circular(8),
+              child: Image.file(
+                File(Uri.parse(media['file_uri']).path),
+                fit: BoxFit.cover,
+                errorBuilder: (context, error, stackTrace) {
+                  return Container(
+                    color: const Color(0xFF2A2A2A),
+                    child: const Center(
+                      child: Icon(
+                        Icons.broken_image,
+                        color: Colors.white54,
+                        size: 48,
+                      ),
                     ),
-                    child: const Icon(
-                      Icons.videocam,
-                      color: Colors.white,
-                      size: 16,
-                    ),
+                  );
+                },
+              ),
+            ),
+
+            // Image info overlay
+            Positioned(
+              bottom: 0,
+              left: 0,
+              right: 0,
+              child: Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  borderRadius: const BorderRadius.only(
+                    bottomLeft: Radius.circular(8),
+                    bottomRight: Radius.circular(8),
+                  ),
+                  gradient: LinearGradient(
+                    begin: Alignment.bottomCenter,
+                    end: Alignment.topCenter,
+                    colors: [
+                      Colors.black.withValues(alpha: 0.8),
+                      Colors.transparent,
+                    ],
                   ),
                 ),
-
-              // Date overlay
-              Positioned(
-                bottom: 0,
-                left: 0,
-                right: 0,
-                child: Container(
-                  padding: const EdgeInsets.all(4),
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.bottomCenter,
-                      end: Alignment.topCenter,
-                      colors: [
-                        Colors.black.withAlpha((0.7 * 255).round()),
-                        Colors.transparent,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // Resolution and file size
+                    Row(
+                      children: [
+                        Text(
+                          '${media['device_metadata']?['width'] ?? 0}×${media['device_metadata']?['height'] ?? 0}',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 11,
+                          ),
+                        ),
+                        const Spacer(),
+                        Text(
+                          _formatFileSize(media['device_metadata']
+                                  ?['file_size_bytes'] ??
+                              0),
+                          style: const TextStyle(
+                            color: Colors.white70,
+                            fontSize: 10,
+                          ),
+                        ),
                       ],
                     ),
-                  ),
-                  child: Text(
-                    _formatDate(
-                        media['device_metadata']?['creation_time'] as String?),
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 10,
+
+                    // Format and date
+                    const SizedBox(height: 2),
+                    Row(
+                      children: [
+                        Text(
+                          _getFormatDisplayName(
+                              media['mime_type'] ?? 'image/jpeg'),
+                          style: const TextStyle(
+                            color: Colors.white70,
+                            fontSize: 10,
+                          ),
+                        ),
+                        const Spacer(),
+                        Text(
+                          _formatDate(media['device_metadata']?['creation_time']
+                              as String?),
+                          style: const TextStyle(
+                            color: Colors.white70,
+                            fontSize: 9,
+                          ),
+                        ),
+                      ],
                     ),
-                    textAlign: TextAlign.center,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
+                  ],
                 ),
               ),
+            ),
 
-              // Selection indicator
-              if (isSelected)
-                Container(
-                  decoration: BoxDecoration(
-                    border: Border.all(
-                      color: Theme.of(context).colorScheme.primary,
-                      width: 3,
-                    ),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Align(
-                    alignment: Alignment.topLeft,
-                    child: Container(
-                      margin: const EdgeInsets.all(4),
-                      padding: const EdgeInsets.all(2),
-                      decoration: BoxDecoration(
-                        color: Theme.of(context).colorScheme.primary,
-                        shape: BoxShape.circle,
-                      ),
-                      child: Icon(
-                        Icons.check,
-                        color: Theme.of(context).colorScheme.onPrimary,
-                        size: 16,
-                      ),
-                    ),
-                  ),
+            // Selection indicator
+            if (isSelected)
+              const Positioned(
+                top: 8,
+                left: 8,
+                child: Icon(
+                  Icons.check_circle,
+                  color: Color(0xFFFF0080),
+                  size: 24,
                 ),
-            ],
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Shows video compatibility information for selected platforms
+  Future<void> _showVideoCompatibilityInfo(Map<String, dynamic> media) async {
+    if (widget.action.platforms.isEmpty) return;
+
+    try {
+      final fileUri = media['file_uri'] as String;
+      final filePath = Uri.parse(fileUri).path;
+
+      // Show loading
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => const Center(
+          child: CircularProgressIndicator(
+            valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFFF0080)),
+          ),
+        ),
+      );
+
+      final validationResult =
+          await VideoValidationService.validateVideoForPlatforms(
+        filePath,
+        widget.action.platforms,
+        strictMode: false,
+      );
+
+      if (mounted) {
+        Navigator.of(context).pop(); // Close loading dialog
+
+        // Only show dialog if there are warnings or errors
+        if (validationResult.errors.isNotEmpty ||
+            validationResult.warnings.isNotEmpty) {
+          showDialog(
+            context: context,
+            builder: (context) => VideoCompatibilityDialog(
+              validationResult: validationResult,
+              platforms: widget.action.platforms,
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        Navigator.of(context).pop(); // Close loading dialog
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to validate video: $e'),
+            backgroundColor: Colors.red,
           ),
         );
-      },
-    );
+      }
+    }
+  }
+
+  String _formatFileSize(int bytes) {
+    if (bytes == 0) return '0 B';
+
+    const suffixes = ['B', 'KB', 'MB', 'GB'];
+    var size = bytes.toDouble();
+    var suffixIndex = 0;
+
+    while (size >= 1024 && suffixIndex < suffixes.length - 1) {
+      size /= 1024;
+      suffixIndex++;
+    }
+
+    return '${size.toStringAsFixed(size < 10 ? 1 : 0)} ${suffixes[suffixIndex]}';
+  }
+
+  String _getFormatDisplayName(String mimeType) {
+    switch (mimeType.toLowerCase()) {
+      case 'image/jpeg':
+        return 'JPEG';
+      case 'image/png':
+        return 'PNG';
+      case 'image/gif':
+        return 'GIF';
+      case 'image/webp':
+        return 'WebP';
+      case 'image/heic':
+        return 'HEIC';
+      case 'video/mp4':
+        return 'MP4';
+      case 'video/quicktime':
+        return 'MOV';
+      case 'video/x-msvideo':
+        return 'AVI';
+      case 'video/x-matroska':
+        return 'MKV';
+      case 'video/webm':
+        return 'WebM';
+      default:
+        return mimeType.split('/').last.toUpperCase();
+    }
   }
 
   String _formatDate(String? isoDate) {
     if (isoDate == null) {
-      return 'Unknown date';
+      return 'Unknown';
     }
 
     try {
@@ -1269,12 +1514,14 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
       } else if (difference.inDays == 1) {
         return 'Yesterday';
       } else if (difference.inDays < 7) {
-        return '${difference.inDays} days ago';
+        return '${difference.inDays}d ago';
+      } else if (difference.inDays < 30) {
+        return '${(difference.inDays / 7).round()}w ago';
       } else {
-        return '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+        return '${date.month}/${date.day}/${date.year.toString().substring(2)}';
       }
     } catch (e) {
-      return 'Invalid date';
+      return 'Invalid';
     }
   }
 }

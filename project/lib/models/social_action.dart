@@ -56,6 +56,7 @@ class SocialAction {
   final Internal internal;
   @JsonKey(name: 'media_query')
   final MediaSearchQuery? mediaQuery;
+  final bool needsMediaSelection;
 
   SocialAction({
     String? actionId,
@@ -66,6 +67,7 @@ class SocialAction {
     required this.platformData,
     required this.internal,
     this.mediaQuery,
+    this.needsMediaSelection = false,
   })  : actionId = actionId ?? const Uuid().v4(),
         createdAt = createdAt ?? DateTime.now().toIso8601String();
 
@@ -83,6 +85,7 @@ class SocialAction {
     PlatformData? platformData,
     Internal? internal,
     MediaSearchQuery? mediaQuery,
+    bool? needsMediaSelection,
   }) {
     return SocialAction(
       actionId: actionId ?? this.actionId,
@@ -93,6 +96,7 @@ class SocialAction {
       platformData: platformData ?? this.platformData,
       internal: internal ?? this.internal,
       mediaQuery: mediaQuery ?? this.mediaQuery,
+      needsMediaSelection: needsMediaSelection ?? this.needsMediaSelection,
     );
   }
 }
@@ -268,12 +272,14 @@ class LocationTag {
 class PlatformData {
   final FacebookData? facebook;
   final InstagramData? instagram;
+  final YouTubeData? youtube;
   final TwitterData? twitter;
   final TikTokData? tiktok;
 
   PlatformData({
     this.facebook,
     this.instagram,
+    this.youtube,
     this.twitter,
     this.tiktok,
   });
@@ -424,6 +430,51 @@ class TwitterData {
       _$TwitterDataFromJson(json);
 
   Map<String, dynamic> toJson() => _$TwitterDataToJson(this);
+}
+
+/// YouTubeData: Enhanced for video content and channel management
+/// Supports video uploads, privacy settings, and YouTube-specific metadata
+@JsonSerializable(explicitToJson: true)
+class YouTubeData {
+  @JsonKey(name: 'post_here')
+  final bool postHere;
+  @JsonKey(name: 'channel_id')
+  final String channelId;
+  final String privacy; // 'public', 'unlisted', 'private'
+  @JsonKey(name: 'video_category_id')
+  final String? videoCategoryId; // YouTube category (22 = People & Blogs)
+  @JsonKey(name: 'video_file_uri')
+  final String? videoFileUri; // For video posts
+  @JsonKey(name: 'thumbnail_uri')
+  final String? thumbnailUri; // Custom thumbnail
+  @JsonKey(name: 'scheduled_time')
+  final String? scheduledTime; // ISO timestamp for scheduled posts
+  final String? tags; // YouTube-specific tags (comma-separated)
+  @JsonKey(name: 'enable_comments')
+  final bool enableComments;
+  @JsonKey(name: 'enable_ratings')
+  final bool enableRatings;
+  @JsonKey(name: 'made_for_kids')
+  final bool madeForKids;
+
+  YouTubeData({
+    this.postHere = false,
+    this.channelId = '',
+    this.privacy = 'public',
+    this.videoCategoryId = '22', // Default: People & Blogs
+    this.videoFileUri,
+    this.thumbnailUri,
+    this.scheduledTime,
+    this.tags,
+    this.enableComments = true,
+    this.enableRatings = true,
+    this.madeForKids = false,
+  });
+
+  factory YouTubeData.fromJson(Map<String, dynamic> json) =>
+      _$YouTubeDataFromJson(json);
+
+  Map<String, dynamic> toJson() => _$YouTubeDataToJson(this);
 }
 
 /// TikTokData: Enhanced for video and audio content

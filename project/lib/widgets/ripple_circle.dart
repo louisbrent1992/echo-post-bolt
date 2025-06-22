@@ -2,16 +2,12 @@ import 'package:flutter/material.dart';
 
 class RippleCircle extends StatefulWidget {
   final Color color;
-  final double size;
-  final double strokeWidth;
-  final Duration duration;
+  final double amplitude;
 
   const RippleCircle({
     super.key,
-    this.color = const Color(0xFFFF0080),
-    this.size = 80.0,
-    this.strokeWidth = 2.0,
-    this.duration = const Duration(milliseconds: 1000),
+    required this.color,
+    required this.amplitude,
   });
 
   @override
@@ -19,37 +15,26 @@ class RippleCircle extends StatefulWidget {
 }
 
 class _RippleCircleState extends State<RippleCircle>
-    with TickerProviderStateMixin {
+    with SingleTickerProviderStateMixin {
   late AnimationController _controller;
-  late Animation<double> _radiusAnimation;
-  late Animation<double> _opacityAnimation;
+  late Animation<double> _animation;
 
   @override
   void initState() {
     super.initState();
-
     _controller = AnimationController(
-      duration: widget.duration,
+      duration: const Duration(milliseconds: 2000),
       vsync: this,
     );
 
-    _radiusAnimation = Tween<double>(
-      begin: widget.size * 0.5,
-      end: widget.size * 1.2,
-    ).animate(CurvedAnimation(
-      parent: _controller,
-      curve: Curves.easeOutQuad,
-    ));
+    _animation = Tween<double>(begin: 0.5, end: 1.5).animate(
+      CurvedAnimation(
+        parent: _controller,
+        curve: Curves.easeInOut,
+      ),
+    );
 
-    _opacityAnimation = Tween<double>(
-      begin: 0.8,
-      end: 0.0,
-    ).animate(CurvedAnimation(
-      parent: _controller,
-      curve: Curves.easeOutQuad,
-    ));
-
-    _controller.repeat();
+    _controller.repeat(reverse: true);
   }
 
   @override
@@ -61,67 +46,22 @@ class _RippleCircleState extends State<RippleCircle>
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
-      animation: _controller,
+      animation: _animation,
       builder: (context, child) {
-        return CustomPaint(
-          size: Size(widget.size * 2.4, widget.size * 2.4),
-          painter: RipplePainter(
-            radius: _radiusAnimation.value,
-            opacity: _opacityAnimation.value,
-            color: widget.color,
-            strokeWidth: widget.strokeWidth,
+        return Container(
+          width: 120 * _animation.value,
+          height: 120 * _animation.value,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            border: Border.all(
+              color: widget.color.withValues(alpha: 0.3 * widget.amplitude),
+              width: 2,
+            ),
           ),
         );
       },
     );
   }
-}
-
-class RipplePainter extends CustomPainter {
-  final double radius;
-  final double opacity;
-  final Color color;
-  final double strokeWidth;
-
-  RipplePainter({
-    required this.radius,
-    required this.opacity,
-    required this.color,
-    required this.strokeWidth,
-  });
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final center = Offset(size.width / 2, size.height / 2);
-
-    final paint = Paint()
-      ..color = color.withAlpha((opacity * 255).round())
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = strokeWidth;
-
-    // Create gradient effect
-    final gradient = RadialGradient(
-      colors: [
-        color.withAlpha((opacity * 255).round()),
-        color.withAlpha((opacity * 0.5 * 255).round()),
-        color.withAlpha(0),
-      ],
-      stops: const [0.0, 0.7, 1.0],
-    );
-
-    final gradientPaint = Paint()
-      ..shader =
-          gradient.createShader(Rect.fromCircle(center: center, radius: radius))
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = strokeWidth * 2;
-
-    // Draw multiple rings for more dramatic effect
-    canvas.drawCircle(center, radius, gradientPaint);
-    canvas.drawCircle(center, radius * 0.8, paint);
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => true;
 }
 
 class MultiRippleCircle extends StatefulWidget {
@@ -441,4 +381,32 @@ class VoiceLevelRing extends StatelessWidget {
       ),
     );
   }
+}
+
+class RipplePainter extends CustomPainter {
+  final double radius;
+  final double opacity;
+  final Color color;
+  final double strokeWidth;
+
+  RipplePainter({
+    required this.radius,
+    required this.opacity,
+    required this.color,
+    required this.strokeWidth,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = Offset(size.width / 2, size.height / 2);
+    final paint = Paint()
+      ..color = color.withAlpha((opacity * 255).round())
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = strokeWidth;
+
+    canvas.drawCircle(center, radius, paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => true;
 }

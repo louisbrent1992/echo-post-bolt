@@ -21,6 +21,9 @@ dependencies:
   http: ^1.1.0
   url_launcher: ^6.2.2
 
+  # Permissions
+  permission_handler: ^11.3.0
+
   # Social Auth
   flutter_facebook_auth: 6.0.4
   google_sign_in: ^6.1.6
@@ -38,11 +41,13 @@ dependencies:
 
   # Video Player
   video_player: ^2.5.0
+  video_thumbnail: ^0.5.3
 
   # Device Media & EXIF
   image_picker: ^1.0.5
   photo_manager: ^3.0.0-dev.5
   exif: ^3.3.0
+  geocoding: ^2.1.1
 
   # Utilities
   shared_preferences: ^2.2.2
@@ -65,9 +70,14 @@ dev_dependencies:
 # Flutter Launcher Icons Configuration
 flutter_icons:
   android: true
-  ios: false # Set to false since user only wants Android
+  ios: true
   image_path: "assets/icons/logo.png"
   min_sdk_android: 21
+  # Android adaptive icon configuration
+  adaptive_icon_background: "#FF0080"
+  adaptive_icon_foreground: "assets/icons/logo.png"
+  # iOS configuration
+  remove_alpha_ios: true
 
 # TODO: Add your custom launcher icons
 # 1. Create/download your 1024x1024 icon images

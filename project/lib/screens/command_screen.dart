@@ -7,24 +7,23 @@ import 'package:provider/provider.dart';
 import 'package:http/http.dart' as http;
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:record/record.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:intl/intl.dart';
 
 import '../models/social_action.dart';
+import '../models/status_message.dart';
 import '../services/media_coordinator.dart';
 import '../services/social_action_post_coordinator.dart';
+import '../services/auth_service.dart';
 import '../widgets/social_icon.dart';
 import '../widgets/post_content_box.dart';
 import '../widgets/transcription_status.dart';
 import '../widgets/unified_action_button.dart';
 import '../widgets/unified_media_buttons.dart';
+import '../widgets/enhanced_media_preview.dart';
 import '../screens/media_selection_screen.dart';
 import '../screens/history_screen.dart';
 import '../screens/directory_selection_screen.dart';
 import '../constants/typography.dart';
-
-/// Recording states for voice capture workflow
-enum RecordingState { idle, recording, processing, ready, posting }
 
 /// EchoPost Voice-to-Post Pipeline
 ///
@@ -69,40 +68,29 @@ class _CommandScreenState extends State<CommandScreen>
     with TickerProviderStateMixin {
   final AudioRecorder _record = AudioRecorder();
 
-  RecordingState _recordingState = RecordingState.idle;
-  String? _currentRecordingPath;
-  bool _isStoppingRecording = false;
-  bool _isStartingRecording = false;
-  DateTime? _recordingStartTime;
-
   late AnimationController _backgroundController;
   late Animation<double> _backgroundAnimation;
 
   Timer? _recordingTimer;
   Timer? _amplitudeTimer;
-  int _recordingDuration = 0;
-  final int _maxRecordingDuration = 30; // 30 seconds max
 
-  // Voice monitoring variables
-  double _currentAmplitude = -160.0; // dBFS
-  double _maxAmplitude = -160.0;
-  double _amplitudeSum = 0.0;
-  int _amplitudeSamples = 0;
-  bool _hasSpeechDetected = false;
-  int _silenceCount = 0;
-  final double _speechThreshold = -40.0; // dBFS threshold for speech detection
-  final double _silenceThreshold = -50.0; // dBFS threshold for silence
-  final int _maxSilenceBeforeWarning =
-      10; // 5 seconds of silence before warning
-
-  // Coordinators - now using SocialActionPostCoordinator for all state management
+  // Coordinators - SocialActionPostCoordinator accessed via Consumer
   SocialActionPostCoordinator? _postCoordinator;
   late final MediaCoordinator _mediaCoordinator;
+
+  // Debug message throttling for CommandScreen
+  static DateTime? _lastProcessingLog;
+
+  // CRITICAL: Add key to help Flutter track Consumer lifecycle
+  final GlobalKey _consumerKey = GlobalKey();
 
   @override
   void initState() {
     super.initState();
-    _initializeAnimations();
+    _initializeAnimations(); // Initialize animations immediately
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _initializeScreen(); // Handle permissions after first frame
+    });
   }
 
   @override
@@ -114,6 +102,16 @@ class _CommandScreenState extends State<CommandScreen>
     if (kDebugMode) {
       print('🎯 CommandScreen: Connected to MediaCoordinator');
     }
+  }
+
+  @override
+  void dispose() {
+    _backgroundController.dispose();
+    _recordingTimer?.cancel();
+    _amplitudeTimer?.cancel();
+    _record.dispose();
+
+    super.dispose();
   }
 
   void _initializeAnimations() {
@@ -133,592 +131,283 @@ class _CommandScreenState extends State<CommandScreen>
     _backgroundController.repeat(reverse: true);
   }
 
-  @override
-  void dispose() {
-    _backgroundController.dispose();
-    _recordingTimer?.cancel();
-    _amplitudeTimer?.cancel();
-    _record.dispose();
-    super.dispose();
-  }
-
-  void _resetRecordingState({bool clearPreSelectedMedia = false}) {
-    _recordingTimer?.cancel();
-    _amplitudeTimer?.cancel();
-    _recordingTimer = null;
-    _amplitudeTimer = null;
-    _recordingDuration = 0;
-    _currentRecordingPath = null;
-    _isStartingRecording = false;
-    _isStoppingRecording = false;
-    _recordingState = RecordingState.idle;
-    _recordingStartTime = null;
-
-    // Reset voice monitoring
-    _currentAmplitude = -160.0;
-    _maxAmplitude = -160.0;
-    _amplitudeSum = 0.0;
-    _amplitudeSamples = 0;
-    _hasSpeechDetected = false;
-    _silenceCount = 0;
-
-    // Use coordinator to manage state reset
-    _postCoordinator?.setRecordingState(false);
-
-    if (clearPreSelectedMedia) {
-      _postCoordinator?.reset(); // Full reset including media
-    }
-
-    if (kDebugMode) {
-      print('🔄 Recording state reset to idle via coordinator');
-    }
-  }
-
   double get normalizedAmplitude {
     // Convert dBFS to 0.0-1.0 range for UI
     // -60 dBFS = 0.0, -10 dBFS = 1.0
     const double minDb = -60.0;
     const double maxDb = -10.0;
 
-    if (_currentAmplitude <= minDb) return 0.0;
-    if (_currentAmplitude >= maxDb) return 1.0;
+    final amplitude = _postCoordinator?.currentAmplitude ?? minDb;
+    if (amplitude <= minDb) return 0.0;
+    if (amplitude >= maxDb) return 1.0;
 
-    return (_currentAmplitude - minDb) / (maxDb - minDb);
+    return (amplitude - minDb) / (maxDb - minDb);
   }
 
-  Future<void> _startRecording() async {
-    if (kDebugMode) {
-      print('🎤 Starting recording... Current state: $_recordingState');
-    }
-
-    if (_recordingState != RecordingState.idle) {
-      if (kDebugMode) {
-        print('❌ Cannot start recording: not in idle state');
-      }
-      return;
-    }
-
-    if (_isStartingRecording) {
-      if (kDebugMode) {
-        print(
-            '❌ Already starting recording, ignoring additional start request');
-      }
-      return;
-    }
-
-    _isStartingRecording = true;
-
-    // Update coordinator recording state
-    _postCoordinator?.setRecordingState(true);
-
+  Future<void> _initializeScreen() async {
     try {
-      // Check and request microphone permission
-      bool hasPermission = await _record.hasPermission();
-      if (!hasPermission) {
-        _isStartingRecording = false;
-        _postCoordinator?.setRecordingState(false);
-
+      // Request all permissions through the coordinator
+      final hasPermissions = await _postCoordinator?.requestAllPermissions();
+      if (hasPermissions != true) {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: const Text(
-                  'Microphone permission is required for voice recording.'),
-              duration: const Duration(seconds: 5),
-              action: SnackBarAction(
-                label: 'Retry',
-                onPressed: _startRecording,
-              ),
-            ),
+          _postCoordinator?.requestStatusUpdate(
+            'Please grant required permissions to use the app',
+            StatusMessageType.error,
+            duration: const Duration(seconds: 4),
           );
         }
         return;
       }
 
-      // Validate recording environment
-      if (!await _validateRecordingEnvironment()) {
-        _isStartingRecording = false;
-        _postCoordinator?.setRecordingState(false);
-        return;
+      // Initialize the media coordinator after permissions are granted
+      if (mounted) {
+        final mediaCoordinator =
+            Provider.of<MediaCoordinator>(context, listen: false);
+        await mediaCoordinator.initialize();
       }
-
-      // Set up recording path
-      final tempDir = await getTemporaryDirectory();
-      final m4aPath =
-          '${tempDir.path}/recording_${DateTime.now().millisecondsSinceEpoch}.m4a';
-      _currentRecordingPath = m4aPath;
-
-      // Update UI state
-      setState(() {
-        _recordingState = RecordingState.recording;
-      });
-
-      // Configure and start recording
-      const recordConfig = RecordConfig(
-        encoder: AudioEncoder.aacLc,
-        bitRate: 128000,
-        sampleRate: 16000,
-        numChannels: 1,
-        autoGain: true,
-        echoCancel: true,
-        noiseSuppress: true,
-      );
-
-      _recordingStartTime = DateTime.now();
-      await _record.start(recordConfig, path: m4aPath);
-
-      await Future.delayed(const Duration(milliseconds: 100));
-      _startRecordingTimer();
-      _startAmplitudeMonitoring();
 
       if (kDebugMode) {
-        print('✅ Recording started successfully');
+        print('✅ CommandScreen initialized successfully');
       }
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ Error initializing screen: $e');
+      }
+      if (mounted) {
+        _postCoordinator?.requestStatusUpdate(
+          'Failed to initialize: $e',
+          StatusMessageType.error,
+          duration: const Duration(seconds: 4),
+        );
+      }
+    }
+  }
+
+  /// Starts the unified voice recording process
+  /// @param isVoiceDictation - Whether this was triggered by the post content microphone
+  Future<void> _startUnifiedRecording({bool isVoiceDictation = false}) async {
+    if (_postCoordinator == null) {
+      if (kDebugMode) {
+        print('❌ Cannot start recording: coordinator not available');
+      }
+      return;
+    }
+
+    try {
+      // Check microphone permission first
+      final hasPermission = await _record.hasPermission();
+      if (!hasPermission) {
+        throw Exception('Microphone permission not granted');
+      }
+
+      // Start recording through coordinator
+      await _postCoordinator!
+          .startRecordingWithMode(isVoiceDictation: isVoiceDictation);
+
+      // Get recording path from coordinator
+      final recordingPath = _postCoordinator!.currentRecordingPath;
+      if (recordingPath == null) {
+        throw Exception('Recording path not initialized');
+      }
+
+      // Start actual recording
+      await _record.start(
+        const RecordConfig(
+          encoder: AudioEncoder.aacLc,
+          bitRate: 128000,
+          sampleRate: 44100,
+          numChannels: 1,
+        ),
+        path: recordingPath,
+      );
+
+      _startRecordingTimer();
+      _startAmplitudeMonitoring();
     } catch (e) {
       if (kDebugMode) {
         print('❌ Failed to start recording: $e');
       }
 
-      setState(() {
-        _recordingState = RecordingState.idle;
-      });
-      _postCoordinator?.setRecordingState(false);
-      _currentRecordingPath = null;
+      _postCoordinator?.setError('Failed to start recording: $e');
 
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to start recording: $e'),
-            duration: const Duration(seconds: 4),
-          ),
+        _postCoordinator?.requestStatusUpdate(
+          'Failed to start recording: $e',
+          StatusMessageType.error,
+          duration: const Duration(seconds: 3),
         );
       }
-    } finally {
-      _isStartingRecording = false;
-    }
-  }
-
-  void _startAmplitudeMonitoring() {
-    _currentAmplitude = -160.0;
-    _maxAmplitude = -160.0;
-    _amplitudeSum = 0.0;
-    _amplitudeSamples = 0;
-    _hasSpeechDetected = false;
-    _silenceCount = 0;
-
-    if (kDebugMode) {
-      print('🔊 Starting amplitude monitoring...');
-    }
-
-    _amplitudeTimer =
-        Timer.periodic(const Duration(milliseconds: 500), (timer) async {
-      try {
-        final amplitude = await _record.getAmplitude();
-        final current = amplitude.current;
-
-        setState(() {
-          _currentAmplitude = current;
-
-          if (current > _maxAmplitude) {
-            _maxAmplitude = current;
-          }
-
-          _amplitudeSamples++;
-          _amplitudeSum += current;
-
-          // Check for speech detection
-          if (current > _speechThreshold) {
-            _hasSpeechDetected = true;
-            _silenceCount = 0;
-          } else if (current < _silenceThreshold) {
-            _silenceCount++;
-          }
-        });
-
-        if (kDebugMode) {
-          print(
-              '🔊 Amplitude: ${current.toStringAsFixed(1)} dBFS (Max: ${_maxAmplitude.toStringAsFixed(1)}, Normalized: ${normalizedAmplitude.toStringAsFixed(2)})');
-
-          // Warn about potential issues
-          if (current < -50.0 && _amplitudeSamples > 4) {
-            print(
-                '⚠️ Low audio level detected. Speak louder or closer to microphone.');
-          }
-        }
-
-        // Check for extended silence during recording
-        if (_silenceCount >= _maxSilenceBeforeWarning && !_hasSpeechDetected) {
-          if (kDebugMode) {
-            print('⚠️ Extended silence detected - user may not be speaking');
-          }
-
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text(
-                    '🎤 Speak closer to the microphone - no voice detected'),
-                duration: Duration(seconds: 2),
-                backgroundColor: Colors.orange,
-              ),
-            );
-          }
-        }
-      } catch (e) {
-        if (kDebugMode) {
-          print('❌ Error getting amplitude: $e');
-        }
-      }
-    });
-  }
-
-  void _stopAmplitudeMonitoring() {
-    _amplitudeTimer?.cancel();
-    _amplitudeTimer = null;
-
-    if (kDebugMode) {
-      final averageAmplitude =
-          _amplitudeSamples > 0 ? _amplitudeSum / _amplitudeSamples : -160.0;
-
-      print('🔊 Final audio analysis:');
-      print('   Max amplitude: ${_maxAmplitude.toStringAsFixed(1)} dBFS');
-      print(
-          '   Average amplitude: ${averageAmplitude.toStringAsFixed(1)} dBFS');
-      print('   Speech detected: $_hasSpeechDetected');
-      print('   Samples: $_amplitudeSamples');
-
-      // Provide audio quality assessment
-      if (!_hasSpeechDetected) {
-        print('❌ CRITICAL: No speech detected throughout recording');
-        print('   This explains why Whisper returns very short transcriptions');
-        print(
-            '   Recommendation: Speak louder, closer to microphone, or check microphone permissions');
-      } else if (_maxAmplitude < -30.0) {
-        print('⚠️ WARNING: Low speech levels detected');
-        print(
-            '   Recommendation: Speak louder or closer to microphone for better accuracy');
-      } else {
-        print('✅ Good speech levels detected');
-      }
-    }
-  }
-
-  Future<void> _stopRecording() async {
-    final stopTime = DateTime.now();
-    if (kDebugMode) {
-      print('🛑 Stopping recording at: ${stopTime.toIso8601String()}');
-    }
-
-    // Handle different states
-    if (_recordingState == RecordingState.idle) {
-      return;
-    }
-
-    if (_recordingState == RecordingState.processing ||
-        _recordingState == RecordingState.ready) {
-      setState(() {
-        _resetRecordingState();
-      });
-      return;
-    }
-
-    if (_recordingState != RecordingState.recording) {
-      return;
-    }
-
-    if (_isStoppingRecording) {
-      return;
-    }
-
-    _isStoppingRecording = true;
-
-    try {
-      // Stop recording
-      final recordedPath = await _record.stop();
-      _stopRecordingTimer();
-      _stopAmplitudeMonitoring();
-
-      final actualDuration = _recordingStartTime != null
-          ? stopTime.difference(_recordingStartTime!).inMilliseconds / 1000.0
-          : 0.0;
-
-      // Validate recording quality
-      if (!_hasSpeechDetected) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text(
-                  '🎤 No speech detected. Try speaking louder or closer to the microphone.'),
-              duration: Duration(seconds: 4),
-              backgroundColor: Colors.orange,
-            ),
-          );
-        }
-        throw Exception('No speech detected during recording.');
-      }
-
-      const minRecordingDuration = 0.5;
-      if (actualDuration < minRecordingDuration) {
-        throw Exception(
-            'Recording too short (${actualDuration.toStringAsFixed(2)}s). Minimum duration: ${minRecordingDuration}s');
-      }
-
-      // Update coordinator processing state
-      _postCoordinator?.setProcessingState(true);
-      setState(() {
-        _recordingState = RecordingState.processing;
-      });
-
-      // Use recorded path or fallback
-      final pathToProcess = recordedPath ?? _currentRecordingPath;
-      if (pathToProcess == null) {
-        throw Exception('No recording path available');
-      }
-
-      // Validate file
-      final file = File(pathToProcess);
-      if (!await file.exists()) {
-        throw Exception('Recording file does not exist: $pathToProcess');
-      }
-
-      final fileSize = await file.length();
-      if (fileSize == 0) {
-        throw Exception('Recording file is empty');
-      }
-
-      await _validateM4aFile(file, fileSize);
-
-      // Transcribe and process through coordinator
-      if (kDebugMode) {
-        print('⏳ Processing recording through SocialActionPostCoordinator...');
-      }
-
-      final transcription = await _transcribeWithWhisper(pathToProcess);
-      if (transcription.isEmpty) {
-        throw Exception('Whisper returned empty transcription');
-      }
-
-      // CRITICAL: Use coordinator for all processing
-      await _postCoordinator?.processVoiceTranscription(transcription);
-
-      // CRITICAL: Clean up coordinator processing state after completion
-      _postCoordinator?.setProcessingState(false);
-
-      // Update UI based on coordinator state
-      setState(() {
-        // CRITICAL: Always reset to idle after processing to allow new recordings
-        // The user can manually confirm when ready via the confirm button
-        _recordingState = RecordingState.idle;
-      });
-
-      if (kDebugMode) {
-        print('✅ Voice processing complete via coordinator');
-        print('   Post complete: ${_postCoordinator?.isPostComplete}');
-        print('   Has content: ${_postCoordinator?.hasContent}');
-        print('   Has media: ${_postCoordinator?.hasMedia}');
-        print(
-            '   Recording state: $_recordingState (reset to idle for new recordings)');
-        print('   Coordinator post state: ${_postCoordinator?.postState}');
-        print(
-            '   Media requirement met: ${_postCoordinator?.hasContent == true ? 'checking...' : 'N/A'}');
-        if (_postCoordinator?.hasContent == true) {
-          print(
-              '   Platform-specific media requirement: ${_postCoordinator?.isPostComplete == true ? 'MET' : 'NOT MET'}');
-        }
-      }
-    } catch (e) {
-      if (kDebugMode) {
-        print('❌ Error in _stopRecording: $e');
-      }
-
-      _postCoordinator?.setProcessingState(false);
-      setState(() {
-        _recordingState = RecordingState.idle;
-      });
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to process recording: $e'),
-            duration: const Duration(seconds: 5),
-          ),
-        );
-      }
-    } finally {
-      _isStoppingRecording = false;
     }
   }
 
   void _startRecordingTimer() {
-    _recordingDuration = 0;
-    if (kDebugMode) {
-      print('⏰ Starting recording timer...');
-    }
-
     _recordingTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
-      setState(() {
-        _recordingDuration++;
-      });
-
-      if (kDebugMode) {
-        print(
-            '⏰ Recording duration: ${_recordingDuration}s / ${_maxRecordingDuration}s');
+      if (!mounted) {
+        timer.cancel();
+        return;
       }
 
-      if (_recordingDuration >= _maxRecordingDuration) {
+      final coordinator = _postCoordinator;
+      if (coordinator == null) {
+        timer.cancel();
+        return;
+      }
+
+      final currentDuration = coordinator.recordingDuration + 1;
+      coordinator.updateRecordingDuration(currentDuration);
+
+      // Stop recording when max duration is reached
+      if (currentDuration >= coordinator.maxRecordingDuration) {
         if (kDebugMode) {
           print('⏰ Max recording duration reached, stopping...');
         }
+        timer.cancel();
         _stopRecording();
       }
     });
   }
 
-  void _stopRecordingTimer() {
-    if (kDebugMode) {
-      print(
-          '⏰ Stopping recording timer. Final duration: ${_recordingDuration}s');
-    }
-    _recordingTimer?.cancel();
-    _recordingTimer = null;
-  }
-
-  /// Validates that the recorded file is a proper M4A format and contains audio data
-  Future<void> _validateM4aFile(File file, int fileSize) async {
-    try {
-      // Check minimum file size (M4A header is typically 32+ bytes)
-      if (fileSize < 100) {
-        throw Exception(
-            'M4A file too small ($fileSize bytes), likely corrupted or incomplete');
-      }
-
-      // Check reasonable maximum size for a 30-second recording
-      // At 128kbps, 30 seconds should be roughly 480KB, so anything over 5MB is suspicious
-      if (fileSize > 5 * 1024 * 1024) {
-        if (kDebugMode) {
-          print(
-              '⚠️ Warning: M4A file unusually large (${(fileSize / 1024 / 1024).toStringAsFixed(2)} MB)');
-        }
-      }
-
-      // Read first 32 bytes to check M4A header
-      final bytes = await file.openRead(0, 32).toList();
-      final headerBytes = bytes.expand((x) => x).toList();
-
-      if (headerBytes.length < 32) {
-        throw Exception(
-            'Unable to read M4A file header (got ${headerBytes.length} bytes)');
-      }
-
-      // Check for M4A/MP4 container signature (ftyp box)
-      // Bytes 4-7 should contain 'ftyp'
-      final ftypSignature = String.fromCharCodes(headerBytes.sublist(4, 8));
-      if (ftypSignature != 'ftyp') {
-        if (kDebugMode) {
-          print('⚠️ Warning: Expected ftyp signature, got: $ftypSignature');
-          print('   File may still be valid M4A, continuing...');
-        }
-      }
-
-      if (kDebugMode) {
-        print('✅ M4A file validation passed:');
-        print(
-            '   File size: $fileSize bytes (${(fileSize / 1024).toStringAsFixed(1)} KB)');
-        print('   Header signature: $ftypSignature');
-        print('   Speech detected during recording: $_hasSpeechDetected');
-        print('   Max amplitude: ${_maxAmplitude.toStringAsFixed(1)} dBFS');
-      }
-    } catch (e) {
-      if (kDebugMode) {
-        print('❌ M4A validation error: $e');
-      }
-      throw Exception('M4A file validation failed: $e');
-    }
-  }
-
-  /// Validates the recording environment before starting
-  Future<bool> _validateRecordingEnvironment() async {
-    try {
-      if (kDebugMode) {
-        print('🔍 Validating recording environment...');
-      }
-
-      // Check if we can access the temp directory
-      final tempDir = await getTemporaryDirectory();
-
-      if (kDebugMode) {
-        print('📁 Temp directory: ${tempDir.path}');
-      }
-
-      // Verify directory exists and is accessible
-      final dirStat = await tempDir.stat();
-      final dirExists = dirStat.type != FileSystemEntityType.notFound;
-
-      if (kDebugMode) {
-        print('📁 Directory exists: $dirExists');
-      }
-
-      if (!dirExists) {
-        throw Exception('Temp directory does not exist');
-      }
-
-      // Check if temp directory is writable by trying to create a test file
+  void _startAmplitudeMonitoring() {
+    _amplitudeTimer =
+        Timer.periodic(const Duration(milliseconds: 500), (timer) async {
       try {
-        final testFile = File(
-            '${tempDir.path}/test_${DateTime.now().millisecondsSinceEpoch}.tmp');
-
-        if (kDebugMode) {
-          print('🧪 Testing write access with file: ${testFile.path}');
+        final coordinator = _postCoordinator;
+        if (coordinator == null) {
+          timer.cancel();
+          return;
         }
 
-        await testFile.writeAsBytes([1, 2, 3, 4]);
-
-        // Verify file was created
-        final exists = await testFile.exists();
-        if (!exists) {
-          throw Exception('Test file was not created');
+        // Check if we're still recording
+        if (!await _record.isRecording()) {
+          if (kDebugMode) {
+            print('⚠️ Amplitude monitoring: Recording stopped unexpectedly');
+          }
+          _stopUnifiedRecording();
+          return;
         }
 
-        // Clean up test file
-        await testFile.delete();
+        final amplitude = await _record.getAmplitude();
+        coordinator.updateAmplitude(amplitude.current);
 
-        if (kDebugMode) {
-          print('✅ Temp directory is writable');
+        // Monitor file size growth
+        final recordingPath = coordinator.currentRecordingPath;
+        if (recordingPath != null) {
+          final file = File(recordingPath);
+          if (await file.exists()) {
+            final size = await file.length();
+            if (size == 0 && coordinator.recordingDuration > 2) {
+              if (kDebugMode) {
+                print('⚠️ Warning: Recording file not growing in size');
+              }
+              _stopUnifiedRecording();
+              return;
+            }
+          } else {
+            if (kDebugMode) {
+              print('⚠️ Warning: Recording file no longer exists');
+            }
+            _stopUnifiedRecording();
+            return;
+          }
+        }
+
+        // Check for extended silence during recording
+        if (!coordinator.hasSpeechDetected &&
+            coordinator.recordingDuration > 5) {
+          if (kDebugMode) {
+            print('⚠️ Extended silence detected - user may not be speaking');
+          }
+
+          if (mounted) {
+            _postCoordinator?.requestStatusUpdate(
+              '🎤 Speak closer to the microphone - no voice detected',
+              StatusMessageType.warning,
+              duration: const Duration(seconds: 2),
+            );
+          }
         }
       } catch (e) {
         if (kDebugMode) {
-          print('❌ Temp directory not writable: $e');
+          print('❌ Error monitoring amplitude: $e');
         }
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text(
-                  'Cannot access storage for recording. Please check app permissions.'),
-              duration: Duration(seconds: 4),
-            ),
-          );
+        // Stop recording if we encounter persistent errors
+        final coordinator = _postCoordinator;
+        if (coordinator != null && coordinator.recordingDuration > 5) {
+          _stopUnifiedRecording();
         }
-        return false;
+      }
+    });
+  }
+
+  /// Stops the unified voice recording process and processes the recording
+  Future<void> _stopUnifiedRecording() async {
+    if (_postCoordinator == null) return;
+
+    try {
+      // Stop the recording
+      final pathToProcess = await _record.stop();
+
+      // Reset timers immediately
+      _recordingTimer?.cancel();
+      _amplitudeTimer?.cancel();
+
+      if (pathToProcess == null) {
+        throw Exception('Recording failed to save');
       }
 
-      if (kDebugMode) {
-        print('✅ Recording environment validation passed');
+      // Check if speech was detected
+      if (!_postCoordinator!.hasSpeechDetected) {
+        if (kDebugMode) {
+          print('⚠️ No speech detected during recording, resetting state');
+        }
+        _resetAudioRecordingVariables();
+        _postCoordinator!.setError('No speech detected. Please try again.');
+        return;
       }
 
-      return true;
+      // Transcribe and process through coordinator
+      final transcription = await _transcribeWithWhisper(pathToProcess);
+      if (transcription.isEmpty) {
+        throw Exception('Whisper returned empty transcription');
+      }
+
+      // Use coordinator for processing
+      await _postCoordinator!.processVoiceTranscription(transcription);
     } catch (e) {
       if (kDebugMode) {
-        print('❌ Recording environment validation failed: $e');
+        print('❌ Failed to stop recording: $e');
       }
+
+      // Reset recording state through coordinator
+      _postCoordinator!.resetRecordingState();
+      _postCoordinator!.setError(e.toString());
 
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Recording environment check failed: $e'),
-            duration: const Duration(seconds: 4),
-          ),
+        _postCoordinator?.requestStatusUpdate(
+          'Failed to process recording: $e',
+          StatusMessageType.error,
+          duration: const Duration(seconds: 5),
         );
       }
+    }
+  }
 
-      return false;
+  /// Reset audio recording variables only (coordinator manages state)
+  void _resetAudioRecordingVariables({bool clearPreSelectedMedia = false}) {
+    _recordingTimer?.cancel();
+    _amplitudeTimer?.cancel();
+    _recordingTimer = null;
+    _amplitudeTimer = null;
+    _postCoordinator?.resetRecordingState();
+
+    // Coordinator manages state - only handle media reset if requested
+    if (clearPreSelectedMedia) {
+      _postCoordinator?.reset(); // Full reset including media
+    }
+
+    // Only log reset when clearing media (significant event)
+    if (kDebugMode && clearPreSelectedMedia) {
+      print('🔄 Audio recording variables reset with media cleared');
     }
   }
 
@@ -828,13 +517,133 @@ class _CommandScreenState extends State<CommandScreen>
     }
   }
 
-  void _togglePlatform(String platform) {
-    _postCoordinator?.togglePlatform(platform);
+  Future<void> _togglePlatform(String platform) async {
+    try {
+      // Get AuthService to check authentication status
+      final authService = Provider.of<AuthService>(context, listen: false);
+
+      // Check if platform is currently selected
+      final currentPlatforms = _postCoordinator?.currentPost.platforms ?? [];
+      final isCurrentlySelected = currentPlatforms.contains(platform);
+
+      if (isCurrentlySelected) {
+        // Platform is selected, user wants to deselect it
+        _postCoordinator?.togglePlatform(platform);
+
+        if (kDebugMode) {
+          print('📱 Platform deselected: $platform');
+        }
+        return;
+      }
+
+      // Platform is not selected, user wants to select it
+      // First check if they're authenticated for this platform
+      final isAuthenticated = await authService.isPlatformConnected(platform);
+
+      if (isAuthenticated) {
+        // User is authenticated, simply toggle the platform
+        _postCoordinator?.togglePlatform(platform);
+
+        if (kDebugMode) {
+          print('📱 Platform selected (authenticated): $platform');
+        }
+      } else {
+        // User is not authenticated, initiate authentication flow
+        if (kDebugMode) {
+          print('🔐 Platform not authenticated, starting auth flow: $platform');
+        }
+
+        await _authenticatePlatform(platform, authService);
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ Error toggling platform $platform: $e');
+      }
+
+      if (mounted) {
+        _postCoordinator?.requestStatusUpdate(
+          'Failed to connect to $platform: $e',
+          StatusMessageType.error,
+          duration: const Duration(seconds: 3),
+        );
+      }
+    }
+  }
+
+  Future<void> _authenticatePlatform(
+      String platform, AuthService authService) async {
+    try {
+      if (kDebugMode) {
+        print('🔐 Starting authentication for $platform');
+      }
+
+      // Show loading status
+      if (mounted) {
+        _postCoordinator?.requestStatusUpdate(
+          'Connecting to ${platform.substring(0, 1).toUpperCase()}${platform.substring(1)}...',
+          StatusMessageType.info,
+          duration: const Duration(seconds: 2),
+        );
+      }
+
+      // Perform platform-specific authentication
+      switch (platform.toLowerCase()) {
+        case 'facebook':
+          await authService.signInWithFacebook();
+          break;
+        case 'instagram':
+          // Instagram uses Facebook authentication
+          await authService.signInWithFacebook();
+          break;
+        case 'twitter':
+          // TODO: Implement Twitter OAuth when available
+          throw Exception('Twitter authentication not yet implemented');
+        case 'tiktok':
+          await authService.signInWithTikTok();
+          break;
+        default:
+          throw Exception('Unknown platform: $platform');
+      }
+
+      // Authentication successful, now select the platform
+      _postCoordinator?.togglePlatform(platform);
+
+      if (mounted) {
+        _postCoordinator?.requestStatusUpdate(
+          '${platform.substring(0, 1).toUpperCase()}${platform.substring(1)} connected successfully! ✅',
+          StatusMessageType.success,
+          duration: const Duration(seconds: 2),
+        );
+      }
+
+      if (kDebugMode) {
+        print('✅ Authentication successful for $platform');
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ Authentication failed for $platform: $e');
+      }
+
+      if (mounted) {
+        _postCoordinator?.requestStatusUpdate(
+          'Failed to connect to ${platform.substring(0, 1).toUpperCase()}${platform.substring(1)}: $e',
+          StatusMessageType.error,
+          duration: const Duration(seconds: 4),
+        );
+      }
+
+      rethrow;
+    }
   }
 
   Future<void> _navigateToMediaSelection() async {
     try {
-      if (kDebugMode) {
+      // Only log navigation attempts occasionally
+      final shouldLogNav = kDebugMode &&
+          (_lastProcessingLog == null ||
+              DateTime.now().difference(_lastProcessingLog!).inSeconds > 30);
+
+      if (shouldLogNav) {
         print('🔍 Navigating to media selection via coordinator...');
       }
 
@@ -908,10 +717,8 @@ class _CommandScreenState extends State<CommandScreen>
         // Update coordinator with new media - use replaceMedia to allow overriding pre-selected images
         await _postCoordinator?.replaceMedia(updatedAction.content.media);
 
-        if (kDebugMode) {
+        if (shouldLogNav) {
           print('✅ Media selection completed via coordinator');
-          print(
-              '📊 Selected media count: ${updatedAction.content.media.length}');
         }
       }
     } catch (e) {
@@ -920,11 +727,10 @@ class _CommandScreenState extends State<CommandScreen>
       }
 
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to load media selection: $e'),
-            duration: const Duration(seconds: 3),
-          ),
+        _postCoordinator?.requestStatusUpdate(
+          'Failed to load media selection: $e',
+          StatusMessageType.error,
+          duration: const Duration(seconds: 3),
         );
       }
     }
@@ -948,122 +754,203 @@ class _CommandScreenState extends State<CommandScreen>
     );
   }
 
-  // Voice recording for interactive editing (integrated with main recording system)
+  // Voice recording for interactive editing (now uses unified recording system)
   Future<void> _startVoiceEditing() async {
-    // Use the main recording system instead of separate voice editing
-    if (_recordingState == RecordingState.idle) {
-      await _startRecording();
-    }
-  }
-
-  Future<void> _stopVoiceEditing() async {
-    // Use the main recording system
-    if (_recordingState == RecordingState.recording) {
-      await _stopRecording();
+    if (_postCoordinator?.isVoiceDictating == true ||
+        _postCoordinator?.isRecording == true) {
+      await _stopUnifiedRecording();
+    } else {
+      await _startUnifiedRecording(isVoiceDictation: true);
     }
   }
 
   Future<void> _editPostText() async {
-    final textController = TextEditingController(
-        text: _postCoordinator?.currentPost?.content.text ?? '');
+    // CRITICAL: Ensure we're not in recording state when showing dialog
+    if (_postCoordinator?.isRecording == true) {
+      if (kDebugMode) {
+        print('⚠️ Cannot edit text while recording - stopping recording first');
+      }
+      await _stopRecording();
+    }
 
-    final result = await showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: Colors.black.withValues(alpha: 0.9),
-        title: const Text('Edit Post Content',
-            style: TextStyle(color: Colors.white)),
-        content: TextField(
-          controller: textController,
-          style: const TextStyle(color: Colors.white),
-          decoration: InputDecoration(
-            hintText: 'Enter your post content...',
-            hintStyle: TextStyle(color: Colors.white60),
-            border: OutlineInputBorder(
-              borderSide:
-                  BorderSide(color: Colors.white.withValues(alpha: 0.3)),
-            ),
-            enabledBorder: OutlineInputBorder(
-              borderSide:
-                  BorderSide(color: Colors.white.withValues(alpha: 0.3)),
-            ),
-            focusedBorder: const OutlineInputBorder(
-              borderSide: BorderSide(color: Color(0xFFFF0080)),
-            ),
-            filled: true,
-            fillColor: Colors.white.withValues(alpha: 0.1),
-          ),
-          maxLines: 5,
-          autofocus: true,
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child:
-                const Text('CANCEL', style: TextStyle(color: Colors.white70)),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(context, textController.text),
-            child:
-                const Text('SAVE', style: TextStyle(color: Color(0xFFFF0080))),
-          ),
-        ],
-      ),
-    );
+    if (!mounted) return;
 
-    textController.dispose();
+    final coordinator = _postCoordinator;
+    if (coordinator == null) return;
 
-    if (result != null && result.trim().isNotEmpty) {
-      try {
-        // CRITICAL: Call coordinator method directly without deferring
-        // The coordinator handles proper state management and notification
-        if (mounted && _postCoordinator != null) {
-          await _postCoordinator!.updatePostContent(result.trim());
+    try {
+      // CRITICAL: Use overlay-based dialog to completely isolate from main widget tree
+      // This prevents context invalidation during state transitions
+      final result = await _showIsolatedTextEditDialog(coordinator);
 
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('Post content updated! 📝'),
-                duration: Duration(seconds: 2),
-              ),
-            );
-          }
-        }
-      } catch (e) {
-        if (kDebugMode) {
-          print('❌ Failed to update post content: $e');
-        }
+      // CRITICAL: Check mounted after async operation
+      if (!mounted) return;
 
+      if (result == true) {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Failed to update post content: $e'),
-              backgroundColor: Colors.red,
-              duration: const Duration(seconds: 3),
-            ),
+          _postCoordinator?.requestStatusUpdate(
+            'Post content updated! 📝',
+            StatusMessageType.success,
+            duration: const Duration(seconds: 2),
           );
         }
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ Failed to edit text: $e');
+      }
+
+      // Ensure cleanup even on error
+      coordinator.cancelTextEditing();
+
+      if (mounted) {
+        _postCoordinator?.requestStatusUpdate(
+          'Failed to edit text: $e',
+          StatusMessageType.error,
+          duration: const Duration(seconds: 3),
+        );
       }
     }
   }
 
+  /// Show text editing dialog using overlay to isolate from main widget tree
+  Future<bool?> _showIsolatedTextEditDialog(
+      SocialActionPostCoordinator coordinator) async {
+    // CRITICAL: Start persistent editing session in coordinator
+    final textController = coordinator.startTextEditing();
+
+    if (kDebugMode) {
+      print('📝 Started isolated text editing session');
+    }
+
+    // Create overlay entry that's completely isolated from main widget tree
+    OverlayEntry? overlayEntry;
+    final completer = Completer<bool?>();
+
+    void closeDialog(bool? result) {
+      if (!completer.isCompleted) {
+        overlayEntry?.remove();
+        completer.complete(result);
+      }
+    }
+
+    overlayEntry = OverlayEntry(
+      builder: (overlayContext) => Material(
+        color: Colors.black.withValues(alpha: 0.5),
+        child: Center(
+          child: Container(
+            width: MediaQuery.of(overlayContext).size.width * 0.9,
+            constraints: const BoxConstraints(maxWidth: 400),
+            child: AlertDialog(
+              backgroundColor: Colors.black.withValues(alpha: 0.9),
+              title: const Text(
+                'Edit Post Content',
+                style: TextStyle(color: Colors.white),
+              ),
+              content: SizedBox(
+                width: double.maxFinite,
+                child: TextField(
+                  controller: textController,
+                  style: const TextStyle(color: Colors.white),
+                  decoration: InputDecoration(
+                    hintText: 'Enter your post content...',
+                    hintStyle: const TextStyle(color: Colors.white60),
+                    border: OutlineInputBorder(
+                      borderSide: BorderSide(
+                          color: Colors.white.withValues(alpha: 0.3)),
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderSide: BorderSide(
+                          color: Colors.white.withValues(alpha: 0.3)),
+                    ),
+                    focusedBorder: const OutlineInputBorder(
+                      borderSide: BorderSide(color: Color(0xFFFF0080)),
+                    ),
+                    filled: true,
+                    fillColor: Colors.white.withValues(alpha: 0.1),
+                  ),
+                  maxLines: 5,
+                  autofocus: true,
+                  textCapitalization: TextCapitalization.sentences,
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () {
+                    coordinator.cancelTextEditing();
+                    closeDialog(false);
+                  },
+                  child: const Text(
+                    'CANCEL',
+                    style: TextStyle(color: Colors.white70),
+                  ),
+                ),
+                TextButton(
+                  onPressed: () async {
+                    try {
+                      await coordinator.commitTextEditing();
+                      closeDialog(true);
+                    } catch (e) {
+                      if (kDebugMode) {
+                        print('❌ Failed to commit text editing: $e');
+                      }
+                      coordinator.cancelTextEditing();
+                      closeDialog(false);
+                    }
+                  },
+                  child: const Text(
+                    'SAVE',
+                    style: TextStyle(color: Color(0xFFFF0080)),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+
+    // Insert overlay entry
+    Overlay.of(context).insert(overlayEntry);
+
+    // Wait for result
+    final result = await completer.future;
+
+    if (kDebugMode) {
+      print('📝 Isolated text editing completed: $result');
+    }
+
+    return result;
+  }
+
   Future<void> _editPostHashtags(List<String> newHashtags) async {
+    // CRITICAL: Ensure we're not in recording state when editing
+    if (_postCoordinator?.isRecording == true) {
+      if (kDebugMode) {
+        print(
+            '⚠️ Cannot edit hashtags while recording - stopping recording first');
+      }
+      await _stopRecording();
+    }
+
+    if (!mounted) return;
+
+    // CRITICAL: Capture coordinator reference before async operations
+    final coordinator = _postCoordinator;
+
     try {
       // CRITICAL: Call coordinator method directly without deferring
       // The coordinator handles proper state management and notification
-      if (mounted && _postCoordinator != null) {
-        await _postCoordinator!.updatePostHashtags(newHashtags);
+      if (mounted && coordinator != null) {
+        await coordinator.updatePostHashtags(newHashtags);
 
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(
-                newHashtags.isEmpty
-                    ? 'All hashtags removed 🏷️'
-                    : 'Hashtags updated! ${newHashtags.length} tags 🏷️',
-              ),
-              duration: const Duration(seconds: 2),
-            ),
+          _postCoordinator?.requestStatusUpdate(
+            newHashtags.isEmpty
+                ? 'All hashtags removed 🏷️'
+                : 'Hashtags updated! ${newHashtags.length} tags 🏷️',
+            StatusMessageType.success,
+            duration: const Duration(seconds: 2),
           );
         }
       }
@@ -1073,37 +960,58 @@ class _CommandScreenState extends State<CommandScreen>
       }
 
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to update hashtags: $e'),
-            backgroundColor: Colors.red,
-            duration: const Duration(seconds: 3),
-          ),
+        _postCoordinator?.requestStatusUpdate(
+          'Failed to update hashtags: $e',
+          StatusMessageType.error,
+          duration: const Duration(seconds: 3),
         );
       }
     }
   }
 
   Future<void> _editSchedule() async {
+    // CRITICAL: Ensure we're not in recording state when showing dialog
+    if (_postCoordinator?.isRecording == true) {
+      if (kDebugMode) {
+        print(
+            '⚠️ Cannot edit schedule while recording - stopping recording first');
+      }
+      await _stopRecording();
+    }
+
+    if (!mounted) return;
+
+    // CRITICAL: Capture context and coordinator references before async operations
+    final dialogContext = context;
+    final coordinator = _postCoordinator;
+
     final now = DateTime.now();
-    final currentAction = _postCoordinator?.currentPost;
+    final currentAction = coordinator?.currentPost;
     final initialDate = currentAction?.options.schedule == 'now'
         ? now
         : DateTime.parse(
             currentAction?.options.schedule ?? now.toIso8601String());
 
+    if (!dialogContext.mounted) return;
     final pickedDate = await showDatePicker(
-      context: context,
+      context: dialogContext,
       initialDate: initialDate,
       firstDate: now,
       lastDate: now.add(const Duration(days: 365)),
     );
 
-    if (pickedDate != null && mounted) {
+    // CRITICAL: Check mounted after async operation
+    if (!mounted) return;
+
+    if (pickedDate != null) {
+      if (!dialogContext.mounted) return;
       final pickedTime = await showTimePicker(
-        context: context,
+        context: dialogContext,
         initialTime: TimeOfDay.fromDateTime(initialDate),
       );
+
+      // CRITICAL: Check mounted after second async operation
+      if (!mounted) return;
 
       if (pickedTime != null) {
         final scheduledDateTime = DateTime(
@@ -1116,7 +1024,7 @@ class _CommandScreenState extends State<CommandScreen>
 
         try {
           // CRITICAL: Update through coordinator for centralized state management
-          await _postCoordinator
+          await coordinator
               ?.updatePostSchedule(scheduledDateTime.toIso8601String());
 
           if (kDebugMode) {
@@ -1125,12 +1033,10 @@ class _CommandScreenState extends State<CommandScreen>
           }
 
           if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text(
-                    'Schedule updated to ${DateFormat('MMM d, yyyy \'at\' h:mm a').format(scheduledDateTime)}'),
-                duration: const Duration(seconds: 2),
-              ),
+            _postCoordinator?.requestStatusUpdate(
+              'Schedule updated to ${DateFormat('MMM d, yyyy \'at\' h:mm a').format(scheduledDateTime)}',
+              StatusMessageType.success,
+              duration: const Duration(seconds: 2),
             );
           }
         } catch (e) {
@@ -1139,12 +1045,10 @@ class _CommandScreenState extends State<CommandScreen>
           }
 
           if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text('Failed to update schedule: $e'),
-                backgroundColor: Colors.red,
-                duration: const Duration(seconds: 3),
-              ),
+            _postCoordinator?.requestStatusUpdate(
+              'Failed to update schedule: $e',
+              StatusMessageType.error,
+              duration: const Duration(seconds: 3),
             );
           }
         }
@@ -1153,49 +1057,70 @@ class _CommandScreenState extends State<CommandScreen>
   }
 
   Future<void> _confirmAndPost() async {
-    // Check execution readiness first
-    final readiness = _postCoordinator!.executionReadiness;
-    if (!readiness.isReady) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-                'Post not ready: ${readiness.missingRequirements.join(', ')}'),
-            backgroundColor: Colors.orange,
-            duration: const Duration(seconds: 3),
-          ),
-        );
+    if (_postCoordinator == null) {
+      if (kDebugMode) {
+        print('❌ Cannot confirm post: coordinator not available');
       }
       return;
     }
 
-    // Set processing state
-    setState(() {
-      _recordingState = RecordingState.posting;
-    });
-
     try {
       if (kDebugMode) {
-        print('🚀 Starting post confirmation and execution...');
+        print('🚀 Confirming and posting...');
       }
 
-      // CRITICAL: Use coordinator's centralized post execution
+      // Check post readiness
+      if (!_postCoordinator!.isReadyForExecution) {
+        if (mounted) {
+          _postCoordinator?.requestStatusUpdate(
+            'Cannot post: Post is not ready for execution',
+            StatusMessageType.warning,
+            duration: const Duration(seconds: 4),
+          );
+        }
+        return;
+      }
+
+      // Phase 1: Use coordinator state transition, mirror in widget
+      _postCoordinator!.stopRecording();
+
+      // Execute posting through coordinator
       final results = await _postCoordinator!.finalizeAndExecutePost();
+      final allSucceeded = results.values.every((success) => success);
 
+      if (kDebugMode) {
+        print('📊 Posting results:');
+        for (final entry in results.entries) {
+          print('   ${entry.key}: ${entry.value ? 'Success' : 'Failed'}');
+        }
+      }
+
+      // Show results dialog
       if (mounted) {
-        final allSucceeded = results.values.every((success) => success);
+        // CRITICAL: Capture context before dialog
+        final dialogContext = context;
 
+        if (!dialogContext.mounted) return;
         await showDialog(
-          context: context,
+          context: dialogContext,
           barrierDismissible: false,
-          builder: (context) => AlertDialog(
+          builder: (dialogContext) => AlertDialog(
             backgroundColor: Colors.black.withValues(alpha: 0.9),
-            title: const Text('Posting Results',
-                style: TextStyle(color: Colors.white)),
+            title: Text(
+              allSucceeded ? '🎉 Post Published!' : '⚠️ Posting Issues',
+              style: const TextStyle(color: Colors.white),
+            ),
             content: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                Text(
+                  allSucceeded
+                      ? 'Your post was successfully published to all selected platforms!'
+                      : 'Some platforms encountered issues:',
+                  style: const TextStyle(color: Colors.white70),
+                ),
+                const SizedBox(height: 16),
                 for (final platform in results.keys)
                   Padding(
                     padding: const EdgeInsets.only(bottom: 8.0),
@@ -1225,7 +1150,7 @@ class _CommandScreenState extends State<CommandScreen>
             actions: [
               TextButton(
                 onPressed: () {
-                  Navigator.pop(context); // Close the dialog
+                  Navigator.pop(dialogContext); // Close the dialog
                 },
                 child: const Text('OK',
                     style: TextStyle(color: Color(0xFFFF0080))),
@@ -1237,16 +1162,13 @@ class _CommandScreenState extends State<CommandScreen>
         // CRITICAL: Handle post-posting state based on results
         if (mounted) {
           if (allSucceeded) {
-            // Post was successful - reset everything and navigate to history
+            // Post was successful - coordinator handles reset, widget mirrors
             if (kDebugMode) {
               print(
-                  '✅ All posts successful, resetting state and navigating to history');
+                  '✅ All posts successful, coordinator reset, navigating to history');
             }
 
-            _postCoordinator?.reset();
-            setState(() {
-              _resetRecordingState(clearPreSelectedMedia: true);
-            });
+            _resetAudioRecordingVariables(clearPreSelectedMedia: true);
 
             // Navigate to history screen
             Navigator.pushAndRemoveUntil(
@@ -1257,15 +1179,13 @@ class _CommandScreenState extends State<CommandScreen>
               (route) => route.isFirst,
             );
           } else {
-            // Some posts failed - stay on command screen for retry
+            // Some posts failed - coordinator handles error state, widget mirrors
             if (kDebugMode) {
               print(
                   '⚠️ Some posts failed, staying on command screen for retry');
             }
 
-            setState(() {
-              _recordingState = RecordingState.idle;
-            });
+            _resetAudioRecordingVariables();
           }
         }
       }
@@ -1274,101 +1194,67 @@ class _CommandScreenState extends State<CommandScreen>
         print('❌ Failed to confirm and post: $e');
       }
 
-      setState(() {
-        _recordingState = RecordingState.idle;
-      });
+      // Coordinator will handle error state transition
+      _resetAudioRecordingVariables();
 
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Posting failed: $e'),
-            backgroundColor: Colors.red,
-            duration: const Duration(seconds: 4),
-          ),
+        _postCoordinator?.requestStatusUpdate(
+          'Posting failed: $e',
+          StatusMessageType.error,
+          duration: const Duration(seconds: 4),
         );
       }
     }
-  }
-
-  bool _needsMediaSelection() {
-    final hasContent = _postCoordinator?.hasContent == true;
-    final hasMedia = _postCoordinator?.hasMedia == true;
-    final hasMediaQuery =
-        _postCoordinator?.currentPost?.mediaQuery?.isNotEmpty == true;
-
-    // Only need media selection if:
-    // 1. We have content but no media
-    // 2. There's a media query (user referenced media in their command)
-    // 3. At least one selected platform requires media (Instagram, TikTok)
-    if (!hasContent || hasMedia || !hasMediaQuery) {
-      if (kDebugMode) {
-        print('🔍 _needsMediaSelection: NO');
-        print('   hasContent: $hasContent');
-        print('   hasMedia: $hasMedia');
-        print('   hasMediaQuery: $hasMediaQuery');
-        print('   → Early return: false');
-      }
-      return false;
-    }
-
-    final platforms = _postCoordinator?.currentPost?.platforms ?? [];
-    final requiresMedia = platforms.any((platform) =>
-        platform.toLowerCase() == 'instagram' ||
-        platform.toLowerCase() == 'tiktok');
-
-    if (kDebugMode) {
-      print('🔍 _needsMediaSelection: CHECKING PLATFORMS');
-      print('   hasContent: $hasContent');
-      print('   hasMedia: $hasMedia');
-      print('   hasMediaQuery: $hasMediaQuery');
-      print('   platforms: $platforms');
-      print('   requiresMedia: $requiresMedia');
-      print('   → Final result: $requiresMedia');
-    }
-
-    return requiresMedia;
   }
 
   @override
   Widget build(BuildContext context) {
-    return Consumer<SocialActionPostCoordinator>(
-      builder: (context, coordinator, child) {
-        // Set the coordinator reference for use in other methods
-        _postCoordinator = coordinator;
+    // CRITICAL: Wrap Consumer in Builder to create stable context boundary
+    // This prevents the Consumer from being invalidated during state transitions
+    return Builder(
+      builder: (stableContext) => Consumer<SocialActionPostCoordinator>(
+        key: _consumerKey,
+        builder: (consumerContext, coordinator, child) {
+          // Set the coordinator reference for use in other methods
+          _postCoordinator = coordinator;
 
-        return Scaffold(
-          body: AnimatedBuilder(
-            animation: _backgroundAnimation,
-            builder: (context, child) {
-              return Container(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [
-                      Colors.black,
-                      Color.lerp(
-                        const Color(0xFF1A1A1A),
-                        const Color(0xFF2A1A2A),
-                        _backgroundAnimation.value * 0.3,
-                      )!,
-                    ],
+          return Scaffold(
+            body: AnimatedBuilder(
+              animation: _backgroundAnimation,
+              builder: (context, child) {
+                return Container(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [
+                        Colors.black,
+                        Color.lerp(
+                          const Color(0xFF1A1A1A),
+                          const Color(0xFF2A1A2A),
+                          _backgroundAnimation.value * 0.3,
+                        )!,
+                      ],
+                    ),
                   ),
-                ),
-                child: SafeArea(
-                  child: _buildReviewStyleLayout(coordinator),
-                ),
-              );
-            },
-          ),
-        );
-      },
+                  child: SafeArea(
+                    child: _buildReviewStyleLayout(coordinator),
+                  ),
+                );
+              },
+            ),
+          );
+        },
+      ),
     );
   }
 
   Widget _buildReviewStyleLayout(SocialActionPostCoordinator coordinator) {
-    const double _gridUnit = 6.0;
-    const double _spacing4 = _gridUnit * 4;
+    const double gridUnit = 6.0;
+    const double spacing4 = gridUnit * 4;
+
+    // Ensure recording state is consistent
+    final isProcessing = coordinator.isProcessing == true;
 
     return Column(
       children: [
@@ -1376,18 +1262,18 @@ class _CommandScreenState extends State<CommandScreen>
           height: 60,
           padding: const EdgeInsets.symmetric(horizontal: 20),
           child: CommandHeader(
-            selectedPlatforms: coordinator.currentPost?.platforms ?? [],
+            selectedPlatforms: coordinator.currentPost.platforms,
             onPlatformToggle: _togglePlatform,
             leftAction: coordinator.hasContent || coordinator.hasMedia
                 ? IconButton(
-                    onPressed: _showResetConfirmation,
+                    onPressed: isProcessing ? null : _showResetConfirmation,
                     icon: const Icon(Icons.refresh,
                         color: Colors.white, size: 24),
                     tooltip: 'Reset current post',
                   )
                 : null,
             rightAction: IconButton(
-              onPressed: _navigateToHistory,
+              onPressed: isProcessing ? null : _navigateToHistory,
               icon: const Icon(Icons.history, color: Colors.white, size: 28),
             ),
           ),
@@ -1397,20 +1283,14 @@ class _CommandScreenState extends State<CommandScreen>
             physics: const BouncingScrollPhysics(),
             child: Column(
               children: [
-                const SizedBox(height: _spacing4),
+                const SizedBox(height: spacing4),
                 _buildCommandMediaSection(coordinator),
                 PostContentBox(
-                  action: coordinator.currentPost ?? _createEmptyAction(),
-                  isRecording: _recordingState == RecordingState.recording,
-                  isProcessingVoice:
-                      _recordingState == RecordingState.processing ||
-                          _recordingState == RecordingState.posting,
+                  onVoiceEdit:
+                      coordinator.isProcessing ? null : _startVoiceEditing,
                   onEditText: _editPostText,
                   onEditSchedule: _editSchedule,
                   onEditHashtags: _editPostHashtags,
-                  onVoiceEdit: _recordingState == RecordingState.recording
-                      ? _stopVoiceEditing
-                      : _startVoiceEditing,
                 ),
                 const SizedBox(height: 0),
               ],
@@ -1424,16 +1304,15 @@ class _CommandScreenState extends State<CommandScreen>
               Expanded(
                 flex: 2,
                 child: Center(
-                  child: TranscriptionStatus(
-                    transcription: coordinator.currentTranscription,
-                    isProcessing:
-                        _recordingState == RecordingState.processing ||
-                            _recordingState == RecordingState.posting,
-                    isRecording: _recordingState == RecordingState.recording,
-                    recordingDuration: _recordingDuration,
-                    maxRecordingDuration: _maxRecordingDuration,
-                    context: _getTranscriptionContext(coordinator),
-                    customMessage: _getCustomMessage(coordinator),
+                  child: Container(
+                    margin: const EdgeInsets.symmetric(horizontal: 20),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 24, vertical: 16),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.7),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const TranscriptionStatus(),
                   ),
                 ),
               ),
@@ -1446,10 +1325,10 @@ class _CommandScreenState extends State<CommandScreen>
                       width: 120,
                       height: 120,
                       child: UnifiedActionButton(
-                        state: _getUnifiedButtonState(coordinator),
-                        amplitude: normalizedAmplitude,
-                        onRecordStart: _startRecording,
-                        onRecordStop: _stopRecording,
+                        onRecordStart:
+                            coordinator.isProcessing ? null : _startRecording,
+                        onRecordStop:
+                            coordinator.isProcessing ? null : _stopRecording,
                         onConfirmPost: _confirmAndPost,
                         onAddMedia: _navigateToMediaSelection,
                       ),
@@ -1465,8 +1344,8 @@ class _CommandScreenState extends State<CommandScreen>
   }
 
   Widget _buildCommandMediaSection(SocialActionPostCoordinator coordinator) {
-    const double _gridUnit = 6.0;
-    const double _spacing2 = _gridUnit * 2;
+    const double gridUnit = 6.0;
+    const double spacing2 = gridUnit * 2;
 
     return Column(
       children: [
@@ -1487,7 +1366,7 @@ class _CommandScreenState extends State<CommandScreen>
               ? _buildMediaPreview(context, coordinator)
               : _buildEmptyMediaPlaceholder(),
         ),
-        const SizedBox(height: _spacing2),
+        const SizedBox(height: spacing2),
         UnifiedMediaButtons(
           onDirectorySelection: _navigateToDirectorySelection,
           onMediaSelection: _navigateToMediaSelection,
@@ -1501,105 +1380,57 @@ class _CommandScreenState extends State<CommandScreen>
   Widget _buildMediaPreview(
       BuildContext context, SocialActionPostCoordinator coordinator) {
     List<MediaItem> mediaToShow;
-    if (coordinator.currentPost?.content.media.isNotEmpty == true) {
-      mediaToShow = coordinator.currentPost!.content.media;
+    if (coordinator.currentPost.content.media.isNotEmpty == true) {
+      mediaToShow = coordinator.currentPost.content.media;
+      if (kDebugMode) {
+        print(
+            '🖼️ _buildMediaPreview: Using currentPost media (${mediaToShow.length} items)');
+        for (var i = 0; i < mediaToShow.length; i++) {
+          print('   [$i]: ${mediaToShow[i].fileUri}');
+        }
+      }
     } else if (coordinator.preSelectedMedia.isNotEmpty) {
       mediaToShow = coordinator.preSelectedMedia;
+      if (kDebugMode) {
+        print(
+            '🖼️ _buildMediaPreview: Using preSelectedMedia (${mediaToShow.length} items)');
+        for (var i = 0; i < mediaToShow.length; i++) {
+          print('   [$i]: ${mediaToShow[i].fileUri}');
+        }
+      }
     } else {
+      if (kDebugMode) {
+        print(
+            '🖼️ _buildMediaPreview: No media to show, returning empty widget');
+      }
       return const SizedBox.shrink();
     }
 
-    final mediaItem = mediaToShow.first;
-    final isVideo = mediaItem.mimeType.startsWith('video/');
+    final showPreselectedBadge = coordinator.preSelectedMedia.isNotEmpty;
 
-    return Container(
-      width: double.infinity,
-      height: 250,
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          isVideo
-              ? Container(
-                  decoration: const BoxDecoration(color: Color(0xFF2A2A2A)),
-                  child: const Center(
-                    child: Icon(Icons.videocam, color: Colors.grey, size: 40),
-                  ),
-                )
-              : Image.file(
-                  File(Uri.parse(mediaItem.fileUri).path),
-                  fit: BoxFit.cover,
-                  errorBuilder: (context, error, stackTrace) {
-                    return Container(
-                      decoration: const BoxDecoration(color: Color(0xFF2A2A2A)),
-                      child: const Center(
-                        child: Icon(Icons.image, color: Colors.grey, size: 40),
-                      ),
-                    );
-                  },
-                ),
-          Positioned(
-            bottom: 0,
-            left: 0,
-            right: 0,
-            child: Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.bottomCenter,
-                  end: Alignment.topCenter,
-                  colors: [
-                    Colors.black.withValues(alpha: 0.7),
-                    Colors.transparent,
-                  ],
-                ),
-              ),
-              child: Row(
-                children: [
-                  Text(
-                    '${mediaItem.deviceMetadata.width} × ${mediaItem.deviceMetadata.height}',
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: AppTypography.small,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                  if (coordinator.preSelectedMedia.isNotEmpty &&
-                      coordinator.currentPost == null) ...[
-                    const Spacer(),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 8, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFFF0080).withValues(alpha: 0.8),
-                      ),
-                      child: const Text(
-                        'Pre-selected',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: AppTypography.small,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ),
-                  ],
-                ],
-              ),
-            ),
-          ),
-        ],
-      ),
+    if (kDebugMode) {
+      print(
+          '🖼️ _buildMediaPreview: Creating EnhancedMediaPreview with ${mediaToShow.length} items');
+      print('   showPreselectedBadge: $showPreselectedBadge');
+    }
+
+    return EnhancedMediaPreview(
+      mediaItems: mediaToShow,
+      selectedPlatforms: coordinator.currentPost.platforms,
+      showPreselectedBadge: showPreselectedBadge,
+      onTap: _navigateToMediaSelection,
     );
   }
 
   Widget _buildEmptyMediaPlaceholder() {
     return Container(
       decoration: BoxDecoration(
-        gradient: LinearGradient(
+        gradient: const LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
           colors: [
-            const Color(0xFF2A2A2A), // Lighter gray for better contrast
-            const Color(0xFF1F1F1F), // Slightly darker for subtle gradient
+            Color(0xFF2A2A2A), // Lighter gray for better contrast
+            Color(0xFF1F1F1F), // Slightly darker for subtle gradient
           ],
         ),
         border: Border.all(
@@ -1645,131 +1476,16 @@ class _CommandScreenState extends State<CommandScreen>
     );
   }
 
-  UnifiedButtonState _getUnifiedButtonState(
-      SocialActionPostCoordinator coordinator) {
-    switch (_recordingState) {
-      case RecordingState.idle:
-        // Show confirm button if post is complete, otherwise show idle mic
-        if (coordinator.isPostComplete) {
-          return UnifiedButtonState.confirmPost;
-        }
-        // Show add media button if we have content but need media
-        if (coordinator.hasContent && _needsMediaSelection()) {
-          return UnifiedButtonState.addMedia;
-        }
-        return UnifiedButtonState.idle;
-      case RecordingState.recording:
-        return UnifiedButtonState.recording;
-      case RecordingState.processing:
-        return UnifiedButtonState.processing;
-      case RecordingState.posting:
-        return UnifiedButtonState
-            .processing; // Show processing state during posting
-      case RecordingState.ready:
-        // This state is no longer used since we always reset to idle
-        if (coordinator.isPostComplete) {
-          return UnifiedButtonState.confirmPost;
-        }
-        if (_needsMediaSelection()) {
-          return UnifiedButtonState.addMedia;
-        }
-        return UnifiedButtonState.confirmPost;
-    }
-  }
-
-  TranscriptionContext _getTranscriptionContext(
-      SocialActionPostCoordinator coordinator) {
-    // CRITICAL: Only use local recording state, not coordinator processing state
-    // This prevents spinning indicator from appearing due to coordinator operations
-
-    if (kDebugMode) {
-      print('🔍 _getTranscriptionContext called:');
-      print('   Recording state: $_recordingState');
-      print('   Coordinator hasContent: ${coordinator.hasContent}');
-      print('   Coordinator isPostComplete: ${coordinator.isPostComplete}');
-      print('   Needs media selection: ${_needsMediaSelection()}');
-    }
-
-    switch (_recordingState) {
-      case RecordingState.idle:
-        // Check if we have content to determine appropriate context
-        if (coordinator.isPostComplete) {
-          if (kDebugMode)
-            print('   → Returning TranscriptionContext.reviewReady');
-          return TranscriptionContext.reviewReady;
-        }
-        if (coordinator.hasContent && _needsMediaSelection()) {
-          if (kDebugMode)
-            print('   → Returning TranscriptionContext.addMediaReady');
-          return TranscriptionContext.addMediaReady;
-        }
-        if (kDebugMode) print('   → Returning TranscriptionContext.recording');
-        return TranscriptionContext.recording;
-      case RecordingState.recording:
-        if (kDebugMode) print('   → Returning TranscriptionContext.recording');
-        return TranscriptionContext.recording;
-      case RecordingState.processing:
-        if (kDebugMode) print('   → Returning TranscriptionContext.processing');
-        return TranscriptionContext.processing;
-      case RecordingState.posting:
-        if (kDebugMode)
-          print('   → Returning TranscriptionContext.processing (posting)');
-        return TranscriptionContext
-            .processing; // Show processing context during posting
-      case RecordingState.ready:
-        // This state is no longer used since we always reset to idle
-        if (_needsMediaSelection()) {
-          if (kDebugMode)
-            print('   → Returning TranscriptionContext.addMediaReady');
-          return TranscriptionContext.addMediaReady;
-        }
-        if (kDebugMode)
-          print('   → Returning TranscriptionContext.reviewReady');
-        return TranscriptionContext.reviewReady;
-    }
-  }
-
-  String? _getCustomMessage(SocialActionPostCoordinator coordinator) {
-    if (_recordingState == RecordingState.idle &&
-        coordinator.currentTranscription.isEmpty &&
-        coordinator.currentPost == null) {
-      return 'Welcome to EchoPost.';
-    }
-
-    // CRITICAL: Only show coordinator errors if we're not in an active recording workflow
-    if (_recordingState == RecordingState.idle &&
-        coordinator.lastError != null) {
-      return 'Error: ${coordinator.lastError}';
-    }
-
-    return null;
-  }
-
-  SocialAction _createEmptyAction() {
-    return SocialAction(
-      actionId: '',
-      createdAt: '',
-      platforms: [],
-      content: Content(
-        text: '',
-        hashtags: [],
-        mentions: [],
-        media: [],
-      ),
-      options: Options(),
-      platformData: PlatformData(),
-      internal: Internal(
-        originalTranscription: '',
-        aiGenerated: false,
-      ),
-      mediaQuery: null,
-    );
-  }
-
   void _showResetConfirmation() async {
+    if (!mounted) return;
+
+    // CRITICAL: Capture context and coordinator references before async operations
+    final dialogContext = context;
+    final coordinator = _postCoordinator;
+
     final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
+      context: dialogContext,
+      builder: (dialogContext) => AlertDialog(
         backgroundColor: Colors.black.withValues(alpha: 0.9),
         title: const Text(
           'Reset Current Post?',
@@ -1781,14 +1497,14 @@ class _CommandScreenState extends State<CommandScreen>
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context, false),
+            onPressed: () => Navigator.pop(dialogContext, false),
             child: const Text(
               'CANCEL',
               style: TextStyle(color: Colors.white70),
             ),
           ),
           TextButton(
-            onPressed: () => Navigator.pop(context, true),
+            onPressed: () => Navigator.pop(dialogContext, true),
             child: const Text(
               'RESET',
               style: TextStyle(color: Color(0xFFFF0080)),
@@ -1803,19 +1519,25 @@ class _CommandScreenState extends State<CommandScreen>
         print('🔄 User confirmed reset - clearing all post state');
       }
 
-      _postCoordinator?.reset();
-      setState(() {
-        _resetRecordingState(clearPreSelectedMedia: true);
-      });
+      coordinator?.reset();
+      _resetAudioRecordingVariables(clearPreSelectedMedia: true);
 
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Post reset successfully! 🔄'),
-            duration: Duration(seconds: 2),
-          ),
+        _postCoordinator?.requestStatusUpdate(
+          'Post reset successfully! 🔄',
+          StatusMessageType.success,
+          duration: const Duration(seconds: 2),
         );
       }
     }
+  }
+
+  // Simple stubs that delegate to the unified recording system
+  Future<void> _startRecording() async {
+    await _startUnifiedRecording(isVoiceDictation: false);
+  }
+
+  Future<void> _stopRecording() async {
+    await _stopUnifiedRecording();
   }
 }

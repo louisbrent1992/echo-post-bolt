@@ -1,149 +1,592 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:photo_manager/photo_manager.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 import '../models/social_action.dart';
 import '../services/media_coordinator.dart';
 import '../services/firestore_service.dart';
 import '../services/ai_service.dart';
 import '../services/social_post_service.dart';
+import '../services/auth_service.dart';
+import '../services/natural_language_parser.dart';
+import '../constants/social_platforms.dart';
+import '../models/status_message.dart';
 
 /// Manages the persistent state and orchestration of social media posts
 /// across all screens in the EchoPost application.
 class SocialActionPostCoordinator extends ChangeNotifier {
-  // Platform requirements constants
-  static const _mediaRequiredPlatforms = {'instagram', 'tiktok'};
-
   // Services - injected via constructor
   final MediaCoordinator _mediaCoordinator;
   final FirestoreService _firestoreService;
   final AIService _aiService;
   final SocialPostService _socialPostService;
+  final AuthService _authService;
+  final NaturalLanguageParser _naturalLanguageParser;
 
-  // Current post state
-  SocialAction? _currentPost;
+  // Current post state - CRITICAL: Now non-nullable
+  late SocialAction _currentPost;
   String _currentTranscription = '';
-  PostState _postState = PostState.idle;
   List<MediaItem> _preSelectedMedia = [];
-  String? _lastError;
 
-  // Recording state
+  // Core state flags
   bool _isRecording = false;
   bool _isProcessing = false;
+  bool _hasContent = false;
+  bool _hasMedia = false;
+  bool _needsMediaSelection = false;
+  bool _hasError = false;
+  String? _errorMessage;
+
+  // CRITICAL: Persistent text editing state
+  TextEditingController? _textEditingController;
+  bool _isTextEditing = false;
+  String? _editingOriginalText;
 
   // Auto-save with debouncing
   Timer? _debounceTimer;
   static const _autoSaveDebounceMs = 1000; // 1 second debounce
+
+  // Debouncing for state transitions and saves
+  Timer? _stateTransitionDebouncer;
+  Timer? _saveDebouncer;
+
+  // CRITICAL: Track disposal state to prevent notifications after disposal
+  bool _isDisposed = false;
+
+  // CRITICAL: State transition lock to prevent simultaneous transitions
+  bool _isTransitioning = false;
+
+  // Recording management
+  String? _currentRecordingPath;
+  bool _isStartLocked = false;
+  bool _isVoiceDictating = false;
+  int _recordingDuration = 0;
+  final int maxRecordingDuration = 30;
+
+  // Voice monitoring variables
+  double _currentAmplitude = -160.0;
+  double _maxAmplitude = -160.0;
+  double _amplitudeSum = 0.0;
+  int _amplitudeSamples = 0;
+  bool _hasSpeechDetected = false;
+  final double _speechThreshold = -40.0;
+  final double _silenceThreshold = -50.0;
+
+  // Status management
+  StatusMessage? _temporaryStatus;
+  Timer? _statusTimer;
 
   SocialActionPostCoordinator({
     required MediaCoordinator mediaCoordinator,
     required FirestoreService firestoreService,
     required AIService aiService,
     required SocialPostService socialPostService,
+    required AuthService authService,
+    required NaturalLanguageParser naturalLanguageParser,
   })  : _mediaCoordinator = mediaCoordinator,
         _firestoreService = firestoreService,
         _aiService = aiService,
-        _socialPostService = socialPostService {
+        _socialPostService = socialPostService,
+        _authService = authService,
+        _naturalLanguageParser = naturalLanguageParser {
+    // Initialize with a clean post state immediately
+    _initializeCleanPost();
+
     if (kDebugMode) {
       print(
           '✅ SocialActionPostCoordinator initialized with constructor injection');
+      // Test natural language parsing patterns
+      _naturalLanguageParser.testPatterns();
     }
   }
 
-  // Getters
-  SocialAction? get currentPost => _currentPost;
-  String get currentTranscription => _currentTranscription;
-  PostState get postState => _postState;
-  List<MediaItem> get preSelectedMedia => List.unmodifiable(_preSelectedMedia);
-  String? get lastError => _lastError;
+  /// Initialize a clean post state
+  void _initializeCleanPost() {
+    _currentPost = SocialAction(
+      actionId: 'new_${DateTime.now().millisecondsSinceEpoch}',
+      createdAt: DateTime.now().toIso8601String(),
+      platforms: [],
+      content: Content(
+        text: '',
+        hashtags: [],
+        mentions: [],
+        media: [],
+      ),
+      options: Options(
+        schedule: 'now',
+        visibility: {},
+      ),
+      platformData: PlatformData(),
+      internal: Internal(
+        aiGenerated: false,
+        originalTranscription: '',
+        fallbackReason: 'initial_state',
+      ),
+    );
+    _currentTranscription = '';
+    _preSelectedMedia = [];
+    _hasContent = false;
+    _hasMedia = false;
+    _needsMediaSelection = false;
+    _hasError = false;
+    _errorMessage = null;
+  }
+
+  // Getters for state flags
   bool get isRecording => _isRecording;
   bool get isProcessing => _isProcessing;
-  bool get hasContent => _currentPost?.content.text.isNotEmpty == true;
-  bool get hasMedia =>
-      _currentPost?.content.media.isNotEmpty == true ||
-      _preSelectedMedia.isNotEmpty;
+  bool get hasContent {
+    final hasText = _currentPost.content.text.isNotEmpty;
+    final hasMediaContent = hasMedia;
+
+    if (kDebugMode) {
+      print('🔍 hasContent getter called:');
+      print('   hasText: $hasText');
+      print('   hasMediaContent: $hasMediaContent');
+      print('   currentPost.platforms: ${_currentPost.platforms}');
+      print(
+          '   currentPost.media.length: ${_currentPost.content.media.length}');
+      print('   preSelectedMedia.length: ${_preSelectedMedia.length}');
+    }
+
+    return hasText || hasMediaContent;
+  }
+
+  bool get hasMedia {
+    final currentPostHasMedia = _currentPost.content.media.isNotEmpty;
+    final hasPreSelectedMedia = _preSelectedMedia.isNotEmpty;
+
+    if (kDebugMode) {
+      print('🔍 hasMedia getter called:');
+      print('   currentPost media count: ${_currentPost.content.media.length}');
+      print('   preSelectedMedia count: ${_preSelectedMedia.length}');
+      print(
+          '   hasMedia result: ${currentPostHasMedia || hasPreSelectedMedia}');
+    }
+
+    return currentPostHasMedia || hasPreSelectedMedia;
+  }
+
+  bool get needsMediaSelection => _needsMediaSelection;
+  bool get hasError => _hasError;
+  String? get errorMessage => _errorMessage;
+
+  // Additional state getters
+  SocialAction get currentPost => _currentPost;
+  String get currentTranscription => _currentTranscription;
+  List<MediaItem> get preSelectedMedia => List.unmodifiable(_preSelectedMedia);
+  bool get isTextEditing => _isTextEditing;
+  TextEditingController? get textEditingController => _textEditingController;
+  String? get editingOriginalText => _editingOriginalText;
   bool get isPostComplete => hasContent && _isMediaRequirementMet;
+  bool get isReadyForExecution =>
+      isPostComplete && !_isRecording && !_isProcessing;
+
+  // Additional getters for recording state
+  bool get isVoiceDictating => _isVoiceDictating;
+  bool get isStartLocked => _isStartLocked;
+  int get recordingDuration => _recordingDuration;
+  double get currentAmplitude => _currentAmplitude;
+  bool get hasSpeechDetected => _hasSpeechDetected;
+  String? get currentRecordingPath => _currentRecordingPath;
 
   /// Check if media requirement is met based on selected platforms
   bool get _isMediaRequirementMet {
-    if (_currentPost == null) return false;
-
-    // If no platforms selected, require media for safety
-    if (_currentPost!.platforms.isEmpty) return hasMedia;
+    if (_currentPost.platforms.isEmpty) return hasMedia;
 
     // Check if any selected platform requires media
-    final requiresMedia = _currentPost!.platforms.any(
-        (platform) => _mediaRequiredPlatforms.contains(platform.toLowerCase()));
+    final requiresMedia = _currentPost.platforms
+        .any((platform) => SocialPlatforms.requiresMedia(platform));
 
     return requiresMedia ? hasMedia : true;
   }
 
-  /// Process voice transcription with flattened, testable pipeline
-  Future<void> processVoiceTranscription(String transcription) async {
-    _currentTranscription = transcription;
-    _postState = PostState.processing;
-    _lastError = null;
-    notifyListeners();
+  /// Initialize recording path
+  Future<void> initializeRecordingPath() async {
+    try {
+      final directory = await getApplicationDocumentsDirectory();
+      final timestamp = DateTime.now().millisecondsSinceEpoch;
+      _currentRecordingPath = '${directory.path}/recording_$timestamp.m4a';
+
+      if (kDebugMode) {
+        print('🎤 Recording path initialized: $_currentRecordingPath');
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ Failed to initialize recording path: $e');
+      }
+      throw Exception('Failed to initialize recording path: $e');
+    }
+  }
+
+  /// Start recording with voice dictation option
+  Future<void> startRecordingWithMode({required bool isVoiceDictation}) async {
+    if (_isDisposed || _isTransitioning || _isStartLocked) return;
+    _isTransitioning = true;
 
     try {
+      // Set start lock to prevent multiple recordings
+      _isStartLocked = true;
+
+      // Initialize recording path
+      await initializeRecordingPath();
+
+      // Set recording mode context in MediaCoordinator
+      _mediaCoordinator.setRecordingModeContext(isVoiceDictation);
+
+      // Clear any previous error states and messages
+      _hasError = false;
+      _errorMessage = null;
+      _isProcessing = false;
+      _temporaryStatus = null;
+      _statusTimer?.cancel();
+
+      // Update state flags
+      _isRecording = true;
+      _isVoiceDictating = isVoiceDictation;
+      _recordingDuration = 0;
+      _hasSpeechDetected = false;
+
+      // Reset voice monitoring variables
+      _currentAmplitude = -160.0;
+      _maxAmplitude = -160.0;
+      _amplitudeSum = 0.0;
+      _amplitudeSamples = 0;
+
       if (kDebugMode) {
-        print('🎯 Processing transcription: "$transcription"');
+        print(
+            '🎤 Recording started in ${isVoiceDictation ? "voice dictation" : "command"} mode');
+        print('   Recording path: $_currentRecordingPath');
       }
 
-      // Pipeline: each step is a separate, testable method
-      final aiPost = await _tryAiGenerate(transcription);
+      _safeNotifyListeners();
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ Failed to start recording: $e');
+      }
+      _isStartLocked = false;
+      _isRecording = false;
+      _isVoiceDictating = false;
+      _isProcessing = false;
+      setError('Failed to start recording: $e');
+    } finally {
+      _isTransitioning = false;
+    }
+  }
+
+  /// Update amplitude data
+  void updateAmplitude(double amplitude) {
+    _currentAmplitude = amplitude;
+
+    if (amplitude > _maxAmplitude) {
+      _maxAmplitude = amplitude;
+    }
+
+    _amplitudeSamples++;
+    _amplitudeSum += amplitude;
+
+    if (amplitude > _speechThreshold) {
+      _hasSpeechDetected = true;
+    } else if (amplitude < _silenceThreshold && !_hasSpeechDetected) {
+      // Only consider silence if we haven't detected speech yet
+      _hasSpeechDetected = false;
+    }
+
+    _safeNotifyListeners();
+  }
+
+  /// Update recording duration
+  void updateRecordingDuration(int duration) {
+    _recordingDuration = duration;
+    _safeNotifyListeners();
+  }
+
+  /// Reset recording state
+  void resetRecordingState() {
+    _currentRecordingPath = null;
+    _isStartLocked = false;
+    _isRecording = false;
+    _isProcessing = false;
+    _isVoiceDictating = false;
+    _recordingDuration = 0;
+
+    // Reset voice monitoring
+    _currentAmplitude = -160.0;
+    _maxAmplitude = -160.0;
+    _amplitudeSum = 0.0;
+    _amplitudeSamples = 0;
+    _hasSpeechDetected = false;
+
+    // Clear any error or warning messages when resetting
+    _hasError = false;
+    _errorMessage = null;
+    _temporaryStatus = null;
+    _statusTimer?.cancel();
+
+    _safeNotifyListeners();
+  }
+
+  /// Get normalized amplitude for UI
+  double get normalizedAmplitude {
+    const double minDb = -60.0;
+    const double maxDb = -10.0;
+
+    if (_currentAmplitude <= minDb) return 0.0;
+    if (_currentAmplitude >= maxDb) return 1.0;
+
+    return (_currentAmplitude - minDb) / (maxDb - minDb);
+  }
+
+  /// Check if post is ready for execution
+  bool get isPostReady {
+    if (_currentPost.platforms.isEmpty) return false;
+
+    final hasContent = _currentPost.content.text.isNotEmpty;
+    final hasPlatforms = _currentPost.platforms.isNotEmpty;
+    final hasRequiredMedia = _currentPost.platforms
+        .any((platform) => SocialPlatforms.requiresMedia(platform));
+
+    // If platforms require media, check media presence
+    if (hasRequiredMedia && !hasMedia) return false;
+
+    return hasContent && hasPlatforms;
+  }
+
+  /// Process voice transcription and generate social action
+  Future<void> processVoiceTranscription(String transcription) async {
+    try {
+      _isProcessing = true;
+      _currentTranscription = transcription;
+      _safeNotifyListeners();
+
+      // CRITICAL: Fetch recent media BEFORE AI processing if requested
+      await _handleRecentMediaRequest(transcription);
+
+      final aiPost =
+          await _tryAiGenerate(transcription, existingPost: _currentPost);
       final mergedPost = _mergeWithExisting(aiPost);
       final mediaPost = await _includeMedia(mergedPost, transcription);
       final finalPost = _sanitizePost(mediaPost);
 
       _currentPost = finalPost;
-      _postState = hasContent ? PostState.ready : PostState.needsContent;
+      _hasContent = finalPost.content.text.isNotEmpty;
+      _hasMedia = finalPost.content.media.isNotEmpty;
+      _needsMediaSelection =
+          _transcriptionReferencesMedia(transcription) && !_hasMedia;
+
       _triggerDebouncedSave();
-      notifyListeners();
 
-      if (kDebugMode) {
-        print('✅ Post processing complete');
-        print('   Text: "${_currentPost!.content.text}"');
-        print('   Hashtags: ${_currentPost!.content.hashtags}');
-        print('   Platforms: ${_currentPost!.platforms.join(', ')}');
-        print(
-            '   Fallback: ${_currentPost!.internal.fallbackReason ?? 'none'}');
-      }
+      _isProcessing = false;
+      _isRecording = false;
+      _hasError = false;
+      _errorMessage = null;
+      _isStartLocked = false; // Ensure start lock is released
+
+      resetRecordingState();
+      _safeNotifyListeners();
     } catch (e) {
-      _lastError = e.toString();
-      _postState = PostState.error;
-      notifyListeners();
-
       if (kDebugMode) {
-        print('❌ Failed to process transcription: $e');
+        print('❌ Failed to process voice transcription: $e');
       }
+      _isProcessing = false;
+      _isStartLocked = false; // Ensure start lock is released even on error
+      resetRecordingState();
+      setError(e.toString());
+      _safeNotifyListeners();
       rethrow;
     }
   }
 
+  /// Handle recent media requests before AI processing
+  Future<void> _handleRecentMediaRequest(String transcription) async {
+    final mediaRequest =
+        _naturalLanguageParser.parseMediaRequest(transcription);
+    final requestedType = mediaRequest?.mediaType;
+
+    // Check if user wants recent media using the parser
+    final wantsRecentMedia =
+        _naturalLanguageParser.hasRecentMediaIndicators(transcription);
+
+    if (kDebugMode) {
+      print('🔍 Media request analysis:');
+      print('   Transcription: "$transcription"');
+      print('   Media request: $mediaRequest');
+      print('   Wants recent media: $wantsRecentMedia');
+      print('   Requested type: $requestedType');
+      print('   Current preSelectedMedia count: ${_preSelectedMedia.length}');
+    }
+
+    // If recent media is requested, fetch it
+    if (wantsRecentMedia) {
+      if (kDebugMode) {
+        print('📱 Fetching recent media...');
+      }
+
+      final recentMedia =
+          await _getRecentMedia(limit: 10); // Increase limit for debugging
+
+      if (kDebugMode) {
+        print('📱 Recent media fetch result: ${recentMedia.length} items');
+        for (int i = 0; i < recentMedia.length && i < 5; i++) {
+          final media = recentMedia[i];
+          print('   [$i] ${media.fileUri}');
+          print('       MIME: ${media.mimeType}');
+          print(
+              '       Type: ${media.mimeType.startsWith('video/') ? 'VIDEO' : 'IMAGE'}');
+        }
+      }
+
+      if (recentMedia.isNotEmpty) {
+        // Filter by requested type if specified
+        List<MediaItem> candidateMedia;
+        if (requestedType != null) {
+          candidateMedia = recentMedia
+              .where((media) => _mediaMatchesType(media, requestedType))
+              .toList();
+
+          if (kDebugMode) {
+            print(
+                '📱 Filtered media for type "$requestedType": ${candidateMedia.length} items');
+            for (int i = 0; i < candidateMedia.length && i < 3; i++) {
+              final media = candidateMedia[i];
+              print('   [$i] ${media.fileUri}');
+              print('       MIME: ${media.mimeType}');
+            }
+          }
+        } else {
+          candidateMedia = recentMedia;
+        }
+
+        if (candidateMedia.isNotEmpty) {
+          final media = candidateMedia.first;
+
+          if (kDebugMode) {
+            print('📱 Selected media:');
+            print('   File: ${media.fileUri}');
+            print('   MIME type: ${media.mimeType}');
+            print('   Requested type: $requestedType');
+            print(
+                '   Media matches type: ${requestedType == null || _mediaMatchesType(media, requestedType)}');
+          }
+
+          _preSelectedMedia = [media];
+          if (kDebugMode) {
+            print('✅ Pre-selected recent media: ${media.fileUri}');
+            print('   Media type: ${media.mimeType}');
+            print('   Requested type: $requestedType');
+            print('   hasMedia getter now returns: $hasMedia');
+            print('   preSelectedMedia count: ${_preSelectedMedia.length}');
+          }
+          // Notify listeners immediately so UI updates
+          _safeNotifyListeners();
+        } else {
+          if (kDebugMode) {
+            print('⚠️ No media found matching requested type: $requestedType');
+            print(
+                '   Available media types: ${recentMedia.map((m) => m.mimeType).take(5).join(', ')}');
+          }
+          // Media found but wrong type - need media selection
+          _needsMediaSelection = true;
+        }
+      } else {
+        if (kDebugMode) {
+          print(
+              '⚠️ No recent media found for request - user needs to configure media sources');
+        }
+        // No media found - need media selection
+        _needsMediaSelection = true;
+      }
+    } else {
+      if (kDebugMode) {
+        print('ℹ️ No recent media keywords detected in transcription');
+      }
+    }
+  }
+
+  /// Reset to initial state with proper cleanup
+  void reset() {
+    _initializeCleanPost();
+    _isRecording = false;
+    _isProcessing = false;
+    _isTransitioning = false; // Reset transition lock
+
+    // CRITICAL: Reset all recording states including locks
+    resetRecordingState();
+
+    // CRITICAL: Clean up any active text editing session
+    _endTextEditingSession();
+
+    // CRITICAL: Cancel any pending timers
+    _statusTimer?.cancel();
+    _temporaryStatus = null;
+    _debounceTimer?.cancel();
+    _stateTransitionDebouncer?.cancel();
+    _saveDebouncer?.cancel();
+
+    _safeNotifyListeners();
+
+    if (kDebugMode) {
+      print('🔄 SocialActionPostCoordinator: Complete state reset');
+    }
+  }
+
   /// Step 1: Try AI generation with simplified fallback
-  Future<SocialAction> _tryAiGenerate(String transcription) async {
+  Future<SocialAction> _tryAiGenerate(String transcription,
+      {SocialAction? existingPost}) async {
     try {
-      return await _aiService.processVoiceCommand(
+      if (kDebugMode) {
+        print('🤖 _tryAiGenerate: Starting AI processing');
+        print('   Transcription: "$transcription"');
+        print('   PreSelectedMedia count: ${_preSelectedMedia.length}');
+        print('   ExistingPost: ${existingPost?.actionId}');
+      }
+
+      // CRITICAL: Set existing post context in MediaCoordinator for AI
+      _mediaCoordinator.setExistingPostContext(existingPost);
+
+      final aiResult = await _aiService.processVoiceCommand(
         transcription,
         preSelectedMedia:
             _preSelectedMedia.isNotEmpty ? _preSelectedMedia : null,
       );
+
+      if (kDebugMode) {
+        print('✅ _tryAiGenerate: AI processing successful');
+        print('   AI result platforms: ${aiResult.platforms}');
+        print('   AI result media count: ${aiResult.content.media.length}');
+      }
+
+      return aiResult;
     } catch (e) {
       if (kDebugMode) {
         print('⚠️ AI generation failed, creating baseline post: $e');
+        print(
+            '   Will create baseline with preSelectedMedia: ${_preSelectedMedia.length} items');
       }
-      return _createBaselinePost(transcription);
+      final baselinePost = await _createBaselinePostAsync(transcription);
+
+      if (kDebugMode) {
+        print('✅ Baseline post created:');
+        print('   Platforms: ${baselinePost.platforms}');
+        print('   Media count: ${baselinePost.content.media.length}');
+        print('   Text: "${baselinePost.content.text}"');
+      }
+
+      return baselinePost;
+    } finally {
+      // Clear the context after processing
+      _mediaCoordinator.setExistingPostContext(null);
     }
   }
 
   /// Step 2: Merge with existing post if available
   SocialAction _mergeWithExisting(SocialAction newPost) {
-    if (_currentPost == null) return newPost;
-
-    return _currentPost!.copyWith(
+    return _currentPost.copyWith(
       platforms: newPost.platforms.isNotEmpty ? newPost.platforms : null,
-      content: _currentPost!.content.copyWith(
+      content: _currentPost.content.copyWith(
         text: newPost.content.text.isNotEmpty ? newPost.content.text : null,
         hashtags: newPost.content.hashtags.isNotEmpty
             ? newPost.content.hashtags
@@ -153,7 +596,7 @@ class SocialActionPostCoordinator extends ChangeNotifier {
             : null,
         media: newPost.content.media.isNotEmpty ? newPost.content.media : null,
       ),
-      internal: _currentPost!.internal.copyWith(
+      internal: _currentPost.internal.copyWith(
         aiGenerated: newPost.internal.aiGenerated,
         originalTranscription: newPost.internal.originalTranscription,
         fallbackReason: newPost.internal.fallbackReason,
@@ -161,38 +604,95 @@ class SocialActionPostCoordinator extends ChangeNotifier {
     );
   }
 
-  /// Step 3: Include media intelligently
+  /// Check if media matches requested type
+  bool _mediaMatchesType(MediaItem media, String requestedType) {
+    final mimeType = media.mimeType.toLowerCase();
+    return requestedType == 'image'
+        ? mimeType.startsWith('image/')
+        : mimeType.startsWith('video/');
+  }
+
+  /// Step 3: Include media in post
   Future<SocialAction> _includeMedia(
       SocialAction post, String transcription) async {
-    // If post already has media, keep it
-    if (post.content.media.isNotEmpty) return post;
+    try {
+      if (kDebugMode) {
+        print('🖼️ _includeMedia: Starting media inclusion');
+        print('   Post already has media: ${post.content.media.length}');
+        print('   PreSelectedMedia count: ${_preSelectedMedia.length}');
+      }
 
-    // If we have pre-selected media, use it
-    if (_preSelectedMedia.isNotEmpty) {
-      return post.copyWith(
-        content: post.content.copyWith(media: List.from(_preSelectedMedia)),
-      );
-    }
-
-    // If user referenced media, try to assign default
-    if (_transcriptionReferencesMedia(transcription)) {
-      try {
-        final recentMedia = await _getRecentMedia(limit: 5);
-        if (recentMedia.isNotEmpty) {
-          return post.copyWith(
-            content: post.content.copyWith(media: [recentMedia.first]),
-            internal: post.internal
-                .copyWith(fallbackReason: 'default_media_assigned'),
-          );
-        }
-      } catch (e) {
+      // If post already has media from baseline creation or AI, return as-is
+      if (post.content.media.isNotEmpty) {
         if (kDebugMode) {
-          print('❌ Failed to get recent media: $e');
+          print('✅ _includeMedia: Post already has media, returning as-is');
+        }
+        return post;
+      }
+
+      // If we have pre-selected media but post doesn't have it, add it
+      if (_preSelectedMedia.isNotEmpty) {
+        final requestedType = _getRequestedMediaType(transcription);
+
+        // Validate media type if specified
+        if (requestedType != null) {
+          final matchingMedia = _preSelectedMedia
+              .where((media) => _mediaMatchesType(media, requestedType))
+              .toList();
+
+          if (matchingMedia.isEmpty) {
+            if (kDebugMode) {
+              print(
+                  '⚠️ Pre-selected media does not match requested type: $requestedType');
+            }
+            _needsMediaSelection = true;
+            return post;
+          }
+
+          // Use only matching media
+          final updatedPost = post.copyWith(
+            content: post.content.copyWith(media: matchingMedia),
+          );
+
+          if (kDebugMode) {
+            print(
+                '✅ _includeMedia: Added ${matchingMedia.length} matching media items');
+          }
+
+          return updatedPost;
+        } else {
+          // No specific type requested, use all pre-selected media
+          final updatedPost = post.copyWith(
+            content: post.content.copyWith(media: List.from(_preSelectedMedia)),
+          );
+
+          if (kDebugMode) {
+            print(
+                '✅ _includeMedia: Added ${_preSelectedMedia.length} pre-selected media items');
+          }
+
+          return updatedPost;
         }
       }
-    }
 
-    return post;
+      if (kDebugMode) {
+        print('ℹ️ _includeMedia: No media to include, returning post as-is');
+      }
+
+      return post;
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ Error including media: $e');
+      }
+      return post;
+    }
+  }
+
+  /// Get requested media type from transcription
+  String? _getRequestedMediaType(String transcription) {
+    final mediaRequest =
+        _naturalLanguageParser.parseMediaRequest(transcription);
+    return mediaRequest?.mediaType;
   }
 
   /// Step 4: Sanitize and validate post
@@ -217,11 +717,11 @@ class SocialActionPostCoordinator extends ChangeNotifier {
   }
 
   /// Create baseline post with intelligent platform selection
-  SocialAction _createBaselinePost(String transcription) {
+  Future<SocialAction> _createBaselinePostAsync(String transcription) async {
     final hasMedia = _preSelectedMedia.isNotEmpty;
     final hasMediaReference = _transcriptionReferencesMedia(transcription);
-    final selectedPlatforms =
-        _selectDefaultPlatforms(transcription, hasMedia, hasMediaReference);
+    final selectedPlatforms = await _selectDefaultPlatformsAsync(
+        transcription, hasMedia, hasMediaReference);
     final hashtags = _generateIntelligentHashtags(transcription);
 
     return SocialAction(
@@ -246,26 +746,110 @@ class SocialActionPostCoordinator extends ChangeNotifier {
     );
   }
 
-  /// Intelligently select default platforms based on content type and media availability
-  List<String> _selectDefaultPlatforms(
-      String text, bool hasMedia, bool hasMediaReference) {
+  /// Get list of platforms that the user has authenticated with
+  Future<List<String>> _getAuthenticatedPlatforms() async {
+    final authenticatedPlatforms = <String>[];
+
+    try {
+      for (final platform in SocialPlatforms.all) {
+        final isConnected = await _authService.isPlatformConnected(platform);
+        if (isConnected) {
+          authenticatedPlatforms.add(platform);
+        }
+      }
+
+      if (kDebugMode) {
+        print('🔐 Authenticated platforms: $authenticatedPlatforms');
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        print('⚠️ Failed to check platform authentication: $e');
+      }
+      // Return empty list if auth check fails
+    }
+
+    return authenticatedPlatforms;
+  }
+
+  /// Intelligently select default platforms based on content type, media availability, and user authentication
+  Future<List<String>> _selectDefaultPlatformsAsync(
+      String text, bool hasMedia, bool hasMediaReference) async {
     final platforms = <String>[];
 
-    // Always include text-supporting platforms for any content
-    platforms.addAll(['twitter', 'facebook']);
+    // Get authenticated platforms
+    final authenticatedPlatforms = await _getAuthenticatedPlatforms();
+
+    if (authenticatedPlatforms.isEmpty) {
+      // No authenticated platforms - use conservative defaults for AI processing
+      // These will be filtered during posting based on actual authentication
+      platforms.addAll(SocialPlatforms.textSupported);
+      if (hasMedia || hasMediaReference) {
+        platforms.addAll(SocialPlatforms.mediaRequired);
+      }
+
+      if (kDebugMode) {
+        print(
+            '🎯 No authenticated platforms - using defaults for AI processing: $platforms');
+        print('   Note: Actual posting will require authentication');
+      }
+    } else {
+      // User has authenticated platforms - be smarter about selection
+
+      // Always include authenticated text-supporting platforms
+      for (final platform in SocialPlatforms.textSupported) {
+        if (authenticatedPlatforms.contains(platform)) {
+          platforms.add(platform);
+        }
+      }
+
+      // Add authenticated media-requiring platforms if we have media
+      if (hasMedia || hasMediaReference) {
+        for (final platform in SocialPlatforms.mediaRequired) {
+          if (authenticatedPlatforms.contains(platform)) {
+            platforms.add(platform);
+          }
+        }
+      }
+
+      // If no platforms were selected but we have authenticated ones,
+      // include at least one authenticated platform
+      if (platforms.isEmpty && authenticatedPlatforms.isNotEmpty) {
+        platforms.add(authenticatedPlatforms.first);
+      }
+
+      if (kDebugMode) {
+        print('🎯 Smart platform selection based on authentication:');
+        print(
+            '   Text: "${text.substring(0, text.length > 50 ? 50 : text.length)}${text.length > 50 ? '...' : ''}"');
+        print('   Has media: $hasMedia');
+        print('   Has media reference: $hasMediaReference');
+        print('   Authenticated platforms: $authenticatedPlatforms');
+        print('   Selected platforms: $platforms');
+      }
+    }
+
+    return platforms;
+  }
+
+  /// Intelligently select default platforms based on content type, media availability, and user authentication
+  List<String> _selectDefaultPlatforms(
+      String text, bool hasMedia, bool hasMediaReference) {
+    // For now, use the synchronous version for backwards compatibility
+    // The async version should be used when possible
+    final platforms = <String>[];
+
+    // Conservative defaults that work without authentication requirements
+    platforms.addAll(SocialPlatforms.textSupported);
 
     // Add media-requiring platforms only if we have media or user referenced media
     if (hasMedia || hasMediaReference) {
-      platforms.addAll(['instagram', 'tiktok']);
+      platforms.addAll(SocialPlatforms.mediaRequired);
     }
 
     if (kDebugMode) {
-      print('🎯 Intelligent platform selection:');
-      print(
-          '   Text: "${text.substring(0, text.length > 50 ? 50 : text.length)}${text.length > 50 ? '...' : ''}"');
-      print('   Has media: $hasMedia');
-      print('   Has media reference: $hasMediaReference');
+      print('🎯 Platform selection (sync - backwards compatibility):');
       print('   Selected platforms: $platforms');
+      print('   Note: Use _selectDefaultPlatformsAsync for smarter selection');
     }
 
     return platforms;
@@ -289,6 +873,9 @@ class SocialActionPostCoordinator extends ChangeNotifier {
       instagram: platforms.contains('instagram')
           ? InstagramData(postHere: true, postType: 'feed')
           : InstagramData(postHere: false, postType: 'feed'),
+      youtube: platforms.contains('youtube')
+          ? YouTubeData(postHere: true)
+          : YouTubeData(postHere: false),
       twitter: platforms.contains('twitter')
           ? TwitterData(postHere: true)
           : TwitterData(postHere: false),
@@ -310,14 +897,28 @@ class SocialActionPostCoordinator extends ChangeNotifier {
   /// Get recent media with performance limit
   Future<List<MediaItem>> _getRecentMedia({int limit = 25}) async {
     try {
+      if (kDebugMode) {
+        print('🔍 _getRecentMedia: Starting with limit $limit');
+      }
+
       final recentMediaMaps = await _mediaCoordinator.getMediaForQuery(
         '', // Empty search for general recent media
         mediaTypes: ['image', 'video'],
       );
 
+      if (kDebugMode) {
+        print(
+            '🔍 _getRecentMedia: MediaCoordinator returned ${recentMediaMaps.length} items');
+        if (recentMediaMaps.isNotEmpty) {
+          final first = recentMediaMaps.first;
+          print('   First item: ${first['file_uri']}');
+          print('   MIME type: ${first['mime_type']}');
+        }
+      }
+
       // Convert to MediaItem objects with limit
       final recentMedia = recentMediaMaps.take(limit).map((mediaMap) {
-        return MediaItem(
+        final mediaItem = MediaItem(
           fileUri: mediaMap['file_uri'] ?? '',
           mimeType: mediaMap['mime_type'] ?? 'image/jpeg',
           deviceMetadata: DeviceMetadata(
@@ -335,12 +936,25 @@ class SocialActionPostCoordinator extends ChangeNotifier {
             frameRate: mediaMap['device_metadata']?['frame_rate'],
           ),
         );
+
+        if (kDebugMode) {
+          print(
+              '   Converted to MediaItem: ${mediaItem.fileUri}, type: ${mediaItem.mimeType}');
+        }
+
+        return mediaItem;
       }).toList();
+
+      if (kDebugMode) {
+        print(
+            '🔍 _getRecentMedia: Returning ${recentMedia.length} MediaItem objects');
+      }
 
       return recentMedia;
     } catch (e) {
       if (kDebugMode) {
         print('❌ Failed to get recent media: $e');
+        print('   Stack trace: ${StackTrace.current}');
       }
       return [];
     }
@@ -348,43 +962,7 @@ class SocialActionPostCoordinator extends ChangeNotifier {
 
   /// Check if transcription suggests the user wants media included
   bool _transcriptionReferencesMedia(String transcription) {
-    final lowerTranscription = transcription.toLowerCase();
-
-    final mediaKeywords = [
-      'picture',
-      'photo',
-      'image',
-      'pic',
-      'shot',
-      'video',
-      'clip',
-      'recording',
-      'last',
-      'recent',
-      'latest',
-      'newest',
-      'this picture',
-      'this photo',
-      'this image',
-      'my picture',
-      'my photo',
-      'my image',
-      'the picture',
-      'the photo',
-      'the image',
-    ];
-
-    final hasMediaKeyword =
-        mediaKeywords.any((keyword) => lowerTranscription.contains(keyword));
-
-    if (kDebugMode && hasMediaKeyword) {
-      final matchedKeywords = mediaKeywords
-          .where((keyword) => lowerTranscription.contains(keyword))
-          .toList();
-      print('🔍 Found media keywords: ${matchedKeywords.join(', ')}');
-    }
-
-    return hasMediaKeyword;
+    return _naturalLanguageParser.hasMediaReference(transcription);
   }
 
   /// Generate intelligent hashtags based on content analysis
@@ -464,26 +1042,6 @@ class SocialActionPostCoordinator extends ChangeNotifier {
     return uniqueHashtags;
   }
 
-  /// Extract hashtags from text content (spoken hashtags)
-  List<String> _extractHashtagsFromText(String text) {
-    // Match hashtags in the format #hashtag or #HashTag
-    final hashtagRegex = RegExp(r'#([a-zA-Z0-9_]+)', multiLine: true);
-    final matches = hashtagRegex.allMatches(text);
-
-    final extractedHashtags = matches
-        .map((match) => match.group(1)!)
-        .where((hashtag) => hashtag.isNotEmpty)
-        .map((hashtag) => hashtag.toLowerCase()) // Normalize to lowercase
-        .toSet() // Remove duplicates
-        .toList();
-
-    if (kDebugMode && extractedHashtags.isNotEmpty) {
-      print('🏷️ Extracted hashtags from text: $extractedHashtags');
-    }
-
-    return extractedHashtags;
-  }
-
   /// Remove hashtags from text content (clean text for display)
   String _removeHashtagsFromText(String text) {
     // Remove hashtags in the format #hashtag or #HashTag
@@ -498,29 +1056,34 @@ class SocialActionPostCoordinator extends ChangeNotifier {
   String _formatHashtagsForPlatform(List<String> hashtags, String platform) {
     if (hashtags.isEmpty) return '';
 
+    // Ensure hashtags don't have '#' prefix (strip if present)
+    final cleanHashtags = hashtags
+        .map((tag) => tag.startsWith('#') ? tag.substring(1) : tag)
+        .toList();
+
     switch (platform.toLowerCase()) {
       case 'instagram':
         // Instagram: hashtags at the end, separated by spaces, max 30 hashtags
-        final limitedHashtags = hashtags.take(30).toList();
+        final limitedHashtags = cleanHashtags.take(30).toList();
         return '\n\n${limitedHashtags.map((tag) => '#$tag').join(' ')}';
 
       case 'twitter':
         // Twitter: hashtags integrated naturally, max 280 chars total, 2-3 hashtags recommended
-        final limitedHashtags = hashtags.take(3).toList();
+        final limitedHashtags = cleanHashtags.take(3).toList();
         return ' ${limitedHashtags.map((tag) => '#$tag').join(' ')}';
 
       case 'facebook':
         // Facebook: hashtags at the end, each on new line for better readability
-        return '\n\n${hashtags.map((tag) => '#$tag').join(' ')}';
+        return '\n\n${cleanHashtags.map((tag) => '#$tag').join(' ')}';
 
       case 'tiktok':
         // TikTok: hashtags at the end, space-separated, max 100 chars for hashtags
-        var formattedHashtags = hashtags.map((tag) => '#$tag').join(' ');
+        var formattedHashtags = cleanHashtags.map((tag) => '#$tag').join(' ');
         if (formattedHashtags.length > 100) {
           // Truncate if too long
           final truncatedTags = <String>[];
           var currentLength = 0;
-          for (final tag in hashtags) {
+          for (final tag in cleanHashtags) {
             final tagWithHash = '#$tag ';
             if (currentLength + tagWithHash.length <= 100) {
               truncatedTags.add(tag);
@@ -535,16 +1098,14 @@ class SocialActionPostCoordinator extends ChangeNotifier {
 
       default:
         // Default format: hashtags at the end, space-separated
-        return '\n\n${hashtags.map((tag) => '#$tag').join(' ')}';
+        return '\n\n${cleanHashtags.map((tag) => '#$tag').join(' ')}';
     }
   }
 
   /// Get platform-formatted post content with hashtags
   String getFormattedPostContent(String platform) {
-    if (_currentPost == null) return '';
-
-    final baseText = _currentPost!.content.text;
-    final hashtags = _currentPost!.content.hashtags;
+    final baseText = _currentPost.content.text;
+    final hashtags = _currentPost.content.hashtags;
 
     // Remove any existing hashtags from the base text to avoid duplication
     final cleanText = _removeHashtagsFromText(baseText);
@@ -557,79 +1118,51 @@ class SocialActionPostCoordinator extends ChangeNotifier {
 
   /// Update post content with unified hashtag handling
   Future<void> updatePostContent(String newText) async {
-    if (kDebugMode) {
-      print('🔄 Updating post content with unified hashtag handling');
-      print('   New text: "$newText"');
-    }
-
     // Extract hashtags from the new text
     final extractedHashtags = _extractHashtagsFromText(newText);
-
-    // Remove hashtags from text to keep them separate
     final cleanText = _removeHashtagsFromText(newText);
 
-    if (_currentPost == null) {
-      // Create new post with the text and extracted hashtags
-      final intelligentHashtags = _generateIntelligentHashtags(cleanText);
-      final allHashtags =
-          <String>{...extractedHashtags, ...intelligentHashtags}.toList();
+    // Update existing post with unified hashtag handling
+    final existingHashtags = _currentPost.content.hashtags;
+    final allHashtags = <String>{...extractedHashtags, ...existingHashtags}
+        .where((tag) => tag.isNotEmpty)
+        .toList();
 
-      _currentPost = _createBaselinePost(cleanText).copyWith(
-        content: Content(
-          text: cleanText,
-          hashtags: allHashtags,
-          mentions: [],
-          media: [],
-        ),
-      );
-    } else {
-      // Update existing post - merge extracted hashtags with existing ones
-      final existingHashtags = Set<String>.from(_currentPost!.content.hashtags);
-      final newHashtags =
-          <String>{...existingHashtags, ...extractedHashtags}.toList();
+    _currentPost = _currentPost.copyWith(
+      content: _currentPost.content.copyWith(
+        text: cleanText,
+        hashtags: allHashtags,
+      ),
+    );
 
-      _currentPost = _currentPost!.copyWith(
-        content: _currentPost!.content.copyWith(
-          text: cleanText,
-          hashtags: newHashtags,
-        ),
-      );
-    }
-
-    _postState = hasContent ? PostState.ready : PostState.needsContent;
+    // Update state flags
+    _hasContent = cleanText.isNotEmpty || allHashtags.isNotEmpty;
+    _hasError = false;
+    _errorMessage = null;
+    _safeNotifyListeners(); // Always refresh view
     _triggerDebouncedSave();
-    notifyListeners();
 
     if (kDebugMode) {
       print('✅ Post content updated with unified hashtag handling');
       print('   Clean text: "$cleanText"');
       print('   Extracted hashtags: $extractedHashtags');
-      print('   Final hashtags: ${_currentPost!.content.hashtags}');
+      print('   Final hashtags: ${_currentPost.content.hashtags}');
     }
   }
 
   /// Update post hashtags independently
   Future<void> updatePostHashtags(List<String> newHashtags) async {
-    if (_currentPost == null) {
-      // Create new post with hashtags only
-      _currentPost = _createBaselinePost('').copyWith(
-        content: Content(
-          text: '',
-          hashtags: newHashtags,
-          mentions: [],
-          media: [],
-        ),
-      );
-    } else {
-      // Update existing post hashtags
-      _currentPost = _currentPost!.copyWith(
-        content: _currentPost!.content.copyWith(hashtags: newHashtags),
-      );
-    }
+    _currentPost = _currentPost.copyWith(
+      content: _currentPost.content.copyWith(hashtags: newHashtags),
+    );
 
-    _postState = hasContent ? PostState.ready : PostState.needsContent;
+    // Update state flags
+    _hasContent =
+        _currentPost.content.text.isNotEmpty || newHashtags.isNotEmpty;
+    _hasError = false;
+    _errorMessage = null;
+    _safeNotifyListeners();
     _triggerDebouncedSave();
-    notifyListeners();
 
     if (kDebugMode) {
       print('✅ Hashtags updated via coordinator');
@@ -642,106 +1175,49 @@ class SocialActionPostCoordinator extends ChangeNotifier {
   Future<void> addMedia(List<MediaItem> media) async {
     _preSelectedMedia.addAll(media);
 
-    if (_currentPost != null) {
-      final updatedMedia = List<MediaItem>.from(_currentPost!.content.media);
-      updatedMedia.addAll(media);
+    final updatedMedia = List<MediaItem>.from(_currentPost.content.media);
+    updatedMedia.addAll(media);
 
-      _currentPost = _currentPost!.copyWith(
-        content: _currentPost!.content.copyWith(media: updatedMedia),
-      );
-    }
+    _currentPost = _currentPost.copyWith(
+      content: _currentPost.content.copyWith(media: updatedMedia),
+    );
 
-    _postState = isPostComplete ? PostState.ready : PostState.needsMedia;
-    _triggerDebouncedSave();
-    notifyListeners();
+    // Update state flags
+    _hasMedia = true;
+    _hasError = false;
+    _errorMessage = null;
+    _needsMediaSelection = false;
+    _safeNotifyListeners();
   }
 
   /// Toggle platform selection
   void togglePlatform(String platform) {
-    if (_currentPost == null) return;
-
-    final updatedPlatforms = List<String>.from(_currentPost!.platforms);
+    final updatedPlatforms = List<String>.from(_currentPost.platforms);
     if (updatedPlatforms.contains(platform)) {
       updatedPlatforms.remove(platform);
     } else {
       updatedPlatforms.add(platform);
     }
 
-    _currentPost = _currentPost!.copyWith(platforms: updatedPlatforms);
-    notifyListeners();
-  }
-
-  /// Set recording state
-  void setRecordingState(bool recording) {
-    _isRecording = recording;
-    if (recording) {
-      _postState = PostState.recording;
-    } else if (_postState == PostState.recording) {
-      _postState = PostState.idle;
-    }
-    notifyListeners();
-  }
-
-  /// Set processing state with proper cleanup
-  void setProcessingState(bool processing) {
-    if (kDebugMode) {
-      print('🔧 SocialActionPostCoordinator.setProcessingState($processing)');
-      print('   Current _isProcessing: $_isProcessing');
-      print('   Current _postState: $_postState');
-    }
-
-    _isProcessing = processing;
-    if (processing) {
-      _postState = PostState.processing;
-    } else {
-      // When processing is done, determine the appropriate state
-      if (_currentPost != null && hasContent) {
-        _postState = PostState.ready;
-      } else {
-        _postState = PostState.idle;
-      }
-    }
-
-    if (kDebugMode) {
-      print('   New _isProcessing: $_isProcessing');
-      print('   New _postState: $_postState');
-      print('   hasContent: $hasContent');
-      print('   currentPost != null: ${_currentPost != null}');
-    }
-
-    notifyListeners();
-  }
-
-  /// Reset to initial state with proper cleanup
-  void reset() {
-    _currentPost = null;
-    _currentTranscription = '';
-    _postState = PostState.idle;
-    _preSelectedMedia.clear();
-    _lastError = null;
-    _isRecording = false;
-    _isProcessing = false;
-    notifyListeners();
-
-    if (kDebugMode) {
-      print('🔄 SocialActionPostCoordinator: Complete state reset');
-    }
+    _currentPost = _currentPost.copyWith(platforms: updatedPlatforms);
+    // SIMPLIFIED: Clear state after updating
+    _hasError = false;
+    _errorMessage = null;
+    _safeNotifyListeners();
   }
 
   /// Save draft to persistent storage
   Future<void> _saveDraft() async {
-    if (_currentPost == null) return;
-
     try {
       // Only auto-save if this is still a draft
-      final isDraft = _currentPost!.actionId.startsWith('baseline_') ||
-          _currentPost!.actionId.startsWith('sanitized_') ||
-          _currentPost!.actionId.startsWith('echo_');
+      final isDraft = _currentPost.actionId.startsWith('baseline_') ||
+          _currentPost.actionId.startsWith('sanitized_') ||
+          _currentPost.actionId.startsWith('echo_');
 
       if (isDraft) {
-        await _firestoreService.saveAction(_currentPost!.toJson());
+        await _firestoreService.saveAction(_currentPost.toJson());
         if (kDebugMode) {
-          print('💾 Draft auto-saved: ${_currentPost!.actionId}');
+          print('💾 Draft auto-saved: ${_currentPost.actionId}');
         }
       }
     } catch (e) {
@@ -753,28 +1229,32 @@ class SocialActionPostCoordinator extends ChangeNotifier {
 
   /// Replace media in current post
   Future<void> replaceMedia(List<MediaItem> media) async {
-    if (_currentPost != null) {
-      _currentPost = _currentPost!.copyWith(
-        content: _currentPost!.content.copyWith(media: media),
+    // Update media in current post
+    _currentPost = _currentPost.copyWith(
+      content: _currentPost.content.copyWith(media: media),
+    );
+
+    // If no platforms selected, add default platforms based on media type
+    if (_currentPost.platforms.isEmpty) {
+      final platforms = _selectDefaultPlatforms(
+        _currentPost.content.text,
+        true, // hasMedia is true since we just added media
+        false, // hasMediaReference is false since this is direct selection
       );
+      _currentPost = _currentPost.copyWith(platforms: platforms);
+    }
 
-      _postState = isPostComplete ? PostState.ready : PostState.needsMedia;
-      _triggerDebouncedSave();
-      notifyListeners();
+    // Update state flags
+    _hasMedia = media.isNotEmpty;
+    _hasError = false;
+    _errorMessage = null;
+    _needsMediaSelection = false;
+    _safeNotifyListeners();
 
-      if (kDebugMode) {
-        print('✅ Media replaced: ${media.length} items');
-      }
-    } else {
-      // If no current post, treat as pre-selected media
-      _preSelectedMedia.clear();
-      _preSelectedMedia.addAll(media);
-      notifyListeners();
-
-      if (kDebugMode) {
-        print(
-            '✅ Pre-selected media updated: ${_preSelectedMedia.length} items');
-      }
+    if (kDebugMode) {
+      print('✅ Media replaced: ${media.length} items');
+      print('   Platforms: ${_currentPost.platforms}');
+      print('   hasMedia getter returns: $hasMedia');
     }
   }
 
@@ -782,15 +1262,14 @@ class SocialActionPostCoordinator extends ChangeNotifier {
   void syncWithExistingPost(SocialAction existingPost) {
     _currentPost = existingPost;
     _currentTranscription = existingPost.internal.originalTranscription;
-    _postState = hasContent ? PostState.ready : PostState.needsContent;
-    _lastError = null;
+    // SIMPLIFIED: Clear state after syncing
+    _hasError = false;
+    _errorMessage = null;
 
     // Clear pre-selected media since we now have a complete post
     if (existingPost.content.media.isNotEmpty) {
       _preSelectedMedia.clear();
     }
-
-    notifyListeners();
 
     if (kDebugMode) {
       print(
@@ -800,19 +1279,19 @@ class SocialActionPostCoordinator extends ChangeNotifier {
 
   /// Update post schedule through coordinator
   Future<void> updatePostSchedule(String newSchedule) async {
-    if (_currentPost == null) return;
-
-    _currentPost = _currentPost!.copyWith(
+    _currentPost = _currentPost.copyWith(
       options: Options(
         schedule: newSchedule,
-        locationTag: _currentPost!.options.locationTag,
-        visibility: _currentPost!.options.visibility,
-        replyToPostId: _currentPost!.options.replyToPostId,
+        locationTag: _currentPost.options.locationTag,
+        visibility: _currentPost.options.visibility,
+        replyToPostId: _currentPost.options.replyToPostId,
       ),
     );
 
-    _triggerDebouncedSave();
-    notifyListeners();
+    // SIMPLIFIED: Clear state after updating
+    _hasError = false;
+    _errorMessage = null;
+    _safeNotifyListeners();
 
     if (kDebugMode) {
       print('✅ Schedule updated via coordinator: $newSchedule');
@@ -821,38 +1300,30 @@ class SocialActionPostCoordinator extends ChangeNotifier {
 
   /// Upload finalized post to Firestore
   Future<void> uploadFinalizedPost() async {
-    if (_currentPost == null) {
-      throw Exception('No post to upload');
-    }
-
     try {
-      await _firestoreService.saveAction(_currentPost!.toJson());
+      await _firestoreService.saveAction(_currentPost.toJson());
 
       if (kDebugMode) {
-        print('✅ Finalized post uploaded: ${_currentPost!.actionId}');
+        print('✅ Finalized post uploaded: ${_currentPost.actionId}');
       }
     } catch (e) {
       if (kDebugMode) {
         print('❌ Failed to upload finalized post: $e');
       }
+      setError(e.toString());
       rethrow;
     }
   }
 
   /// Execute post across all selected social media platforms
   Future<Map<String, bool>> executePostToSocialMedia() async {
-    if (_currentPost == null) {
-      throw Exception('No post to execute');
-    }
-
     try {
       if (kDebugMode) {
         print(
-            '🚀 Executing post across platforms: ${_currentPost!.platforms.join(', ')}');
+            '🚀 Executing post across platforms: ${_currentPost.platforms.join(', ')}');
       }
 
-      final results =
-          await _socialPostService.postToAllPlatforms(_currentPost!);
+      final results = await _socialPostService.postToAllPlatforms(_currentPost);
 
       if (kDebugMode) {
         print('✅ Social media posting completed');
@@ -866,19 +1337,29 @@ class SocialActionPostCoordinator extends ChangeNotifier {
       if (kDebugMode) {
         print('❌ Failed to execute post: $e');
       }
+      setError(e.toString());
       rethrow;
     }
   }
 
   /// Complete post workflow: Upload to Firestore + Execute on social media
   Future<Map<String, bool>> finalizeAndExecutePost() async {
-    if (_currentPost == null) {
-      throw Exception('No post to finalize and execute');
-    }
-
     try {
       if (kDebugMode) {
-        print('🎯 Finalizing and executing post: ${_currentPost!.actionId}');
+        print('🎯 Finalizing and executing post: ${_currentPost.actionId}');
+      }
+
+      // CRITICAL: Ensure media is included from preSelectedMedia if not already in post
+      if (_currentPost.content.media.isEmpty && _preSelectedMedia.isNotEmpty) {
+        _currentPost = _currentPost.copyWith(
+          content: _currentPost.content.copyWith(
+            media: List.from(_preSelectedMedia),
+          ),
+        );
+        if (kDebugMode) {
+          print(
+              '✅ Added ${_preSelectedMedia.length} pre-selected media items to post');
+        }
       }
 
       // Step 1: Upload finalized post to Firestore
@@ -887,12 +1368,18 @@ class SocialActionPostCoordinator extends ChangeNotifier {
       // Step 2: Execute post across social media platforms
       final executionResults = await executePostToSocialMedia();
 
-      // Step 3: Clean up coordinator state after successful posting
+      // Step 3: Handle results and transition to appropriate state
       final allSucceeded = executionResults.values.every((success) => success);
       if (allSucceeded) {
         reset();
         if (kDebugMode) {
           print('🔄 Coordinator state reset after successful posting');
+        }
+      } else {
+        setError(
+            'Some platforms failed: ${executionResults.entries.where((e) => !e.value).map((e) => e.key).join(', ')}');
+        if (kDebugMode) {
+          print('⚠️ Some platforms failed, transitioned to notRecording state');
         }
       }
 
@@ -901,92 +1388,424 @@ class SocialActionPostCoordinator extends ChangeNotifier {
       if (kDebugMode) {
         print('❌ Failed to finalize and execute post: $e');
       }
+      setError(e.toString());
       rethrow;
     }
   }
 
-  /// Check if post is ready for execution
-  bool get isReadyForExecution {
-    if (_currentPost == null) return false;
+  /// CRITICAL: Safe notify listeners that checks disposal state
+  void _safeNotifyListeners() {
+    if (_isDisposed) {
+      if (kDebugMode) {
+        print('⚠️ Attempted to notify listeners after disposal - skipping');
+      }
+      return;
+    }
 
-    final hasContent = _currentPost!.content.text.isNotEmpty;
-    final hasPlatforms = _currentPost!.platforms.isNotEmpty;
+    // CRITICAL: Additional safety check - don't notify during transitions
+    if (_isTransitioning) {
+      if (kDebugMode) {
+        print('⚠️ Attempted to notify listeners during transition - deferring');
+      }
+      // Defer notification until transition completes
+      Timer(const Duration(milliseconds: 50), () {
+        if (!_isDisposed && !_isTransitioning) {
+          _safeNotifyListeners();
+        }
+      });
+      return;
+    }
 
-    return hasContent && hasPlatforms && _isMediaRequirementMet;
+    try {
+      notifyListeners();
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ Error in notifyListeners: $e');
+      }
+    }
   }
 
-  /// Get execution readiness status with detailed feedback
-  PostExecutionReadiness get executionReadiness {
-    if (_currentPost == null) {
-      return PostExecutionReadiness(
-        isReady: false,
-        missingRequirements: ['No post content'],
-      );
+  /// Extract hashtags from text content (spoken hashtags)
+  List<String> _extractHashtagsFromText(String text) {
+    // Match hashtags in the format #hashtag or #HashTag
+    final hashtagRegex = RegExp(r'#([a-zA-Z0-9_]+)', multiLine: true);
+    final matches = hashtagRegex.allMatches(text);
+
+    final extractedHashtags = matches
+        .map((match) => match.group(1)!)
+        .where((hashtag) => hashtag.isNotEmpty)
+        .map((hashtag) => hashtag.toLowerCase()) // Normalize to lowercase
+        .toSet() // Remove duplicates
+        .toList();
+
+    return extractedHashtags;
+  }
+
+  // CRITICAL: Persistent text editing management
+  // These methods provide coordinator-managed text editing that persists across UI rebuilds
+
+  /// Start text editing session with persistent controller
+  TextEditingController startTextEditing() {
+    if (_isDisposed) {
+      throw StateError('Cannot start text editing - coordinator is disposed');
     }
 
-    final missingRequirements = <String>[];
+    // Dispose existing controller if any
+    _textEditingController?.dispose();
 
-    if (_currentPost!.content.text.isEmpty) {
-      missingRequirements.add('Post text is empty');
+    // Create new controller with current text
+    final currentText = _currentPost.content.text;
+    _textEditingController = TextEditingController(text: currentText);
+    _editingOriginalText = currentText;
+    _isTextEditing = true;
+
+    if (kDebugMode) {
+      print('📝 Text editing session started');
+      print('   Original text: "$currentText"');
     }
 
-    if (_currentPost!.platforms.isEmpty) {
-      missingRequirements.add('No platforms selected');
+    _safeNotifyListeners();
+    return _textEditingController!;
+  }
+
+  /// Commit text editing changes
+  Future<void> commitTextEditing() async {
+    if (!_isTextEditing || _textEditingController == null) {
+      if (kDebugMode) {
+        print('⚠️ No active text editing session to commit');
+      }
+      return;
     }
 
-    // Check platform-specific media requirements
-    if (!_isMediaRequirementMet) {
-      final requiresMediaPlatforms = _currentPost!.platforms
-          .where((platform) =>
-              _mediaRequiredPlatforms.contains(platform.toLowerCase()))
-          .toList();
+    final newText = _textEditingController!.text.trim();
 
-      if (requiresMediaPlatforms.isNotEmpty) {
-        missingRequirements
-            .add('Media required for ${requiresMediaPlatforms.join(', ')}');
+    // Only update if text actually changed
+    if (newText != _editingOriginalText) {
+      await updatePostContent(newText);
+
+      if (kDebugMode) {
+        print('✅ Text editing committed');
+        print('   Old text: "$_editingOriginalText"');
+        print('   New text: "$newText"');
+      }
+    } else {
+      if (kDebugMode) {
+        print('📝 Text editing cancelled - no changes made');
       }
     }
 
-    return PostExecutionReadiness(
-      isReady: missingRequirements.isEmpty,
-      missingRequirements: missingRequirements,
-    );
+    _endTextEditingSession();
+  }
+
+  /// Cancel text editing without saving changes
+  void cancelTextEditing() {
+    if (kDebugMode) {
+      print('❌ Text editing cancelled');
+    }
+    _endTextEditingSession();
+  }
+
+  /// Internal method to clean up text editing session
+  void _endTextEditingSession() {
+    _textEditingController?.dispose();
+    _textEditingController = null;
+    _editingOriginalText = null;
+    _isTextEditing = false;
+    _safeNotifyListeners();
   }
 
   @override
   void dispose() {
+    if (kDebugMode) {
+      print('🗑️ SocialActionPostCoordinator: Starting disposal...');
+    }
+
+    _isDisposed = true;
+    _stateTransitionDebouncer?.cancel();
+    _saveDebouncer?.cancel();
     _debounceTimer?.cancel();
+    _endTextEditingSession();
+
+    if (kDebugMode) {
+      print('🗑️ SocialActionPostCoordinator: Disposal complete');
+    }
+
+    _statusTimer?.cancel();
     super.dispose();
   }
-}
 
-/// Represents the current state of the post creation process
-enum PostState {
-  idle,
-  recording,
-  processing,
-  ready,
-  needsContent,
-  needsMedia,
-  error,
-}
+  /// Process voice command with media
+  Future<void> processVoiceCommand(String transcription,
+      {List<MediaItem>? preSelectedMedia}) async {
+    try {
+      _isProcessing = true;
+      _hasError = false;
+      _errorMessage = null;
+      notifyListeners();
 
-/// Represents the readiness status for post execution
-class PostExecutionReadiness {
-  final bool isReady;
-  final List<String> missingRequirements;
+      final action = await _aiService.processVoiceCommand(
+        transcription,
+        preSelectedMedia: preSelectedMedia,
+      );
 
-  const PostExecutionReadiness({
-    required this.isReady,
-    required this.missingRequirements,
-  });
+      // Check if AI service indicates media selection is needed
+      _needsMediaSelection = action.needsMediaSelection;
 
-  @override
-  String toString() {
-    if (isReady) {
-      return 'Ready for execution';
+      // Merge AI-generated content with existing post
+      _currentPost = _mergeWithExisting(action);
+      _hasContent = _currentPost.content.text.isNotEmpty;
+      _hasMedia = _currentPost.content.media.isNotEmpty;
+      _isProcessing = false;
+      notifyListeners();
+    } catch (e) {
+      _isProcessing = false;
+      setError(e.toString());
+      rethrow;
+    }
+  }
+
+  void clearNeedsMediaSelection() {
+    _needsMediaSelection = false;
+    _temporaryStatus = null;
+    _statusTimer?.cancel();
+    _safeNotifyListeners();
+
+    if (kDebugMode) {
+      print('✅ Cleared needsMediaSelection flag and status');
+    }
+  }
+
+  /// Set error state
+  void setError(String message) {
+    _hasError = true;
+    _errorMessage = message;
+    requestStatusUpdate(message, StatusMessageType.error);
+  }
+
+  /// Stop recording state
+  Future<void> stopRecording() async {
+    if (_isDisposed || _isTransitioning) return;
+    _isTransitioning = true;
+
+    try {
+      // Reset core recording flags
+      _isRecording = false;
+      _isStartLocked = false;
+      _isProcessing = false;
+      _isVoiceDictating = false;
+
+      // Clear recording mode context
+      _mediaCoordinator.setRecordingModeContext(false);
+
+      // Log recording statistics
+      if (kDebugMode) {
+        print('🛑 Recording stopped');
+        if (_hasSpeechDetected) {
+          print('   Speech detected during recording');
+          print('   Max amplitude: ${_maxAmplitude.toStringAsFixed(1)} dBFS');
+          print(
+              '   Average amplitude: ${(_amplitudeSum / _amplitudeSamples).toStringAsFixed(1)} dBFS');
+        } else {
+          print('⚠️ No speech detected during recording');
+        }
+      }
+
+      // Handle no speech detection case
+      if (!_hasSpeechDetected) {
+        _isTransitioning = false;
+        _isStartLocked = false; // Ensure start lock is cleared
+
+        // Request a temporary status update that will be cleared on next recording
+        requestStatusUpdate(
+          'No speech detected. Please try again.',
+          StatusMessageType.warning,
+          duration: const Duration(seconds: 3),
+        );
+
+        // Reset state but keep the temporary status
+        reset();
+        return;
+      }
+
+      _safeNotifyListeners();
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ Error stopping recording: $e');
+      }
+      // Ensure states are reset even on error
+      _isRecording = false;
+      _isStartLocked = false;
+      _isProcessing = false;
+      _isVoiceDictating = false;
+      setError('Failed to stop recording: $e');
+    } finally {
+      _isTransitioning = false;
+    }
+  }
+
+  // Semantic Visual State - App-wide UI consistency
+  Color getActionButtonColor() {
+    if (_isRecording) return const Color(0xFFFF0080);
+    if (_isProcessing) return Colors.orange;
+    if (_needsMediaSelection) return Colors.blue;
+    if (_hasContent) return const Color(0xFFFF0080);
+    return Colors.white.withValues(alpha: 0.2);
+  }
+
+  IconData getActionButtonIcon() {
+    if (_isRecording) return Icons.stop;
+    if (_isProcessing) return Icons.hourglass_empty;
+    if (_needsMediaSelection) return Icons.photo_library;
+    if (_hasContent) return Icons.send;
+    return Icons.mic;
+  }
+
+  Color getVoiceDictationColor() {
+    if (_isRecording && _isVoiceDictating) return const Color(0xFFFF0080);
+    if (_isProcessing) return Colors.orange;
+    return Colors.white.withValues(alpha: 0.9);
+  }
+
+  IconData getVoiceDictationIcon() {
+    return _isRecording && _isVoiceDictating ? Icons.stop : Icons.mic;
+  }
+
+  String getStatusMessage() => _activeStatus!.message;
+  Color getStatusColor() => _activeStatus!.getColor();
+
+  // Direct action methods to prevent state derivation in widgets
+  bool get isVoiceRecording => _isRecording && _isVoiceDictating;
+
+  /// Toggle voice dictation mode with proper MediaCoordinator sync
+  Future<void> toggleVoiceDictation() async {
+    if (_isDisposed || _isTransitioning) return;
+    _isTransitioning = true;
+
+    try {
+      if (_isVoiceDictating && _isRecording) {
+        await stopRecording();
+      } else {
+        await startRecordingWithMode(isVoiceDictation: true);
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ Error toggling voice dictation: $e');
+      }
+      setError('Failed to toggle voice dictation: $e');
+    } finally {
+      _isTransitioning = false;
+    }
+  }
+
+  Future<void> handleActionButtonPress() async {
+    if (_isRecording) {
+      await stopRecording();
+    } else if (_needsMediaSelection) {
+      // This should trigger navigation to media selection in the UI
+      // The actual navigation happens in the widget, not here
+      if (kDebugMode) {
+        print(
+            '🔵 Media selection needed - UI should navigate to media selection');
+      }
+      return;
+    } else if (_hasContent) {
+      await finalizeAndExecutePost();
     } else {
-      return 'Not ready: ${missingRequirements.join(', ')}';
+      await startRecordingWithMode(isVoiceDictation: false);
+    }
+  }
+
+  StatusMessage _computePrimaryStatus() {
+    if (_isProcessing) {
+      return StatusMessage(
+        message: 'Processing your voice command...',
+        type: StatusMessageType.processing,
+      );
+    }
+    if (_isRecording) {
+      final remainingSeconds = maxRecordingDuration - _recordingDuration;
+      return StatusMessage(
+        message: _isVoiceDictating
+            ? 'Dictating... ${remainingSeconds}s'
+            : 'Recording command... ${remainingSeconds}s',
+        type: StatusMessageType.recording,
+      );
+    }
+    if (_hasError) {
+      return StatusMessage(
+        message: _errorMessage ?? 'An error occurred',
+        type: StatusMessageType.error,
+      );
+    }
+    if (_needsMediaSelection) {
+      return StatusMessage(
+        message: 'Please select media for your post',
+        type: StatusMessageType.info,
+      );
+    }
+    if (_currentTranscription.isEmpty) {
+      return StatusMessage(
+        message: 'Welcome to EchoPost.',
+        type: StatusMessageType.info,
+      );
+    }
+    return StatusMessage(
+      message: _currentTranscription,
+      type: StatusMessageType.info,
+    );
+  }
+
+  StatusMessage? get _activeStatus =>
+      _temporaryStatus ?? _computePrimaryStatus();
+
+  void requestStatusUpdate(String message, StatusMessageType type,
+      {Duration? duration}) {
+    _statusTimer?.cancel();
+
+    _temporaryStatus = StatusMessage(
+      message: message,
+      type: type,
+    );
+
+    if (duration != null) {
+      _statusTimer = Timer(duration, () {
+        _temporaryStatus = null;
+        _safeNotifyListeners();
+      });
+    }
+
+    _safeNotifyListeners();
+  }
+
+  /// Request all required permissions (directory and microphone)
+  Future<bool> requestAllPermissions() async {
+    try {
+      if (kDebugMode) {
+        print('🔐 Requesting all required permissions...');
+      }
+
+      // Request directory permissions first
+      final directoryPermissionState =
+          await PhotoManager.requestPermissionExtend();
+      final hasDirectoryPermission = directoryPermissionState.hasAccess;
+
+      // Request microphone permission
+      final hasMicrophonePermission =
+          await Permission.microphone.request().isGranted;
+
+      if (kDebugMode) {
+        print('📱 Permission status:');
+        print('   Directory: ${hasDirectoryPermission ? '✅' : '❌'}');
+        print('   Microphone: ${hasMicrophonePermission ? '✅' : '❌'}');
+      }
+
+      return hasDirectoryPermission && hasMicrophonePermission;
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ Error requesting permissions: $e');
+      }
+      setError('Failed to request permissions: $e');
+      return false;
     }
   }
 }

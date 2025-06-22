@@ -1,13 +1,7 @@
 import 'package:flutter/material.dart';
 import 'ripple_circle.dart';
 import '../constants/typography.dart';
-
-enum SocialPlatform {
-  instagram,
-  facebook,
-  twitter,
-  tiktok,
-}
+import '../constants/social_platforms.dart';
 
 class SocialIcon extends StatefulWidget {
   final SocialPlatform platform;
@@ -65,22 +59,6 @@ class _SocialIconState extends State<SocialIcon> with TickerProviderStateMixin {
     super.dispose();
   }
 
-  IconData _getIconData() {
-    switch (widget.platform) {
-      case SocialPlatform.facebook:
-        return Icons.facebook; // Facebook icon
-      case SocialPlatform.instagram:
-        return Icons
-            .photo_camera; // Instagram camera icon - more representative
-      case SocialPlatform.twitter:
-        return Icons
-            .tag; // X/Twitter icon - hashtag represents social media/Twitter
-      case SocialPlatform.tiktok:
-        return Icons
-            .play_circle_fill; // TikTok play icon - represents video content
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
@@ -91,10 +69,8 @@ class _SocialIconState extends State<SocialIcon> with TickerProviderStateMixin {
           // Ripple effect when selected
           if (widget.isSelected)
             RippleCircle(
-              color: const Color(0xFFFF0080),
-              size: widget.size *
-                  1.2, // Slightly larger ripple for better visual effect
-              duration: const Duration(milliseconds: 1200),
+              color: widget.platform.color,
+              amplitude: 1.0,
             ),
 
           // Icon container
@@ -112,14 +88,14 @@ class _SocialIconState extends State<SocialIcon> with TickerProviderStateMixin {
                         widget.isSelected ? Colors.transparent : Colors.white,
                     border: widget.isSelected
                         ? Border.all(
-                            color: const Color(0xFFFF0080),
+                            color: widget.platform.color,
                             width: 2,
                           )
                         : null,
                     boxShadow: widget.isSelected
                         ? [
                             BoxShadow(
-                              color: const Color(0xFFFF0080)
+                              color: widget.platform.color
                                   .withAlpha((0.3 * 255).round()),
                               blurRadius: 8,
                               spreadRadius: 1,
@@ -128,9 +104,9 @@ class _SocialIconState extends State<SocialIcon> with TickerProviderStateMixin {
                         : null,
                   ),
                   child: Icon(
-                    _getIconData(),
+                    widget.platform.icon,
                     color: widget.isSelected
-                        ? const Color(0xFFFF0080)
+                        ? widget.platform.color
                         : Colors.black,
                     size: widget.size * 0.5,
                   ),
@@ -164,13 +140,12 @@ class SocialIconsRow extends StatelessWidget {
   Widget build(BuildContext context) {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-      children: [
-        _buildSocialIcon('facebook', Icons.facebook, Colors.blue.shade700),
-        _buildSocialIcon('instagram', Icons.camera_alt, Colors.pink.shade400),
-        _buildSocialIcon(
-            'twitter', Icons.alternate_email, Colors.lightBlue.shade400),
-        _buildSocialIcon('tiktok', Icons.music_note, const Color(0xFFFF0050)),
-      ],
+      children: SocialPlatforms.all
+          .map((platform) => _buildSocialIcon(
+              platform,
+              SocialPlatforms.getIcon(platform),
+              SocialPlatforms.getColor(platform)))
+          .toList(),
     );
   }
 
@@ -188,9 +163,7 @@ class SocialIconsRow extends StatelessWidget {
             if (isSelected)
               RippleCircle(
                 color: color,
-                size: maxHeight *
-                    1.1, // Increased from 0.9 to 1.1 for more prominent ripple effect with larger icons
-                duration: const Duration(milliseconds: 1200),
+                amplitude: 1.0,
               ),
 
             // Circular icon container
@@ -267,6 +240,8 @@ class SocialIconsRow extends StatelessWidget {
         return 'FB';
       case 'instagram':
         return 'IG';
+      case 'youtube':
+        return 'YT';
       case 'twitter':
         return 'X';
       case 'tiktok':

@@ -18,8 +18,7 @@ class UnifiedMediaButtons extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     // Grid spacing constants
-    const double _spacing2 = 12.0;
-    const double _spacing3 = 18.0;
+    const double spacing2 = 12.0;
 
     return Container(
       width: double.infinity,
@@ -44,13 +43,13 @@ class UnifiedMediaButtons extends StatelessWidget {
                 foregroundColor: const Color(0xFFFF0080),
                 side: const BorderSide(color: Color(0xFFFF0080)),
                 shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(_spacing2),
+                  borderRadius: BorderRadius.circular(spacing2),
                 ),
               ),
             ),
           ),
 
-          const SizedBox(width: _spacing2), // Gap between buttons
+          const SizedBox(width: spacing2), // Gap between buttons
 
           // Media selection button (right side)
           Expanded(
@@ -68,7 +67,7 @@ class UnifiedMediaButtons extends StatelessWidget {
                 foregroundColor: const Color(0xFFFF0080),
                 side: const BorderSide(color: Color(0xFFFF0080)),
                 shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(_spacing2),
+                  borderRadius: BorderRadius.circular(spacing2),
                 ),
               ),
             ),

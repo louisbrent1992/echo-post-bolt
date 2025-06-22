@@ -4,9 +4,13 @@ import 'package:path/path.dart' as path;
 import 'package:path_provider/path_provider.dart';
 import 'package:exif/exif.dart';
 import 'package:flutter/foundation.dart';
+import 'package:geocoding/geocoding.dart';
+import 'package:intl/intl.dart';
+import 'dart:math';
 
 import 'directory_service.dart';
 import 'app_settings_service.dart';
+import 'temporal_context_extractor.dart';
 
 class MediaMetadataService extends ChangeNotifier {
   static const String _cacheFileName = 'media_metadata_cache.json';
@@ -17,6 +21,9 @@ class MediaMetadataService extends ChangeNotifier {
   bool _isInitialized = false;
   DirectoryService? _directoryService;
   AppSettingsService? _appSettingsService;
+  final DateFormat _dateFormat = DateFormat('yyyy-MM-dd');
+  final TemporalContextExtractor _temporalContextExtractor =
+      TemporalContextExtractor();
 
   // Getters
   bool get isInitialized => _isInitialized;
@@ -120,24 +127,80 @@ class MediaMetadataService extends ChangeNotifier {
                 final mediaId = file.path;
                 mediaItems[mediaId] = metadata;
 
-                // Add to date index
-                final date =
-                    metadata['creation_time']?.toString().split('T')[0];
-                if (date != null) {
-                  mediaByDate.putIfAbsent(date, () => []).add(mediaId);
+                // Add to date indices based on creation_date from date_data
+                final dateData = metadata['date_data'] as Map<String, dynamic>;
+                final creationDate =
+                    dateData['creation_date']?.toString().split('T')[0];
+                if (creationDate != null) {
+                  // Add to daily index
+                  mediaByDate.putIfAbsent(creationDate, () => []).add(mediaId);
+
+                  // Add to monthly index
+                  final monthKey =
+                      '${dateData['year']}-${dateData['month'].toString().padLeft(2, '0')}';
+                  mediaByDate
+                      .putIfAbsent('month_$monthKey', () => [])
+                      .add(mediaId);
+
+                  // Add to yearly index
+                  final yearKey = dateData['year'].toString();
+                  mediaByDate
+                      .putIfAbsent('year_$yearKey', () => [])
+                      .add(mediaId);
+
+                  // Add to weekday index
+                  final weekdayKey = 'weekday_${dateData['weekday']}';
+                  mediaByDate.putIfAbsent(weekdayKey, () => []).add(mediaId);
+
+                  // Add to time of day index
+                  final hour = dateData['hour'] as int;
+                  String timeOfDay;
+                  if (hour >= 5 && hour < 12) {
+                    timeOfDay = 'morning';
+                  } else if (hour >= 12 && hour < 17) {
+                    timeOfDay = 'afternoon';
+                  } else if (hour >= 17 && hour < 21) {
+                    timeOfDay = 'evening';
+                  } else {
+                    timeOfDay = 'night';
+                  }
+                  mediaByDate
+                      .putIfAbsent('time_$timeOfDay', () => [])
+                      .add(mediaId);
                 }
 
                 // Add to folder index
                 mediaByFolder.putIfAbsent(dirPath, () => []).add(mediaId);
 
-                // Add to location index if coordinates exist
-                if (metadata['latitude'] != null &&
-                    metadata['longitude'] != null) {
-                  final locationKey =
-                      '${metadata['latitude']},${metadata['longitude']}';
+                // Add to location indices if coordinates exist
+                final locationData =
+                    metadata['location_data'] as Map<String, dynamic>;
+                if (locationData['latitude'] != null &&
+                    locationData['longitude'] != null) {
+                  // Add to coordinates index
+                  final coordKey =
+                      '${locationData['latitude']},${locationData['longitude']}';
                   mediaByLocation
-                      .putIfAbsent(locationKey, () => [])
+                      .putIfAbsent('coord_$coordKey', () => [])
                       .add(mediaId);
+
+                  // Add to city index if available
+                  if (locationData['city'] != null) {
+                    final cityKey =
+                        locationData['city'].toString().toLowerCase();
+                    mediaByLocation
+                        .putIfAbsent('city_$cityKey', () => [])
+                        .add(mediaId);
+                  }
+
+                  // Add to country index if available
+                  if (locationData['country'] != null) {
+                    final countryKey =
+                        locationData['country'].toString().toLowerCase();
+                    mediaByLocation
+                        .putIfAbsent('country_$countryKey', () => [])
+                        .add(mediaId);
+                  }
                 }
 
                 directoriesInfo[dirPath]!['media_count']++;
@@ -158,6 +221,7 @@ class MediaMetadataService extends ChangeNotifier {
       'media_by_folder': mediaByFolder,
       'media_by_location': mediaByLocation,
       'directories': directoriesInfo,
+      'last_update': DateTime.now().toIso8601String(),
     };
 
     await _saveCache();
@@ -215,6 +279,25 @@ class MediaMetadataService extends ChangeNotifier {
         'height': 0,
         'duration': 0,
         'folder': path.dirname(file.path),
+        'location_data': {
+          'latitude': null,
+          'longitude': null,
+          'location_name': null,
+          'city': null,
+          'country': null,
+          'address': null,
+        },
+        'date_data': {
+          'creation_date': stats.modified.toIso8601String(),
+          'date_taken': null,
+          'date_modified': stats.modified.toIso8601String(),
+          'year': stats.modified.year,
+          'month': stats.modified.month,
+          'day': stats.modified.day,
+          'weekday': stats.modified.weekday,
+          'hour': stats.modified.hour,
+          'is_weekend': stats.modified.weekday > 5,
+        }
       };
 
       if (mimeType.startsWith('image/')) {
@@ -229,11 +312,39 @@ class MediaMetadataService extends ChangeNotifier {
             final gpsLatRef = exifData['GPS GPSLatitudeRef'];
             final gpsLonRef = exifData['GPS GPSLongitudeRef'];
 
+            double? latitude;
+            double? longitude;
+
             if (gpsLat != null && gpsLon != null) {
-              final lat = _parseGpsCoordinate(gpsLat, gpsLatRef?.toString());
-              final lon = _parseGpsCoordinate(gpsLon, gpsLonRef?.toString());
-              if (lat != null) metadata['latitude'] = lat;
-              if (lon != null) metadata['longitude'] = lon;
+              latitude = _parseGpsCoordinate(gpsLat, gpsLatRef?.toString());
+              longitude = _parseGpsCoordinate(gpsLon, gpsLonRef?.toString());
+
+              if (latitude != null && longitude != null) {
+                metadata['location_data']['latitude'] = latitude;
+                metadata['location_data']['longitude'] = longitude;
+
+                // Attempt reverse geocoding
+                try {
+                  final placemarks =
+                      await placemarkFromCoordinates(latitude, longitude);
+                  if (placemarks.isNotEmpty) {
+                    final place = placemarks.first;
+                    metadata['location_data']['location_name'] = place.name;
+                    metadata['location_data']['city'] = place.locality;
+                    metadata['location_data']['country'] = place.country;
+                    metadata['location_data']['address'] = [
+                      place.street,
+                      place.locality,
+                      place.administrativeArea,
+                      place.country,
+                    ].where((e) => e != null && e.isNotEmpty).join(', ');
+                  }
+                } catch (e) {
+                  if (kDebugMode) {
+                    print('⚠️ Failed to reverse geocode location: $e');
+                  }
+                }
+              }
             }
 
             // Extract image dimensions
@@ -249,26 +360,70 @@ class MediaMetadataService extends ChangeNotifier {
               metadata['height'] = int.tryParse(height.toString()) ?? 0;
             }
 
-            // Extract creation date from EXIF
+            // Extract creation date from EXIF with enhanced parsing
             final dateTime =
                 exifData['Image DateTime'] ?? exifData['EXIF DateTimeOriginal'];
             if (dateTime != null) {
-              final dateString = dateTime.toString();
-              final formattedDate =
-                  dateString.substring(0, 10).replaceAll(':', '-') +
-                      (dateString.length > 10 ? dateString.substring(10) : '');
-              final parsedDate = DateTime.tryParse(formattedDate);
-              if (parsedDate != null) {
-                metadata['creation_time'] = parsedDate.toIso8601String();
+              try {
+                final dateString = dateTime.toString();
+                final parsedDate = _parseExifDate(dateString);
+                if (parsedDate != null) {
+                  metadata['date_data']['date_taken'] =
+                      parsedDate.toIso8601String();
+                  metadata['date_data']['creation_date'] =
+                      parsedDate.toIso8601String();
+                  metadata['date_data']['year'] = parsedDate.year;
+                  metadata['date_data']['month'] = parsedDate.month;
+                  metadata['date_data']['day'] = parsedDate.day;
+                  metadata['date_data']['weekday'] = parsedDate.weekday;
+                  metadata['date_data']['hour'] = parsedDate.hour;
+                  metadata['date_data']['is_weekend'] = parsedDate.weekday > 5;
+                }
+              } catch (e) {
+                if (kDebugMode) {
+                  print('⚠️ Failed to parse EXIF date: $e');
+                }
               }
             }
           }
         } catch (e) {
-          // EXIF parsing failed, use file stats
+          if (kDebugMode) {
+            print('⚠️ Failed to extract EXIF data: $e');
+          }
         }
       }
 
       return metadata;
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ Failed to extract metadata: $e');
+      }
+      return null;
+    }
+  }
+
+  DateTime? _parseExifDate(String dateString) {
+    try {
+      // Handle common EXIF date formats
+      final formats = [
+        'yyyy:MM:dd HH:mm:ss',
+        'yyyy-MM-dd HH:mm:ss',
+        'yyyy/MM/dd HH:mm:ss',
+        'yyyy:MM:dd',
+        'yyyy-MM-dd',
+        'yyyy/MM/dd',
+      ];
+
+      for (final format in formats) {
+        try {
+          return DateFormat(format).parse(dateString);
+        } catch (_) {
+          continue;
+        }
+      }
+
+      // Try ISO 8601 as fallback
+      return DateTime.tryParse(dateString);
     } catch (e) {
       return null;
     }
@@ -343,7 +498,9 @@ class MediaMetadataService extends ChangeNotifier {
             'total_directories': 0,
             'total_files': 0,
             'date_range': null,
-            'media_types_available': <String>[]
+            'media_types_available': <String>[],
+            'locations_available': <String>[],
+            'time_periods_available': <String>[],
           }
         }
       };
@@ -361,7 +518,7 @@ class MediaMetadataService extends ChangeNotifier {
       final mediaByLocation = _metadataCache['media_by_location'] ?? {};
       final directoriesInfo = _metadataCache['directories'] ?? {};
 
-      // Use Map for automatic deduplication by media ID (same logic as Media Selection screen)
+      // Use Map for automatic deduplication by media ID
       final Map<String, Map<String, dynamic>> uniqueMediaItems = {};
       int totalProcessed = 0;
 
@@ -402,20 +559,21 @@ class MediaMetadataService extends ChangeNotifier {
               'file_uri': item['file_uri'],
               'file_name': path.basename(item['file_uri']),
               'mime_type': item['mime_type'],
-              'timestamp': item['creation_time'],
+              'location_data': item['location_data'],
+              'date_data': item['date_data'],
               'directory': dirPath,
               'device_metadata': {
-                'creation_time': item['creation_time'],
-                'latitude': item['latitude'],
-                'longitude': item['longitude'],
+                'creation_time': item['date_data']['creation_date'],
+                'latitude': item['location_data']['latitude'],
+                'longitude': item['location_data']['longitude'],
+                'location_name': item['location_data']['location_name'],
+                'city': item['location_data']['city'],
+                'country': item['location_data']['country'],
                 'orientation': item['orientation'] ?? 1,
                 'width': item['width'] ?? 0,
                 'height': item['height'] ?? 0,
                 'file_size_bytes': item['file_size_bytes'] ?? 0,
                 'duration': item['duration'] ?? 0,
-                'bitrate': item['bitrate'],
-                'sampling_rate': item['sampling_rate'],
-                'frame_rate': item['frame_rate']
               }
             };
             totalProcessed++;
@@ -431,22 +589,43 @@ class MediaMetadataService extends ChangeNotifier {
       // Convert deduplicated media back to list and sort by creation time (newest first)
       final deduplicatedMedia = uniqueMediaItems.values.toList();
       deduplicatedMedia.sort((a, b) {
-        final aTime = DateTime.tryParse(a['timestamp'] ?? '') ?? DateTime(1970);
-        final bTime = DateTime.tryParse(b['timestamp'] ?? '') ?? DateTime(1970);
+        final aTime =
+            DateTime.tryParse(a['date_data']['creation_date'] ?? '') ??
+                DateTime(1970);
+        final bTime =
+            DateTime.tryParse(b['date_data']['creation_date'] ?? '') ??
+                DateTime(1970);
         return bTime.compareTo(aTime); // Newest first
       });
 
       // Take only the limit amount after deduplication and sorting
       final recentMedia = deduplicatedMedia.take(contextLimit).toList();
 
-      if (kDebugMode) {
-        print(
-            '🔍 MediaMetadataService: Processed $totalProcessed total items across directories');
-        print(
-            '🔍 MediaMetadataService: After deduplication: ${uniqueMediaItems.length} unique items');
-        print(
-            '🔍 MediaMetadataService: Final AI context contains: ${recentMedia.length} items');
-      }
+      // Get available locations
+      final availableCities = <String>{};
+      final availableCountries = <String>{};
+
+      mediaByLocation.forEach((key, value) {
+        if (key.startsWith('city_')) {
+          availableCities.add(key.substring(5));
+        } else if (key.startsWith('country_')) {
+          availableCountries.add(key.substring(8));
+        }
+      });
+
+      // Get available time periods
+      final availableTimePeriods = <String>{};
+      mediaByDate.forEach((key, value) {
+        if (key.startsWith('month_')) {
+          availableTimePeriods.add('month: ${key.substring(6)}');
+        } else if (key.startsWith('year_')) {
+          availableTimePeriods.add('year: ${key.substring(5)}');
+        } else if (key.startsWith('weekday_')) {
+          availableTimePeriods.add('weekday: ${key.substring(8)}');
+        } else if (key.startsWith('time_')) {
+          availableTimePeriods.add('time of day: ${key.substring(5)}');
+        }
+      });
 
       // Get directory information with stats
       final directoryInfos = directories.map((directory) {
@@ -463,9 +642,10 @@ class MediaMetadataService extends ChangeNotifier {
             .where((item) => item != null)
             .map((item) => {
                   'file_uri': item!['file_uri'],
-                  'file_name': path.basename(item!['file_uri']),
+                  'file_name': path.basename(item['file_uri']),
                   'mime_type': item['mime_type'],
-                  'timestamp': item['creation_time'],
+                  'location_data': item['location_data'],
+                  'date_data': item['date_data'],
                 })
             .toList();
 
@@ -477,13 +657,15 @@ class MediaMetadataService extends ChangeNotifier {
           'name': dirInfo['name'],
           'path': dirInfo['path'],
           'media_count': dirInfo['media_count'],
-          'sample_files':
-              sampleFiles, // Changed from 'recent_files' to 'sample_files' for clarity
+          'sample_files': sampleFiles,
           'stats': {
             'has_location_data': locationStats['has_location'],
             'common_locations': locationStats['common_locations'],
             'date_range': dateRange,
-            'media_types': _getMediaTypesInDirectory(mediaList).keys.toList()
+            'media_types': _getMediaTypesInDirectory(mediaList).keys.toList(),
+            'available_cities': availableCities.toList(),
+            'available_countries': availableCountries.toList(),
+            'available_time_periods': availableTimePeriods.toList(),
           }
         };
       }).toList();
@@ -503,7 +685,16 @@ class MediaMetadataService extends ChangeNotifier {
             'total_directories': directories.length,
             'total_files': _metadataCache['media_items']?.length ?? 0,
             'date_range': _calculateGlobalDateRange(),
-            'media_types_available': _getAllMediaTypes().keys.toList()
+            'media_types_available': _getAllMediaTypes().keys.toList(),
+            'locations_available': {
+              'cities': availableCities.toList(),
+              'countries': availableCountries.toList(),
+              'coordinates': mediaByLocation.keys
+                  .where((key) => key.startsWith('coord_'))
+                  .map((key) => key.substring(5))
+                  .toList(),
+            },
+            'time_periods_available': availableTimePeriods.toList(),
           }
         }
       };
@@ -527,7 +718,13 @@ class MediaMetadataService extends ChangeNotifier {
             'total_directories': 0,
             'total_files': 0,
             'date_range': null,
-            'media_types_available': <String>[]
+            'media_types_available': <String>[],
+            'locations_available': {
+              'cities': <String>[],
+              'countries': <String>[],
+              'coordinates': <String>[],
+            },
+            'time_periods_available': <String>[],
           }
         }
       };
@@ -623,10 +820,44 @@ class MediaMetadataService extends ChangeNotifier {
     return _metadataCache['media_items']?[mediaId];
   }
 
-  List<Map<String, dynamic>> getMediaByDate(String date) {
-    final mediaIds = (_metadataCache['media_by_date']?[date] as List<dynamic>?)
-            ?.cast<String>() ??
-        <String>[];
+  List<Map<String, dynamic>> getMediaByDate(String date, {String? timeframe}) {
+    final mediaIds = <String>[];
+
+    if (timeframe == null) {
+      // Default to exact date match
+      mediaIds.addAll((_metadataCache['media_by_date']?[date] as List<dynamic>?)
+              ?.cast<String>() ??
+          []);
+    } else {
+      // Handle special timeframes
+      switch (timeframe) {
+        case 'month':
+          mediaIds.addAll((_metadataCache['media_by_date']?['month_$date']
+                      as List<dynamic>?)
+                  ?.cast<String>() ??
+              []);
+          break;
+        case 'year':
+          mediaIds.addAll(
+              (_metadataCache['media_by_date']?['year_$date'] as List<dynamic>?)
+                      ?.cast<String>() ??
+                  []);
+          break;
+        case 'weekday':
+          mediaIds.addAll((_metadataCache['media_by_date']?['weekday_$date']
+                      as List<dynamic>?)
+                  ?.cast<String>() ??
+              []);
+          break;
+        case 'time_of_day':
+          mediaIds.addAll(
+              (_metadataCache['media_by_date']?['time_$date'] as List<dynamic>?)
+                      ?.cast<String>() ??
+                  []);
+          break;
+      }
+    }
+
     return mediaIds
         .map((id) => getMediaItem(id))
         .whereType<Map<String, dynamic>>()
@@ -644,21 +875,94 @@ class MediaMetadataService extends ChangeNotifier {
         .toList();
   }
 
-  List<Map<String, dynamic>> getMediaByLocation(
-      double latitude, double longitude) {
-    final locationKey = '$latitude,$longitude';
-    final mediaIds =
-        (_metadataCache['media_by_location']?[locationKey] as List<dynamic>?)
-                ?.cast<String>() ??
-            <String>[];
+  List<Map<String, dynamic>> getMediaByLocation({
+    String? city,
+    String? country,
+    double? latitude,
+    double? longitude,
+    double radiusKm = 1.0,
+  }) {
+    final mediaIds = <String>[];
+
+    if (city != null) {
+      // Search by city
+      final cityKey = 'city_${city.toLowerCase()}';
+      mediaIds.addAll(
+          (_metadataCache['media_by_location']?[cityKey] as List<dynamic>?)
+                  ?.cast<String>() ??
+              []);
+    }
+
+    if (country != null) {
+      // Search by country
+      final countryKey = 'country_${country.toLowerCase()}';
+      mediaIds.addAll(
+          (_metadataCache['media_by_location']?[countryKey] as List<dynamic>?)
+                  ?.cast<String>() ??
+              []);
+    }
+
+    if (latitude != null && longitude != null) {
+      // Search by coordinates within radius
+      final allCoordKeys = _metadataCache['media_by_location']
+              ?.keys
+              .where((key) => key.startsWith('coord_'))
+              .toList() ??
+          [];
+
+      for (final key in allCoordKeys) {
+        final coords = key.substring(5).split(','); // Remove 'coord_' prefix
+        if (coords.length == 2) {
+          final lat = double.tryParse(coords[0]);
+          final lon = double.tryParse(coords[1]);
+
+          if (lat != null && lon != null) {
+            final distance = _calculateDistance(latitude, longitude, lat, lon);
+            if (distance <= radiusKm) {
+              mediaIds.addAll(
+                  (_metadataCache['media_by_location']?[key] as List<dynamic>?)
+                          ?.cast<String>() ??
+                      []);
+            }
+          }
+        }
+      }
+    }
+
+    // Remove duplicates and convert to media items
     return mediaIds
+        .toSet()
+        .toList()
         .map((id) => getMediaItem(id))
         .whereType<Map<String, dynamic>>()
         .toList();
   }
 
+  double _calculateDistance(
+      double lat1, double lon1, double lat2, double lon2) {
+    const double earthRadius = 6371.0; // Earth's radius in kilometers
+
+    // Convert degrees to radians
+    final lat1Rad = lat1 * (pi / 180.0);
+    final lon1Rad = lon1 * (pi / 180.0);
+    final lat2Rad = lat2 * (pi / 180.0);
+    final lon2Rad = lon2 * (pi / 180.0);
+
+    // Haversine formula
+    final dLat = lat2Rad - lat1Rad;
+    final dLon = lon2Rad - lon1Rad;
+    final a = sin(dLat / 2) * sin(dLat / 2) +
+        cos(lat1Rad) * cos(lat2Rad) * sin(dLon / 2) * sin(dLon / 2);
+    final c = 2 * atan2(sqrt(a), sqrt(1 - a));
+
+    return earthRadius * c;
+  }
+
   List<Map<String, dynamic>> getRecentMedia({int limit = 10}) {
-    final dates = _metadataCache['media_by_date']?.keys.toList()
+    final dates = _metadataCache['media_by_date']
+        ?.keys
+        .where((key) => !key.contains('_')) // Filter out special timeframe keys
+        .toList()
       ?..sort((a, b) => b.compareTo(a));
 
     if (dates == null || dates.isEmpty) return [];
@@ -745,6 +1049,69 @@ class MediaMetadataService extends ChangeNotifier {
         print('❌ Error extracting metadata: $e');
       }
       rethrow;
+    }
+  }
+
+  /// Get media items based on temporal context
+  List<Map<String, dynamic>> getMediaByTemporalContext(String query) {
+    final context = _temporalContextExtractor.extractTemporalContext(query);
+    final mediaIds = <String>[];
+
+    // Handle explicit time range
+    if (context['time_range'].isNotEmpty) {
+      final timeRange = context['time_range'];
+      final startTime = timeRange['start'] as DateTime;
+
+      // Add media from time_of_day indices
+      final timeKey = 'time_${_getTimeOfDayFromHour(startTime.hour)}';
+      mediaIds.addAll(
+          (_metadataCache['media_by_date']?[timeKey] as List<dynamic>?)
+                  ?.cast<String>() ??
+              []);
+    }
+
+    // Handle explicit date range
+    if (context['date_range'].isNotEmpty) {
+      final dateRange = context['date_range'];
+      final startDate = dateRange['start'] as DateTime;
+
+      // Add media from date indices
+      final dateKey = _dateFormat.format(startDate);
+      mediaIds.addAll(
+          (_metadataCache['media_by_date']?[dateKey] as List<dynamic>?)
+                  ?.cast<String>() ??
+              []);
+    }
+
+    // Handle temporal terms
+    for (final term in context['temporal_terms'] as List<String>) {
+      final period = _temporalContextExtractor.getTimePeriodRange(term);
+      if (period != null) {
+        final timeKey = 'time_$term';
+        mediaIds.addAll(
+            (_metadataCache['media_by_date']?[timeKey] as List<dynamic>?)
+                    ?.cast<String>() ??
+                []);
+      }
+    }
+
+    // Convert media IDs to metadata
+    return mediaIds
+        .map((id) => getMediaItem(id))
+        .whereType<Map<String, dynamic>>()
+        .toList();
+  }
+
+  /// Get time of day from hour
+  String _getTimeOfDayFromHour(int hour) {
+    if (hour >= 5 && hour < 12) {
+      return 'morning';
+    } else if (hour >= 12 && hour < 17) {
+      return 'afternoon';
+    } else if (hour >= 17 && hour < 21) {
+      return 'evening';
+    } else {
+      return 'night';
     }
   }
 }

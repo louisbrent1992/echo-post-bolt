@@ -11,6 +11,7 @@ import 'services/social_post_service.dart';
 import 'services/ai_service.dart';
 import 'services/media_coordinator.dart';
 import 'services/social_action_post_coordinator.dart';
+import 'services/natural_language_parser.dart';
 import 'screens/login_screen.dart';
 import 'screens/command_screen.dart';
 
@@ -80,82 +81,92 @@ Future<void> main() async {
         Provider<SocialPostService>(
           create: (_) => SocialPostService(),
         ),
-        ChangeNotifierProxyProvider4<MediaCoordinator, AIService,
-            FirestoreService, SocialPostService, SocialActionPostCoordinator>(
-          create: (context) => SocialActionPostCoordinator(
-            mediaCoordinator: context.read<MediaCoordinator>(),
-            firestoreService: context.read<FirestoreService>(),
-            aiService: context.read<AIService>(),
-            socialPostService: context.read<SocialPostService>(),
-          ),
-          update: (context, mediaCoordinator, aiService, firestoreService,
-                  socialPostService, previous) =>
-              previous ??
-              SocialActionPostCoordinator(
-                mediaCoordinator: mediaCoordinator,
-                firestoreService: firestoreService,
-                aiService: aiService,
-                socialPostService: socialPostService,
-              ),
+        Provider<NaturalLanguageParser>(
+          create: (_) => NaturalLanguageParser(),
+        ),
+        ChangeNotifierProvider<SocialActionPostCoordinator>(
+          create: (context) {
+            final coordinator = SocialActionPostCoordinator(
+              mediaCoordinator: context.read<MediaCoordinator>(),
+              firestoreService: context.read<FirestoreService>(),
+              aiService: context.read<AIService>(),
+              socialPostService: context.read<SocialPostService>(),
+              authService: context.read<AuthService>(),
+              naturalLanguageParser: context.read<NaturalLanguageParser>(),
+            );
+
+            if (kDebugMode) {
+              print(
+                  '🔧 SocialActionPostCoordinator created with direct dependencies');
+            }
+
+            return coordinator;
+          },
+          lazy: false,
         ),
       ],
       child: ServiceInitializationWrapper(
-        child: MaterialApp(
-          title: 'EchoPost',
-          theme: ThemeData(
-            colorScheme: ColorScheme.fromSeed(
-              seedColor: Colors.deepPurple,
-              brightness: Brightness.light,
-            ),
-            useMaterial3: true,
-            fontFamily: 'Roboto',
-            appBarTheme: const AppBarTheme(
-              centerTitle: true,
-              elevation: 0,
-            ),
-            elevatedButtonTheme: ElevatedButtonThemeData(
-              style: ElevatedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 24,
-                  vertical: 12,
+        child: Builder(
+          builder: (context) {
+            // Add error boundary to catch framework errors
+            return MaterialApp(
+              title: 'EchoPost',
+              theme: ThemeData(
+                colorScheme: ColorScheme.fromSeed(
+                  seedColor: Colors.deepPurple,
+                  brightness: Brightness.light,
                 ),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8),
+                useMaterial3: true,
+                fontFamily: 'Roboto',
+                appBarTheme: const AppBarTheme(
+                  centerTitle: true,
+                  elevation: 0,
                 ),
-              ),
-            ),
-          ),
-          darkTheme: ThemeData(
-            colorScheme: ColorScheme.fromSeed(
-              seedColor: Colors.deepPurple,
-              brightness: Brightness.dark,
-            ),
-            useMaterial3: true,
-            fontFamily: 'Roboto',
-            appBarTheme: const AppBarTheme(
-              centerTitle: true,
-              elevation: 0,
-            ),
-            elevatedButtonTheme: ElevatedButtonThemeData(
-              style: ElevatedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 24,
-                  vertical: 12,
-                ),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8),
+                elevatedButtonTheme: ElevatedButtonThemeData(
+                  style: ElevatedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 24,
+                      vertical: 12,
+                    ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                  ),
                 ),
               ),
-            ),
-          ),
-          themeMode: ThemeMode.system,
-          home: Consumer<AuthService>(
-            builder: (context, authService, _) {
-              return authService.currentUser != null
-                  ? const CommandScreen()
-                  : const LoginScreen();
-            },
-          ),
+              darkTheme: ThemeData(
+                colorScheme: ColorScheme.fromSeed(
+                  seedColor: Colors.deepPurple,
+                  brightness: Brightness.dark,
+                ),
+                useMaterial3: true,
+                fontFamily: 'Roboto',
+                appBarTheme: const AppBarTheme(
+                  centerTitle: true,
+                  elevation: 0,
+                ),
+                elevatedButtonTheme: ElevatedButtonThemeData(
+                  style: ElevatedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 24,
+                      vertical: 12,
+                    ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                  ),
+                ),
+              ),
+              themeMode: ThemeMode.system,
+              home: Consumer<AuthService>(
+                builder: (context, authService, _) {
+                  return authService.currentUser != null
+                      ? const CommandScreen()
+                      : const LoginScreen();
+                },
+              ),
+            );
+          },
         ),
       ),
     ),
@@ -197,12 +208,12 @@ class _ServiceInitializationWrapperState
         _initializationStatus = 'Initializing media services...';
       });
 
-      // Wait a bit to ensure all providers are ready
-      await Future.delayed(const Duration(milliseconds: 100));
-
       // Initialize MediaCoordinator
       final mediaCoordinator =
           Provider.of<MediaCoordinator>(context, listen: false);
+
+      // Wait a bit to ensure all providers are ready
+      await Future.delayed(const Duration(milliseconds: 100));
 
       if (!mounted) {
         if (kDebugMode) {
@@ -267,9 +278,9 @@ class _ServiceInitializationWrapperState
                   Container(
                     width: 80,
                     height: 80,
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFFF0080),
-                      borderRadius: BorderRadius.circular(20),
+                    decoration: const BoxDecoration(
+                      color: Color(0xFFFF0080),
+                      shape: BoxShape.circle,
                     ),
                     child: const Icon(
                       Icons.mic,

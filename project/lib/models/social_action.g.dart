@@ -164,6 +164,9 @@ PlatformData _$PlatformDataFromJson(Map<String, dynamic> json) => PlatformData(
       instagram: json['instagram'] == null
           ? null
           : InstagramData.fromJson(json['instagram'] as Map<String, dynamic>),
+      youtube: json['youtube'] == null
+          ? null
+          : YouTubeData.fromJson(json['youtube'] as Map<String, dynamic>),
       twitter: json['twitter'] == null
           ? null
           : TwitterData.fromJson(json['twitter'] as Map<String, dynamic>),
@@ -176,6 +179,7 @@ Map<String, dynamic> _$PlatformDataToJson(PlatformData instance) =>
     <String, dynamic>{
       'facebook': instance.facebook?.toJson(),
       'instagram': instance.instagram?.toJson(),
+      'youtube': instance.youtube?.toJson(),
       'twitter': instance.twitter?.toJson(),
       'tiktok': instance.tiktok?.toJson(),
     };
@@ -247,6 +251,35 @@ Carousel _$CarouselFromJson(Map<String, dynamic> json) => Carousel(
 Map<String, dynamic> _$CarouselToJson(Carousel instance) => <String, dynamic>{
       'enabled': instance.enabled,
       'order': instance.order,
+    };
+
+YouTubeData _$YouTubeDataFromJson(Map<String, dynamic> json) => YouTubeData(
+      postHere: json['post_here'] as bool? ?? false,
+      channelId: json['channel_id'] as String? ?? '',
+      privacy: json['privacy'] as String? ?? 'public',
+      videoCategoryId: json['video_category_id'] as String? ?? '22',
+      videoFileUri: json['video_file_uri'] as String?,
+      thumbnailUri: json['thumbnail_uri'] as String?,
+      scheduledTime: json['scheduled_time'] as String?,
+      tags: json['tags'] as String?,
+      enableComments: json['enable_comments'] as bool? ?? true,
+      enableRatings: json['enable_ratings'] as bool? ?? true,
+      madeForKids: json['made_for_kids'] as bool? ?? false,
+    );
+
+Map<String, dynamic> _$YouTubeDataToJson(YouTubeData instance) =>
+    <String, dynamic>{
+      'post_here': instance.postHere,
+      'channel_id': instance.channelId,
+      'privacy': instance.privacy,
+      'video_category_id': instance.videoCategoryId,
+      'video_file_uri': instance.videoFileUri,
+      'thumbnail_uri': instance.thumbnailUri,
+      'scheduled_time': instance.scheduledTime,
+      'tags': instance.tags,
+      'enable_comments': instance.enableComments,
+      'enable_ratings': instance.enableRatings,
+      'made_for_kids': instance.madeForKids,
     };
 
 TwitterData _$TwitterDataFromJson(Map<String, dynamic> json) => TwitterData(

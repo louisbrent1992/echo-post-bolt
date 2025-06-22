@@ -120,7 +120,36 @@ class DirectoryService extends ChangeNotifier {
     try {
       final prefs = await SharedPreferences.getInstance();
       _isCustomDirectoriesEnabled = prefs.getBool(_enabledKey) ?? false;
-      _directories = getPlatformDefaults();
+
+      // Load saved directories
+      final jsonList = prefs.getStringList(_prefsKey) ?? [];
+      final savedDirectories = jsonList.map((dirString) {
+        final params = Map.fromEntries(
+          dirString.split('&').map((param) {
+            final parts = param.split('=');
+            return MapEntry(parts[0], Uri.decodeComponent(parts[1]));
+          }),
+        );
+        return MediaDirectory(
+          id: params['id'] ?? 'custom_${DateTime.now().millisecondsSinceEpoch}',
+          displayName: params['displayName'] ?? '',
+          path: params['path'] ?? '',
+          isDefault: params['isDefault']?.toLowerCase() == 'true',
+          isEnabled: params['isEnabled']?.toLowerCase() == 'true',
+        );
+      }).toList();
+
+      // Merge saved directories with platform defaults
+      final defaults = getPlatformDefaults();
+      _directories = [...defaults];
+
+      // Add non-default saved directories
+      for (final dir in savedDirectories) {
+        if (!dir.isDefault && !_directories.any((d) => d.path == dir.path)) {
+          _directories.add(dir);
+        }
+      }
+
       _isInitialized = true;
       notifyListeners();
     } catch (e) {
@@ -292,7 +321,11 @@ class DirectoryService extends ChangeNotifier {
   Future<void> _saveDirectories() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      final jsonList = _directories.map((dir) {
+
+      // Only save non-default directories since defaults are platform-specific
+      final nonDefaultDirs = _directories.where((dir) => !dir.isDefault);
+
+      final jsonList = nonDefaultDirs.map((dir) {
         final json = dir.toJson();
         return json.entries
             .map((entry) =>
@@ -301,6 +334,11 @@ class DirectoryService extends ChangeNotifier {
       }).toList();
 
       await prefs.setStringList(_prefsKey, jsonList);
+
+      if (kDebugMode) {
+        print(
+            '✅ Saved ${nonDefaultDirs.length} custom directories to preferences');
+      }
     } catch (e) {
       if (kDebugMode) {
         print('❌ Failed to save directories: $e');
@@ -308,7 +346,7 @@ class DirectoryService extends ChangeNotifier {
     }
   }
 
-  void setActiveDirectory(String path) {
+  Future<void> setActiveDirectory(String path) async {
     final directory = _directories.firstWhere(
       (d) => d.path == path,
       orElse: () => MediaDirectory(
@@ -322,13 +360,14 @@ class DirectoryService extends ChangeNotifier {
 
     if (!_directories.contains(directory)) {
       _directories.add(directory);
+      await _saveDirectories();
     }
 
     _activeDirectory = directory;
     notifyListeners();
   }
 
-  void addDirectory(String path) {
+  Future<void> addDirectory(String path) async {
     final displayName = path.split(Platform.pathSeparator).last;
     final directory = MediaDirectory(
       id: 'custom_${DateTime.now().millisecondsSinceEpoch}',
@@ -340,11 +379,12 @@ class DirectoryService extends ChangeNotifier {
 
     if (!_directories.contains(directory)) {
       _directories.add(directory);
+      await _saveDirectories();
       notifyListeners();
     }
   }
 
-  void toggleDirectory(String path, bool enabled) {
+  Future<void> toggleDirectory(String path, bool enabled) async {
     final index = _directories.indexWhere((d) => d.path == path);
     if (index != -1) {
       final directory = _directories[index];
@@ -355,6 +395,7 @@ class DirectoryService extends ChangeNotifier {
         isDefault: directory.isDefault,
         isEnabled: enabled,
       );
+      await _saveDirectories();
       notifyListeners();
     }
   }

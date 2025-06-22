@@ -13,6 +13,30 @@ import 'dart:convert';
 import 'dart:math';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 
+/// Custom exception for when a Google account exists for the email
+class GoogleAccountExistsException implements Exception {
+  final String message;
+  final String email;
+
+  GoogleAccountExistsException(this.message, this.email);
+
+  @override
+  String toString() => 'GoogleAccountExistsException: $message';
+}
+
+/// Custom exception for when an email/password account exists for the email
+class EmailPasswordAccountExistsException implements Exception {
+  final String message;
+  final String email;
+  final AuthCredential? googleCredential;
+
+  EmailPasswordAccountExistsException(
+      this.message, this.email, this.googleCredential);
+
+  @override
+  String toString() => 'EmailPasswordAccountExistsException: $message';
+}
+
 class AuthService extends ChangeNotifier {
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
@@ -98,11 +122,30 @@ class AuthService extends ChangeNotifier {
         idToken: googleAuth.idToken,
       );
 
+      // Check if email exists with password provider
+      final email = googleUser.email;
+      try {
+        // Try to sign in with a dummy password to check if email exists
+        await _auth.signInWithEmailAndPassword(
+          email: email,
+          password: 'dummy-password-that-will-fail',
+        );
+      } on FirebaseAuthException catch (e) {
+        if (e.code == 'wrong-password') {
+          // Email exists with password provider
+          throw EmailPasswordAccountExistsException(
+            'This email already has an account with email/password. To link your Google account, please sign in with your email and password first, then link Google from your account settings.',
+            email,
+            credential,
+          );
+        }
+      }
+
       // Sign in to Firebase with the Google credential
       final userCredential = await _auth.signInWithCredential(credential);
 
       if (userCredential.user != null) {
-        await _createUserDocIfNotExists(userCredential.user!);
+        await _createUserDocIfNotExists(userCredential.user!, 'google.com');
         notifyListeners();
         return userCredential;
       } else {
@@ -114,8 +157,13 @@ class AuthService extends ChangeNotifier {
 
       switch (e.code) {
         case 'account-exists-with-different-credential':
-          throw Exception(
-              'An account already exists with the same email address but different sign-in credentials.');
+          // This should be handled by our pre-check, but handle it anyway
+          final email = (await _googleSignIn.signIn())?.email ?? '';
+          throw EmailPasswordAccountExistsException(
+            'This email already has an account with email/password. To link your Google account, please sign in with your email and password first.',
+            email,
+            null,
+          );
         case 'invalid-credential':
           throw Exception(
               'The credential received is malformed or has expired.');
@@ -136,7 +184,315 @@ class AuthService extends ChangeNotifier {
     } catch (e) {
       // Clear any cached Google Sign-In state on general errors
       await _googleSignIn.signOut();
-      throw Exception('Google Sign-In failed: $e');
+      rethrow;
+    }
+  }
+
+  /// Sign in with email and password
+  /// Automatically creates account if email doesn't exist
+  /// Handles Google account linking with unified password policy
+  Future<UserCredential?> signInWithEmailPassword(
+      String email, String password) async {
+    try {
+      // Validate input using existing helper method
+      if (email.trim().isEmpty || password.isEmpty) {
+        throw Exception('Email and password are required');
+      }
+
+      if (!_isValidEmail(email)) {
+        throw Exception('Please enter a valid email address');
+      }
+
+      if (password.length < 6) {
+        throw Exception('Password must be at least 6 characters long');
+      }
+
+      // Check if email exists with any provider first
+      try {
+        // Try to sign in with a dummy password to check if email exists
+        await _auth.signInWithEmailAndPassword(
+          email: email.trim(),
+          password: 'dummy-password-that-will-fail',
+        );
+        // If we get here, the email/password is valid - should never happen with dummy password
+        throw Exception('Unexpected authentication state');
+      } on FirebaseAuthException catch (e) {
+        if (e.code == 'wrong-password') {
+          // Email exists with password - try to sign in with provided password
+          try {
+            final userCredential = await _auth.signInWithEmailAndPassword(
+              email: email.trim(),
+              password: password,
+            );
+
+            if (userCredential.user != null) {
+              await _createUserDocIfNotExists(userCredential.user!, 'password');
+              notifyListeners();
+              return userCredential;
+            }
+          } on FirebaseAuthException catch (e) {
+            if (e.code == 'wrong-password') {
+              throw Exception('Incorrect password. Please try again.');
+            }
+            rethrow;
+          }
+        } else if (e.code == 'user-not-found') {
+          // Email doesn't exist - create new account
+          if (kDebugMode) {
+            print('Email not found, creating new account for: $email');
+          }
+
+          try {
+            final userCredential = await _auth.createUserWithEmailAndPassword(
+              email: email.trim(),
+              password: password,
+            );
+
+            if (userCredential.user != null) {
+              await _createUserDocIfNotExists(userCredential.user!, 'password');
+              notifyListeners();
+              return userCredential;
+            }
+          } on FirebaseAuthException catch (e) {
+            if (e.code == 'weak-password') {
+              throw Exception(
+                  'Password is too weak. Please choose a stronger password.');
+            } else if (e.code == 'email-already-in-use') {
+              // Race condition - email was created between our check and create attempt
+              throw Exception(
+                  'This email was just registered. Please try signing in instead.');
+            } else {
+              throw Exception('Account creation failed: ${e.message}');
+            }
+          }
+        } else {
+          throw Exception('Sign in failed: ${e.message}');
+        }
+      }
+
+      return null;
+    } catch (e) {
+      if (kDebugMode) {
+        print('Email/password authentication error: $e');
+      }
+      rethrow;
+    }
+  }
+
+  /// Link Google account to existing email/password account
+  /// This enforces Google credentials as the authoritative password
+  Future<UserCredential?> linkGoogleToEmailAccount(
+      String email, String password) async {
+    try {
+      // First, verify the email/password credentials
+      final emailCredential = await _auth.signInWithEmailAndPassword(
+        email: email,
+        password: password,
+      );
+
+      if (emailCredential.user == null) {
+        throw Exception('Invalid email or password');
+      }
+
+      // Now get Google credentials
+      final googleUser = await _googleSignIn.signIn();
+      if (googleUser == null) {
+        throw Exception('Google sign-in was cancelled');
+      }
+
+      // Verify the Google email matches
+      if (googleUser.email != email) {
+        await _googleSignIn.signOut();
+        throw Exception('Google account email must match your account email');
+      }
+
+      final googleAuth = await googleUser.authentication;
+      if (googleAuth.idToken == null) {
+        throw Exception('No ID Token received from Google Sign-In');
+      }
+
+      final googleCredential = GoogleAuthProvider.credential(
+        accessToken: googleAuth.accessToken,
+        idToken: googleAuth.idToken,
+      );
+
+      // Link the Google credential to the current user
+      final linkedCredential =
+          await emailCredential.user!.linkWithCredential(googleCredential);
+
+      if (linkedCredential.user != null) {
+        // Update user document to reflect Google is now the primary provider
+        await _firestore
+            .collection('users')
+            .doc(linkedCredential.user!.uid)
+            .update({
+          'provider': 'google.com', // Google becomes primary
+          'linked_providers': FieldValue.arrayUnion(['password', 'google.com']),
+          'last_sign_in': FieldValue.serverTimestamp(),
+          'google_linked_at': FieldValue.serverTimestamp(),
+        });
+
+        notifyListeners();
+        return linkedCredential;
+      }
+
+      return null;
+    } on FirebaseAuthException catch (e) {
+      await _googleSignIn.signOut();
+
+      switch (e.code) {
+        case 'provider-already-linked':
+          throw Exception('Google account is already linked to this account');
+        case 'credential-already-in-use':
+          throw Exception(
+              'This Google account is already linked to another account');
+        case 'wrong-password':
+          throw Exception('Incorrect password. Please try again.');
+        case 'user-not-found':
+          throw Exception('No account found with this email address');
+        case 'invalid-credential':
+          throw Exception('Invalid Google credentials');
+        default:
+          throw Exception('Failed to link accounts: ${e.message}');
+      }
+    } catch (e) {
+      await _googleSignIn.signOut();
+      rethrow;
+    }
+  }
+
+  /// Link email/password to existing Google account
+  Future<UserCredential?> linkEmailPasswordToAccount(
+      String email, String password) async {
+    try {
+      final user = _auth.currentUser;
+      if (user == null) {
+        throw Exception('No user is currently signed in');
+      }
+
+      // Validate input
+      if (email.trim().isEmpty || password.isEmpty) {
+        throw Exception('Email and password are required');
+      }
+
+      if (!_isValidEmail(email)) {
+        throw Exception('Please enter a valid email address');
+      }
+
+      if (password.length < 6) {
+        throw Exception('Password must be at least 6 characters long');
+      }
+
+      // Check if the email matches the current user's email
+      if (user.email != email.trim()) {
+        throw Exception('Email must match your current account email');
+      }
+
+      // Create email/password credential
+      final credential = EmailAuthProvider.credential(
+        email: email.trim(),
+        password: password,
+      );
+
+      // Link the credential to the current user
+      final userCredential = await user.linkWithCredential(credential);
+
+      if (userCredential.user != null) {
+        // Update user document to reflect linked account
+        await _firestore.collection('users').doc(user.uid).update({
+          'linked_providers': FieldValue.arrayUnion(['password']),
+          'last_sign_in': FieldValue.serverTimestamp(),
+        });
+
+        notifyListeners();
+        return userCredential;
+      }
+
+      return null;
+    } on FirebaseAuthException catch (e) {
+      switch (e.code) {
+        case 'provider-already-linked':
+          throw Exception('Email/password is already linked to this account');
+        case 'invalid-credential':
+          throw Exception('Invalid email or password');
+        case 'credential-already-in-use':
+          throw Exception(
+              'This email is already associated with another account');
+        case 'email-already-in-use':
+          throw Exception(
+              'This email is already registered with another account');
+        case 'weak-password':
+          throw Exception(
+              'Password is too weak. Please choose a stronger password');
+        case 'invalid-email':
+          throw Exception('Please enter a valid email address');
+        default:
+          throw Exception('Failed to link account: ${e.message}');
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        print('Account linking error: $e');
+      }
+      rethrow;
+    }
+  }
+
+  /// Get available sign-in methods for an email
+  Future<List<String>> getSignInMethodsForEmail(String email) async {
+    try {
+      if (!_isValidEmail(email)) {
+        return [];
+      }
+
+      try {
+        await _auth.signInWithEmailAndPassword(
+          email: email.trim(),
+          password: 'dummy-password-that-will-fail',
+        );
+        return ['password'];
+      } on FirebaseAuthException catch (e) {
+        if (e.code == 'wrong-password') {
+          return ['password'];
+        } else if (e.code == 'user-not-found') {
+          return [];
+        }
+      }
+      return [];
+    } catch (e) {
+      if (kDebugMode) {
+        print('Error fetching sign-in methods: $e');
+      }
+      return [];
+    }
+  }
+
+  /// Validate email format
+  bool _isValidEmail(String email) {
+    return RegExp(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$')
+        .hasMatch(email);
+  }
+
+  /// Send password reset email
+  Future<void> sendPasswordResetEmail(String email) async {
+    try {
+      if (!_isValidEmail(email)) {
+        throw Exception('Please enter a valid email address');
+      }
+
+      await _auth.sendPasswordResetEmail(email: email.trim());
+    } on FirebaseAuthException catch (e) {
+      switch (e.code) {
+        case 'user-not-found':
+          throw Exception('No account found with this email address');
+        case 'invalid-email':
+          throw Exception('Please enter a valid email address');
+        case 'too-many-requests':
+          throw Exception('Too many requests. Please try again later');
+        default:
+          throw Exception('Failed to send reset email: ${e.message}');
+      }
+    } catch (e) {
+      rethrow;
     }
   }
 
@@ -598,7 +954,7 @@ class AuthService extends ChangeNotifier {
   }
 
   // Create user document if it doesn't exist
-  Future<void> _createUserDocIfNotExists(User user) async {
+  Future<void> _createUserDocIfNotExists(User user, String provider) async {
     final docRef = _firestore.collection('users').doc(user.uid);
     final docSnapshot = await docRef.get();
 
@@ -609,7 +965,7 @@ class AuthService extends ChangeNotifier {
         'photoURL': user.photoURL,
         'created_at': FieldValue.serverTimestamp(),
         'last_sign_in': FieldValue.serverTimestamp(),
-        'provider': 'google.com',
+        'provider': provider,
       });
 
       // Create default user preferences

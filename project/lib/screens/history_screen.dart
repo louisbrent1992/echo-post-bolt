@@ -1025,10 +1025,10 @@ class _HistoryScreenState extends State<HistoryScreen> {
         ),
       );
 
-      if (allSucceeded && mounted) {
-        // Navigate to history to show success
+      final currentContext = context;
+      if (currentContext.mounted) {
         Navigator.pushReplacement(
-          context,
+          currentContext,
           MaterialPageRoute(builder: (context) => const HistoryScreen()),
         );
       }
@@ -1313,8 +1313,9 @@ class _HistoryScreenState extends State<HistoryScreen> {
 
       try {
         await firestoreService.clearAllActions();
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
+        final currentContext = context;
+        if (currentContext.mounted) {
+          ScaffoldMessenger.of(currentContext).showSnackBar(
             const SnackBar(
               content: Text('All post history cleared successfully'),
               backgroundColor: Colors.green,
@@ -1322,8 +1323,9 @@ class _HistoryScreenState extends State<HistoryScreen> {
           );
         }
       } catch (e) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
+        final currentContext = context;
+        if (currentContext.mounted) {
+          ScaffoldMessenger.of(currentContext).showSnackBar(
             SnackBar(
               content: Text('Failed to clear history: $e'),
               backgroundColor: Colors.red,

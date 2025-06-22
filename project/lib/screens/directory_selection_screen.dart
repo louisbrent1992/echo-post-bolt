@@ -213,11 +213,12 @@ class _DirectorySelectionScreenState extends State<DirectorySelectionScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return WillPopScope(
-      onWillPop: () async {
-        // Return the result when navigating back
-        Navigator.of(context).pop(_hasChanges);
-        return false; // Prevent default pop behavior since we're handling it
+    return PopScope(
+      canPop: true,
+      onPopInvokedWithResult: (bool didPop, dynamic result) {
+        if (!didPop) {
+          Navigator.of(context).pop(_hasChanges);
+        }
       },
       child: Scaffold(
         backgroundColor: Colors.black,

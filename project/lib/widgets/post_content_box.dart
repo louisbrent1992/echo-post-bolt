@@ -1,170 +1,168 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
-import '../models/social_action.dart';
+import 'package:provider/provider.dart';
 import '../constants/typography.dart';
+import '../services/social_action_post_coordinator.dart';
 
 /// Pure presentation widget for post content - no internal state management
-/// All state comes from coordinators via parent widgets
+/// All state comes directly from coordinator
 class PostContentBox extends StatelessWidget {
-  final SocialAction action;
   final VoidCallback? onEditText;
   final VoidCallback? onVoiceEdit;
   final VoidCallback? onEditSchedule;
   final Function(List<String>)? onEditHashtags;
-  final bool isRecording;
-  final bool isProcessingVoice;
 
   const PostContentBox({
     super.key,
-    required this.action,
     this.onEditText,
     this.onVoiceEdit,
     this.onEditSchedule,
     this.onEditHashtags,
-    this.isRecording = false,
-    this.isProcessingVoice = false,
   });
 
   @override
   Widget build(BuildContext context) {
-    final caption = action.content.text;
-    final hashtags = action.content.hashtags;
+    return Consumer<SocialActionPostCoordinator>(
+      builder: (context, coordinator, child) {
+        final action = coordinator.currentPost;
+        final caption = action.content.text;
+        final hashtags = action.content.hashtags;
+        final isRecording =
+            coordinator.isRecording && coordinator.isVoiceDictating;
+        final isProcessing = coordinator.isProcessing;
 
-    return Container(
-      width: double.infinity,
-      margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: Colors.black.withValues(
-            alpha: 0.7), // Translucent black like record button labels
-        borderRadius: const BorderRadius.only(
-          topLeft: Radius.circular(16), // Rounded top corners
-          topRight: Radius.circular(16),
-          bottomLeft:
-              Radius.circular(0), // Sharp bottom corners to blend with dialog
-          bottomRight: Radius.circular(0),
-        ),
-        // No border for clean, subtle appearance
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Header with edit options
-          Row(
+        return Container(
+          width: double.infinity,
+          margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: 0.7),
+            borderRadius: const BorderRadius.only(
+              topLeft: Radius.circular(16),
+              topRight: Radius.circular(16),
+              bottomLeft: Radius.circular(0),
+              bottomRight: Radius.circular(0),
+            ),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Icon(
-                Icons.edit_note,
-                color: Colors.white.withValues(alpha: 0.9),
-                size: 20,
+              // Header with edit options
+              Row(
+                children: [
+                  Icon(
+                    Icons.edit_note,
+                    color: Colors.white.withValues(alpha: 0.9),
+                    size: 20,
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Post Content',
+                    style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.95),
+                      fontSize: AppTypography.large,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const Spacer(),
+                  // Voice dictation button
+                  if (onVoiceEdit != null)
+                    IconButton(
+                      onPressed: isProcessing ? null : onVoiceEdit,
+                      icon: Icon(
+                        coordinator.getVoiceDictationIcon(),
+                        color: coordinator.getVoiceDictationColor(),
+                        size: 18,
+                      ),
+                      tooltip: isRecording
+                          ? 'Stop recording'
+                          : (isProcessing
+                              ? 'Processing...'
+                              : 'Voice dictation'),
+                    ),
+                  // Text edit button
+                  if (onEditText != null)
+                    IconButton(
+                      onPressed:
+                          (isRecording || isProcessing) ? null : onEditText,
+                      icon: Icon(
+                        Icons.edit,
+                        color: Colors.white.withValues(
+                            alpha: isRecording || isProcessing ? 0.3 : 0.7),
+                        size: 18,
+                      ),
+                      tooltip: 'Edit post text',
+                    ),
+                  // Schedule button (THIRD)
+                  if (onEditSchedule != null)
+                    IconButton(
+                      onPressed: onEditSchedule,
+                      icon: Icon(
+                        Icons.schedule,
+                        color: Colors.white.withValues(alpha: 0.7),
+                        size: 18,
+                      ),
+                      tooltip: 'Schedule post',
+                    ),
+                ],
               ),
-              const SizedBox(width: 8),
-              Text(
-                'Post Content',
-                style: TextStyle(
-                  color: Colors.white.withValues(alpha: 0.95),
-                  fontSize:
-                      AppTypography.large, // Large font for primary header
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              const Spacer(),
-              // Voice dictation button - CRITICAL functionality (FIRST)
-              if (onVoiceEdit != null)
-                IconButton(
-                  onPressed: onVoiceEdit,
-                  icon: Icon(
-                    isRecording ? Icons.stop : Icons.mic,
-                    color: isRecording
-                        ? const Color(0xFFFF0080)
-                        : (isProcessingVoice
-                            ? Colors.orange
-                            : Colors.white.withValues(alpha: 0.7)),
-                    size: 18,
+              const SizedBox(height: 12),
+
+              // Post text content
+              if (caption.isNotEmpty) ...[
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(
+                        alpha:
+                            0.8), // Very dark gray using black translucency for subtle lift
+                    borderRadius: BorderRadius.circular(12),
                   ),
-                  tooltip: isRecording
-                      ? 'Stop recording'
-                      : (isProcessingVoice
-                          ? 'Processing...'
-                          : 'Voice dictation'),
-                ),
-              // Text edit button (SECOND)
-              if (onEditText != null)
-                IconButton(
-                  onPressed: onEditText,
-                  icon: Icon(
-                    Icons.edit,
-                    color: Colors.white.withValues(alpha: 0.7),
-                    size: 18,
+                  child: Text(
+                    caption,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize:
+                          AppTypography.body, // Body font for main content
+                      height: 1.4,
+                    ),
                   ),
-                  tooltip: 'Edit post text',
                 ),
-              // Schedule button (THIRD)
-              if (onEditSchedule != null)
-                IconButton(
-                  onPressed: onEditSchedule,
-                  icon: Icon(
-                    Icons.schedule,
-                    color: Colors.white.withValues(alpha: 0.7),
-                    size: 18,
+                const SizedBox(height: 16),
+              ] else ...[
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(
+                        alpha:
+                            0.6), // Darker gray using black translucency for consistency
+                    borderRadius: BorderRadius.circular(12),
                   ),
-                  tooltip: 'Schedule post',
+                  child: Text(
+                    'Your post content will appear here',
+                    style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.6),
+                      fontSize:
+                          AppTypography.body, // Body font for placeholder text
+                      fontStyle: FontStyle.italic,
+                    ),
+                  ),
                 ),
+                const SizedBox(height: 16),
+              ],
+
+              // Unified hashtag section
+              _buildUnifiedHashtagsSection(context, hashtags),
+
+              // Schedule section
+              const SizedBox(height: 16),
+              _buildScheduleSection(context),
             ],
           ),
-          const SizedBox(height: 12),
-
-          // Post text content
-          if (caption.isNotEmpty) ...[
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Colors.black.withValues(
-                    alpha:
-                        0.8), // Very dark gray using black translucency for subtle lift
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Text(
-                caption,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: AppTypography.body, // Body font for main content
-                  height: 1.4,
-                ),
-              ),
-            ),
-            const SizedBox(height: 16),
-          ] else ...[
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Colors.black.withValues(
-                    alpha:
-                        0.6), // Darker gray using black translucency for consistency
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Text(
-                'Your post content will appear here',
-                style: TextStyle(
-                  color: Colors.white.withValues(alpha: 0.6),
-                  fontSize:
-                      AppTypography.body, // Body font for placeholder text
-                  fontStyle: FontStyle.italic,
-                ),
-              ),
-            ),
-            const SizedBox(height: 16),
-          ],
-
-          // Unified hashtag section
-          _buildUnifiedHashtagsSection(context, hashtags),
-
-          // Schedule section
-          const SizedBox(height: 16),
-          _buildScheduleSection(context),
-        ],
-      ),
+        );
+      },
     );
   }
 
@@ -289,75 +287,79 @@ class PostContentBox extends StatelessWidget {
   }
 
   Widget _buildScheduleSection(BuildContext context) {
-    final schedule = action.options.schedule;
-    final isScheduled = schedule != 'now';
+    return Consumer<SocialActionPostCoordinator>(
+      builder: (context, coordinator, child) {
+        final schedule = coordinator.currentPost.options.schedule;
+        final isScheduled = schedule != 'now';
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Icon(
-              Icons.schedule,
-              color: Colors.white.withValues(alpha: 0.9),
-              size: 16,
-            ),
-            const SizedBox(width: 6),
-            Text(
-              'Schedule',
-              style: TextStyle(
-                color: Colors.white.withValues(alpha: 0.95),
-                fontSize: AppTypography.small,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-            const Spacer(),
-            if (onEditSchedule != null)
-              IconButton(
-                onPressed: onEditSchedule,
-                icon: Icon(
-                  Icons.edit,
-                  color: Colors.white.withValues(alpha: 0.7),
+            Row(
+              children: [
+                Icon(
+                  Icons.schedule,
+                  color: Colors.white.withValues(alpha: 0.9),
                   size: 16,
                 ),
-                tooltip: 'Edit schedule',
-              ),
-          ],
-        ),
-        const SizedBox(height: 8),
-        Container(
-          width: double.infinity,
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: Colors.black.withValues(alpha: 0.6),
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Row(
-            children: [
-              Icon(
-                isScheduled ? Icons.access_time : Icons.flash_on,
-                color: isScheduled
-                    ? Colors.orange.withValues(alpha: 0.8)
-                    : const Color(0xFFFF0080).withValues(alpha: 0.8),
-                size: 16,
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  isScheduled
-                      ? 'Scheduled for ${DateFormat('MMM d, yyyy \'at\' h:mm a').format(DateTime.parse(schedule))}'
-                      : 'Post immediately when confirmed',
+                const SizedBox(width: 6),
+                Text(
+                  'Schedule',
                   style: TextStyle(
-                    color: Colors.white.withValues(alpha: 0.9),
+                    color: Colors.white.withValues(alpha: 0.95),
                     fontSize: AppTypography.small,
-                    fontWeight: FontWeight.w500,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
+                const Spacer(),
+                if (onEditSchedule != null)
+                  IconButton(
+                    onPressed: onEditSchedule,
+                    icon: Icon(
+                      Icons.edit,
+                      color: Colors.white.withValues(alpha: 0.7),
+                      size: 16,
+                    ),
+                    tooltip: 'Edit schedule',
+                  ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.black.withValues(alpha: 0.6),
+                borderRadius: BorderRadius.circular(8),
               ),
-            ],
-          ),
-        ),
-      ],
+              child: Row(
+                children: [
+                  Icon(
+                    isScheduled ? Icons.access_time : Icons.flash_on,
+                    color: isScheduled
+                        ? Colors.orange.withValues(alpha: 0.8)
+                        : const Color(0xFFFF0080).withValues(alpha: 0.8),
+                    size: 16,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      isScheduled
+                          ? 'Scheduled for ${DateFormat('MMM d, yyyy \'at\' h:mm a').format(DateTime.parse(schedule))}'
+                          : 'Post immediately when confirmed',
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.9),
+                        fontSize: AppTypography.small,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        );
+      },
     );
   }
 }
