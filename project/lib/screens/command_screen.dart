@@ -45,17 +45,16 @@ import '../constants/typography.dart';
 ///    images in their voice commands (e.g., "post my last picture"). The
 ///    `MediaCoordinator` handles intelligent media selection and validation.
 ///    Users can also manually select media via `MediaSelectionScreen` if needed.
-/// 6. Review & Confirm – All post editing, scheduling, and confirmation happens
-///    directly on this CommandScreen. Users can edit text, hashtags, schedule,
-///    and media without leaving the screen. Upon confirmation, the
-///    `SocialActionPostCoordinator` handles both Firestore persistence and
-///    posting to social media platforms.
+/// 6. Review & Publish – Finally, the user lands on `ReviewPostScreen`,
+///    previews the composed post, edits if necessary, and confirms. Upon
+///    confirmation, the `SocialActionPostCoordinator` handles both Firestore
+///    persistence and posting to social media platforms.
 ///
 /// Each stage contains robust validation, error handling, and debug logging so
 /// that any break in the pipeline (Whisper outages, malformed JSON, network
 /// errors, etc.) is surfaced early and the UI gracefully degrades. The entire
 /// workflow is coordinated through the `SocialActionPostCoordinator` for
-/// consistent state management in a single-screen architecture.
+/// consistent state management across all screens.
 
 class CommandScreen extends StatefulWidget {
   const CommandScreen({super.key});
@@ -703,6 +702,7 @@ class _CommandScreenState extends State<CommandScreen>
           );
 
       final navigator = Navigator.of(context);
+      final scaffoldMessenger = ScaffoldMessenger.of(context);
 
       final updatedAction = await navigator.push<SocialAction>(
         MaterialPageRoute(
@@ -1289,7 +1289,6 @@ class _CommandScreenState extends State<CommandScreen>
                   onVoiceEdit:
                       coordinator.isProcessing ? null : _startVoiceEditing,
                   onEditText: _editPostText,
-                  onEditSchedule: _editSchedule,
                   onEditHashtags: _editPostHashtags,
                 ),
                 const SizedBox(height: 0),
