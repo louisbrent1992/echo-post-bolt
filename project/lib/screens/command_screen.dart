@@ -14,6 +14,7 @@ import '../models/status_message.dart';
 import '../services/media_coordinator.dart';
 import '../services/social_action_post_coordinator.dart';
 import '../services/auth_service.dart';
+import '../services/app_settings_service.dart';
 import '../widgets/social_icon.dart';
 import '../widgets/post_content_box.dart';
 import '../widgets/transcription_status.dart';
@@ -77,6 +78,7 @@ class _CommandScreenState extends State<CommandScreen>
   // Coordinators - SocialActionPostCoordinator accessed via Consumer
   SocialActionPostCoordinator? _postCoordinator;
   late final MediaCoordinator _mediaCoordinator;
+  late final AppSettingsService _appSettingsService;
 
   // Debug message throttling for CommandScreen
   static DateTime? _lastProcessingLog;
@@ -98,6 +100,8 @@ class _CommandScreenState extends State<CommandScreen>
     super.didChangeDependencies();
     // Access MediaCoordinator only - SocialActionPostCoordinator is accessed via Consumer
     _mediaCoordinator = Provider.of<MediaCoordinator>(context, listen: false);
+    _appSettingsService =
+        Provider.of<AppSettingsService>(context, listen: false);
 
     if (kDebugMode) {
       print('🎯 CommandScreen: Connected to MediaCoordinator');
@@ -374,7 +378,8 @@ class _CommandScreenState extends State<CommandScreen>
       // CRITICAL: Use coordinator's processing state management with timeout
       await _postCoordinator!.executeWithProcessingStateAndTimeout(
         () => _postCoordinator!.processVoiceTranscription(transcription),
-        timeout: const Duration(seconds: 120),
+        timeout:
+            Duration(seconds: _appSettingsService.voiceTranscriptionTimeout),
       );
     } catch (e) {
       if (kDebugMode) {
@@ -760,12 +765,18 @@ class _CommandScreenState extends State<CommandScreen>
     );
   }
 
-  // Voice recording for interactive editing (now uses unified recording system)
+  // Voice recording for interactive editing (IDENTICAL to Unified Action Button)
   Future<void> _startVoiceEditing() async {
-    if (_postCoordinator?.isVoiceDictating == true ||
-        _postCoordinator?.isRecording == true) {
+    final coordinator = _postCoordinator;
+    if (coordinator == null) return;
+
+    // IDENTICAL logic to Unified Action Button - just check current state and toggle
+    if (coordinator.isRecording) {
+      // If currently recording, stop it (same as Unified Action Button onRecordStop)
       await _stopUnifiedRecording();
     } else {
+      // If not recording, start it (same as Unified Action Button onRecordStart)
+      // ONLY DIFFERENCE: isVoiceDictation: true instead of false
       await _startUnifiedRecording(isVoiceDictation: true);
     }
   }

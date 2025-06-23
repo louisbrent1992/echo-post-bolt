@@ -12,6 +12,7 @@ import 'services/ai_service.dart';
 import 'services/media_coordinator.dart';
 import 'services/social_action_post_coordinator.dart';
 import 'services/natural_language_parser.dart';
+import 'services/app_settings_service.dart';
 import 'screens/login_screen.dart';
 import 'screens/command_screen.dart';
 
@@ -69,6 +70,7 @@ Future<void> main() async {
     MultiProvider(
       providers: [
         ChangeNotifierProvider(create: (_) => AuthService()),
+        ChangeNotifierProvider(create: (_) => AppSettingsService()),
         ChangeNotifierProvider<MediaCoordinator>(
           create: (_) => MediaCoordinator(),
         ),
@@ -207,6 +209,11 @@ class _ServiceInitializationWrapperState
       setState(() {
         _initializationStatus = 'Initializing media services...';
       });
+
+      // Initialize AppSettingsService first
+      final appSettingsService =
+          Provider.of<AppSettingsService>(context, listen: false);
+      await appSettingsService.initialize();
 
       // Initialize MediaCoordinator
       final mediaCoordinator =

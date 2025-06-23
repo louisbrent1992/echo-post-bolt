@@ -553,7 +553,7 @@ class SocialActionPostCoordinator extends ChangeNotifier {
   void reset() {
     _initializeCleanPost();
     _isRecording = false;
-    // NOTE: _isProcessing is managed by parent scope
+    _isProcessing = false; // CRITICAL: Explicitly reset processing state
     _isTransitioning = false; // Reset transition lock
 
     // CRITICAL: Reset all recording states including locks
@@ -571,6 +571,9 @@ class SocialActionPostCoordinator extends ChangeNotifier {
 
     if (kDebugMode) {
       print('🔄 SocialActionPostCoordinator: Complete state reset');
+      print('   _isRecording: $_isRecording');
+      print('   _isProcessing: $_isProcessing');
+      print('   _isTransitioning: $_isTransitioning');
     }
   }
 
@@ -1452,20 +1455,6 @@ class SocialActionPostCoordinator extends ChangeNotifier {
       if (kDebugMode) {
         print('⚠️ Attempted to notify listeners after disposal - skipping');
       }
-      return;
-    }
-
-    // CRITICAL: Additional safety check - don't notify during transitions
-    if (_isTransitioning) {
-      if (kDebugMode) {
-        print('⚠️ Attempted to notify listeners during transition - deferring');
-      }
-      // Defer notification until transition completes
-      Timer(const Duration(milliseconds: 50), () {
-        if (!_isDisposed && !_isTransitioning) {
-          _safeNotifyListeners();
-        }
-      });
       return;
     }
 
