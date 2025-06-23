@@ -139,17 +139,6 @@ class SocialActionPostCoordinator extends ChangeNotifier {
   bool get hasContent {
     final hasText = _currentPost.content.text.isNotEmpty;
     final hasMediaContent = hasMedia;
-
-    if (kDebugMode) {
-      print('🔍 hasContent getter called:');
-      print('   hasText: $hasText');
-      print('   hasMediaContent: $hasMediaContent');
-      print('   currentPost.platforms: ${_currentPost.platforms}');
-      print(
-          '   currentPost.media.length: ${_currentPost.content.media.length}');
-      print('   preSelectedMedia.length: ${_preSelectedMedia.length}');
-    }
-
     return hasText || hasMediaContent;
   }
 
@@ -158,13 +147,6 @@ class SocialActionPostCoordinator extends ChangeNotifier {
     _syncMediaStates();
 
     final currentPostHasMedia = _currentPost.content.media.isNotEmpty;
-
-    if (kDebugMode) {
-      print('🔍 hasMedia getter called:');
-      print('   currentPost media count: ${_currentPost.content.media.length}');
-      print('   preSelectedMedia count: ${_preSelectedMedia.length}');
-      print('   hasMedia result: $currentPostHasMedia');
-    }
 
     return currentPostHasMedia;
   }
