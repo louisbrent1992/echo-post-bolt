@@ -1,8 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
-import 'dart:convert';
 
 class FirestoreService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
@@ -154,62 +152,6 @@ class FirestoreService {
     }
   }
 
-  // Cache media selection for a query
-  Future<void> cacheMediaSelection(String query, String assetId) async {
-    final uid = _currentUserId;
-    if (uid == null) {
-      return; // Silently fail if not authenticated
-    }
-
-    try {
-      final queryHash = _hashQuery(query);
-
-      await _firestore
-          .collection('users')
-          .doc(uid)
-          .collection('media_cache')
-          .doc(queryHash)
-          .set({
-        'original_query': query,
-        'selected_asset_id': assetId,
-        'timestamp': FieldValue.serverTimestamp(),
-      });
-    } catch (e) {
-      if (kDebugMode) {
-        print('Warning: Failed to cache media selection: $e');
-      }
-    }
-  }
-
-  // Get cached media asset for a query
-  Future<String?> getCachedMediaAsset(String query) async {
-    final uid = _currentUserId;
-    if (uid == null) {
-      return null;
-    }
-
-    try {
-      final queryHash = _hashQuery(query);
-
-      final doc = await _firestore
-          .collection('users')
-          .doc(uid)
-          .collection('media_cache')
-          .doc(queryHash)
-          .get();
-
-      if (doc.exists) {
-        return doc.data()?['selected_asset_id'] as String?;
-      }
-    } catch (e) {
-      if (kDebugMode) {
-        print('Warning: Failed to get cached media asset: $e');
-      }
-    }
-
-    return null;
-  }
-
   // Get user preferences
   Future<Map<String, dynamic>> getUserPreferences() async {
     final uid = _currentUserId;
@@ -339,12 +281,5 @@ class FirestoreService {
       }
       return null;
     }
-  }
-
-  // Helper to hash a query string for media cache
-  String _hashQuery(String query) {
-    final bytes = utf8.encode(query.toLowerCase().trim());
-    final digest = sha256.convert(bytes);
-    return digest.toString();
   }
 }

@@ -3,12 +3,11 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:photo_manager/photo_manager.dart';
 import '../models/social_action.dart';
-import 'photo_manager_service.dart';
-import 'directory_service.dart';
-import 'media_metadata_service.dart';
-import 'media_search_service.dart';
-import 'firestore_service.dart';
-import 'app_settings_service.dart';
+import '../services/app_settings_service.dart';
+import '../services/directory_service.dart';
+import '../services/media_metadata_service.dart';
+import '../services/media_search_service.dart';
+import '../services/photo_manager_service.dart';
 
 /// Coordinates all media-related operations across the app.
 /// This service acts as the single entry point for all media operations,
@@ -1152,10 +1151,8 @@ class MediaCoordinator extends ChangeNotifier {
       // Convert AssetPathEntity list to album IDs
       final albumIds = selectedAlbums.map((album) => album.id).toList();
 
-      // We need a FirestoreService instance - get it from the service locator or dependency injection
-      // For now, create a simple implementation that doesn't require external dependencies
-      await _mediaSearchService.reinitializeWithAlbums(
-          albumIds, _createDummyFirestoreService());
+      // Re-initialize MediaSearchService with new album selection
+      await _mediaSearchService.reinitializeWithAlbums(albumIds);
 
       if (kDebugMode) {
         print(
@@ -1167,14 +1164,6 @@ class MediaCoordinator extends ChangeNotifier {
       }
       rethrow;
     }
-  }
-
-  /// Creates a dummy FirestoreService for MediaSearchService initialization
-  /// This is needed because MediaSearchService requires it but we don't use it for refresh
-  FirestoreService _createDummyFirestoreService() {
-    // Return a minimal FirestoreService implementation
-    // This is safe because MediaSearchService only uses it for initialization
-    return FirestoreService();
   }
 
   /// Get an asset entity by ID

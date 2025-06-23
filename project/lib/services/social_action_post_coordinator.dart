@@ -15,6 +15,9 @@ import '../services/natural_language_parser.dart';
 import '../constants/social_platforms.dart';
 import '../models/status_message.dart';
 
+/// Status message priority levels to prevent important messages from being overridden
+enum StatusPriority { low, medium, high, critical }
+
 /// Manages the persistent state and orchestration of social media posts
 /// across all screens in the EchoPost application.
 class SocialActionPostCoordinator extends ChangeNotifier {
@@ -45,13 +48,8 @@ class SocialActionPostCoordinator extends ChangeNotifier {
   bool _isTextEditing = false;
   String? _editingOriginalText;
 
-  // Auto-save with debouncing
-  Timer? _debounceTimer;
-  static const _autoSaveDebounceMs = 1000; // 1 second debounce
-
-  // Debouncing for state transitions and saves
+  // Debouncing for state transitions only (removed auto-save debouncing)
   Timer? _stateTransitionDebouncer;
-  Timer? _saveDebouncer;
 
   // CRITICAL: Track disposal state to prevent notifications after disposal
   bool _isDisposed = false;
@@ -61,7 +59,6 @@ class SocialActionPostCoordinator extends ChangeNotifier {
 
   // Recording management
   String? _currentRecordingPath;
-  bool _isStartLocked = false;
   bool _isVoiceDictating = false;
   int _recordingDuration = 0;
   final int maxRecordingDuration = 30;
@@ -75,9 +72,10 @@ class SocialActionPostCoordinator extends ChangeNotifier {
   final double _speechThreshold = -40.0;
   final double _silenceThreshold = -50.0;
 
-  // Status management
+  // Status management with priority system
   StatusMessage? _temporaryStatus;
   Timer? _statusTimer;
+  StatusPriority _currentStatusPriority = StatusPriority.low;
 
   SocialActionPostCoordinator({
     required MediaCoordinator mediaCoordinator,
@@ -141,33 +139,16 @@ class SocialActionPostCoordinator extends ChangeNotifier {
   bool get hasContent {
     final hasText = _currentPost.content.text.isNotEmpty;
     final hasMediaContent = hasMedia;
-
-    if (kDebugMode) {
-      print('🔍 hasContent getter called:');
-      print('   hasText: $hasText');
-      print('   hasMediaContent: $hasMediaContent');
-      print('   currentPost.platforms: ${_currentPost.platforms}');
-      print(
-          '   currentPost.media.length: ${_currentPost.content.media.length}');
-      print('   preSelectedMedia.length: ${_preSelectedMedia.length}');
-    }
-
     return hasText || hasMediaContent;
   }
 
   bool get hasMedia {
+    // Ensure media states are synced before checking
+    _syncMediaStates();
+
     final currentPostHasMedia = _currentPost.content.media.isNotEmpty;
-    final hasPreSelectedMedia = _preSelectedMedia.isNotEmpty;
 
-    if (kDebugMode) {
-      print('🔍 hasMedia getter called:');
-      print('   currentPost media count: ${_currentPost.content.media.length}');
-      print('   preSelectedMedia count: ${_preSelectedMedia.length}');
-      print(
-          '   hasMedia result: ${currentPostHasMedia || hasPreSelectedMedia}');
-    }
-
-    return currentPostHasMedia || hasPreSelectedMedia;
+    return currentPostHasMedia;
   }
 
   bool get needsMediaSelection => _needsMediaSelection;
@@ -187,7 +168,6 @@ class SocialActionPostCoordinator extends ChangeNotifier {
 
   // Additional getters for recording state
   bool get isVoiceDictating => _isVoiceDictating;
-  bool get isStartLocked => _isStartLocked;
   int get recordingDuration => _recordingDuration;
   double get currentAmplitude => _currentAmplitude;
   bool get hasSpeechDetected => _hasSpeechDetected;
@@ -224,13 +204,20 @@ class SocialActionPostCoordinator extends ChangeNotifier {
 
   /// Start recording with voice dictation option
   Future<void> startRecordingWithMode({required bool isVoiceDictation}) async {
-    if (_isDisposed || _isTransitioning || _isStartLocked) return;
+    if (_isDisposed || _isTransitioning || _isProcessing || _isRecording) {
+      if (kDebugMode) {
+        print('❌ Cannot start recording:');
+        print('   _isDisposed: $_isDisposed');
+        print('   _isTransitioning: $_isTransitioning');
+        print('   _isProcessing: $_isProcessing');
+        print('   _isRecording: $_isRecording');
+        print('   isVoiceDictation mode: $isVoiceDictation');
+      }
+      return;
+    }
     _isTransitioning = true;
 
     try {
-      // Set start lock to prevent multiple recordings
-      _isStartLocked = true;
-
       // Initialize recording path
       await initializeRecordingPath();
 
@@ -260,6 +247,8 @@ class SocialActionPostCoordinator extends ChangeNotifier {
         print(
             '🎤 Recording started in ${isVoiceDictation ? "voice dictation" : "command"} mode');
         print('   Recording path: $_currentRecordingPath');
+        print('   _isRecording: $_isRecording');
+        print('   _isVoiceDictating: $_isVoiceDictating');
       }
 
       _safeNotifyListeners();
@@ -267,7 +256,6 @@ class SocialActionPostCoordinator extends ChangeNotifier {
       if (kDebugMode) {
         print('❌ Failed to start recording: $e');
       }
-      _isStartLocked = false;
       _isRecording = false;
       _isVoiceDictating = false;
       _isProcessing = false;
@@ -305,11 +293,10 @@ class SocialActionPostCoordinator extends ChangeNotifier {
   }
 
   /// Reset recording state
-  void resetRecordingState() {
+  void resetRecordingState({bool preserveStatus = false}) {
     _currentRecordingPath = null;
-    _isStartLocked = false;
     _isRecording = false;
-    _isProcessing = false;
+    // NOTE: _isProcessing is managed by parent scope
     _isVoiceDictating = false;
     _recordingDuration = 0;
 
@@ -320,11 +307,13 @@ class SocialActionPostCoordinator extends ChangeNotifier {
     _amplitudeSamples = 0;
     _hasSpeechDetected = false;
 
-    // Clear any error or warning messages when resetting
-    _hasError = false;
-    _errorMessage = null;
-    _temporaryStatus = null;
-    _statusTimer?.cancel();
+    // Only clear error/status messages if not preserving status
+    if (!preserveStatus) {
+      _hasError = false;
+      _errorMessage = null;
+      _temporaryStatus = null;
+      _statusTimer?.cancel();
+    }
 
     _safeNotifyListeners();
   }
@@ -355,10 +344,49 @@ class SocialActionPostCoordinator extends ChangeNotifier {
     return hasContent && hasPlatforms;
   }
 
+  /// CRITICAL: Top-level processing state management
+  /// These methods ensure isProcessing is controlled at the orchestration level
+  void setProcessingState(bool isProcessing) {
+    _isProcessing = isProcessing;
+    _safeNotifyListeners();
+
+    if (kDebugMode) {
+      print('🔄 Processing state changed: $_isProcessing');
+    }
+  }
+
+  Future<void> executeWithProcessingState<T>(
+      Future<T> Function() operation) async {
+    setProcessingState(true);
+    try {
+      await operation();
+    } finally {
+      setProcessingState(false);
+    }
+  }
+
+  Future<void> executeWithProcessingStateAndTimeout<T>(
+      Future<T> Function() operation,
+      {Duration timeout = const Duration(seconds: 30)}) async {
+    setProcessingState(true);
+    try {
+      await operation().timeout(timeout);
+    } catch (e) {
+      if (e is TimeoutException) {
+        if (kDebugMode) {
+          print('⏰ Operation timed out, forcing processing state reset');
+        }
+      }
+      rethrow;
+    } finally {
+      setProcessingState(false);
+    }
+  }
+
   /// Process voice transcription and generate social action
   Future<void> processVoiceTranscription(String transcription) async {
     try {
-      _isProcessing = true;
+      // NO _isProcessing management here anymore - controlled by parent
       _currentTranscription = transcription;
       _safeNotifyListeners();
 
@@ -377,23 +405,38 @@ class SocialActionPostCoordinator extends ChangeNotifier {
       _needsMediaSelection =
           _transcriptionReferencesMedia(transcription) && !_hasMedia;
 
-      _triggerDebouncedSave();
-
-      _isProcessing = false;
+      // CRITICAL: Reset recording states but NOT _isProcessing (managed by parent)
       _isRecording = false;
+      _isVoiceDictating = false;
+      _isTransitioning = false;
       _hasError = false;
       _errorMessage = null;
-      _isStartLocked = false; // Ensure start lock is released
 
-      resetRecordingState();
+      // CRITICAL: Clear recording mode context in MediaCoordinator
+      _mediaCoordinator.setRecordingModeContext(false);
+
+      if (kDebugMode) {
+        print('✅ Voice transcription processed and states reset:');
+        print('   _isRecording: $_isRecording');
+        print('   _isProcessing: $_isProcessing (managed by parent)');
+        print('   _isVoiceDictating: $_isVoiceDictating');
+        print('   _isTransitioning: $_isTransitioning');
+      }
+
       _safeNotifyListeners();
     } catch (e) {
       if (kDebugMode) {
         print('❌ Failed to process voice transcription: $e');
       }
-      _isProcessing = false;
-      _isStartLocked = false; // Ensure start lock is released even on error
-      resetRecordingState();
+
+      // CRITICAL: Reset recording states but NOT _isProcessing (managed by parent)
+      _isRecording = false;
+      _isVoiceDictating = false;
+      _isTransitioning = false;
+
+      // CRITICAL: Clear recording mode context even on error
+      _mediaCoordinator.setRecordingModeContext(false);
+
       setError(e.toString());
       _safeNotifyListeners();
       rethrow;
@@ -510,7 +553,7 @@ class SocialActionPostCoordinator extends ChangeNotifier {
   void reset() {
     _initializeCleanPost();
     _isRecording = false;
-    _isProcessing = false;
+    // NOTE: _isProcessing is managed by parent scope
     _isTransitioning = false; // Reset transition lock
 
     // CRITICAL: Reset all recording states including locks
@@ -522,9 +565,7 @@ class SocialActionPostCoordinator extends ChangeNotifier {
     // CRITICAL: Cancel any pending timers
     _statusTimer?.cancel();
     _temporaryStatus = null;
-    _debounceTimer?.cancel();
     _stateTransitionDebouncer?.cancel();
-    _saveDebouncer?.cancel();
 
     _safeNotifyListeners();
 
@@ -885,15 +926,6 @@ class SocialActionPostCoordinator extends ChangeNotifier {
     );
   }
 
-  /// Trigger debounced save - only saves after 1 second of no changes
-  void _triggerDebouncedSave() {
-    _debounceTimer?.cancel();
-    _debounceTimer =
-        Timer(const Duration(milliseconds: _autoSaveDebounceMs), () {
-      _saveDraft();
-    });
-  }
-
   /// Get recent media with performance limit
   Future<List<MediaItem>> _getRecentMedia({int limit = 25}) async {
     try {
@@ -1118,13 +1150,15 @@ class SocialActionPostCoordinator extends ChangeNotifier {
 
   /// Update post content with unified hashtag handling
   Future<void> updatePostContent(String newText) async {
-    // Extract hashtags from the new text
+    // Extract hashtags from the text
     final extractedHashtags = _extractHashtagsFromText(newText);
+
+    // Clean text by removing hashtags
     final cleanText = _removeHashtagsFromText(newText);
 
-    // Update existing post with unified hashtag handling
+    // Merge with existing hashtags, avoiding duplicates
     final existingHashtags = _currentPost.content.hashtags;
-    final allHashtags = <String>{...extractedHashtags, ...existingHashtags}
+    final allHashtags = <String>{...existingHashtags, ...extractedHashtags}
         .where((tag) => tag.isNotEmpty)
         .toList();
 
@@ -1140,7 +1174,6 @@ class SocialActionPostCoordinator extends ChangeNotifier {
     _hasError = false;
     _errorMessage = null;
     _safeNotifyListeners(); // Always refresh view
-    _triggerDebouncedSave();
 
     if (kDebugMode) {
       print('✅ Post content updated with unified hashtag handling');
@@ -1162,7 +1195,6 @@ class SocialActionPostCoordinator extends ChangeNotifier {
     _hasError = false;
     _errorMessage = null;
     _safeNotifyListeners();
-    _triggerDebouncedSave();
 
     if (kDebugMode) {
       print('✅ Hashtags updated via coordinator');
@@ -1182,8 +1214,8 @@ class SocialActionPostCoordinator extends ChangeNotifier {
       content: _currentPost.content.copyWith(media: updatedMedia),
     );
 
-    // Update state flags
-    _hasMedia = true;
+    // Sync media states and update flags
+    _syncMediaStates();
     _hasError = false;
     _errorMessage = null;
     _needsMediaSelection = false;
@@ -1206,33 +1238,15 @@ class SocialActionPostCoordinator extends ChangeNotifier {
     _safeNotifyListeners();
   }
 
-  /// Save draft to persistent storage
-  Future<void> _saveDraft() async {
-    try {
-      // Only auto-save if this is still a draft
-      final isDraft = _currentPost.actionId.startsWith('baseline_') ||
-          _currentPost.actionId.startsWith('sanitized_') ||
-          _currentPost.actionId.startsWith('echo_');
-
-      if (isDraft) {
-        await _firestoreService.saveAction(_currentPost.toJson());
-        if (kDebugMode) {
-          print('💾 Draft auto-saved: ${_currentPost.actionId}');
-        }
-      }
-    } catch (e) {
-      if (kDebugMode) {
-        print('⚠️ Failed to save draft: $e');
-      }
-    }
-  }
-
   /// Replace media in current post
   Future<void> replaceMedia(List<MediaItem> media) async {
     // Update media in current post
     _currentPost = _currentPost.copyWith(
       content: _currentPost.content.copyWith(media: media),
     );
+
+    // Clear pre-selected media since we now have media in the post
+    _preSelectedMedia.clear();
 
     // If no platforms selected, add default platforms based on media type
     if (_currentPost.platforms.isEmpty) {
@@ -1244,8 +1258,8 @@ class SocialActionPostCoordinator extends ChangeNotifier {
       _currentPost = _currentPost.copyWith(platforms: platforms);
     }
 
-    // Update state flags
-    _hasMedia = media.isNotEmpty;
+    // Sync media states and update flags
+    _syncMediaStates();
     _hasError = false;
     _errorMessage = null;
     _needsMediaSelection = false;
@@ -1371,15 +1385,45 @@ class SocialActionPostCoordinator extends ChangeNotifier {
       // Step 3: Handle results and transition to appropriate state
       final allSucceeded = executionResults.values.every((success) => success);
       if (allSucceeded) {
+        // CRITICAL: Reset recording states immediately to unfreeze microphones
+        // NOTE: _isProcessing is managed by parent scope
+        _isRecording = false;
+        _isVoiceDictating = false;
+        _isTransitioning = false;
+        _mediaCoordinator.setRecordingModeContext(false);
+
+        // Reset recording state first to ensure microphones are reactivated
+        resetRecordingState();
+
+        // Then perform full reset of other states
         reset();
+
         if (kDebugMode) {
-          print('🔄 Coordinator state reset after successful posting');
+          print('🔄 Coordinator state fully reset after successful posting');
+          print('   _isRecording: $_isRecording');
+          print('   _isProcessing: $_isProcessing (managed by parent)');
+          print('   _isVoiceDictating: $_isVoiceDictating');
+          print('   _isTransitioning: $_isTransitioning');
         }
+
+        // Show success message
+        requestStatusUpdate(
+            'Post successfully shared! 🎉', StatusMessageType.success,
+            duration: const Duration(seconds: 3),
+            priority: StatusPriority.high);
       } else {
+        // CRITICAL: Even on partial failure, ensure recording states are cleared
+        // NOTE: _isProcessing is managed by parent scope
+        _isRecording = false;
+        _isVoiceDictating = false;
+        _isTransitioning = false;
+        _mediaCoordinator.setRecordingModeContext(false);
+        resetRecordingState();
+
         setError(
             'Some platforms failed: ${executionResults.entries.where((e) => !e.value).map((e) => e.key).join(', ')}');
         if (kDebugMode) {
-          print('⚠️ Some platforms failed, transitioned to notRecording state');
+          print('⚠️ Some platforms failed, but recording states cleared');
         }
       }
 
@@ -1388,6 +1432,15 @@ class SocialActionPostCoordinator extends ChangeNotifier {
       if (kDebugMode) {
         print('❌ Failed to finalize and execute post: $e');
       }
+
+      // CRITICAL: Ensure recording states are cleared even on error
+      // NOTE: _isProcessing is managed by parent scope
+      _isRecording = false;
+      _isVoiceDictating = false;
+      _isTransitioning = false;
+      _mediaCoordinator.setRecordingModeContext(false);
+      resetRecordingState();
+
       setError(e.toString());
       rethrow;
     }
@@ -1522,8 +1575,6 @@ class SocialActionPostCoordinator extends ChangeNotifier {
 
     _isDisposed = true;
     _stateTransitionDebouncer?.cancel();
-    _saveDebouncer?.cancel();
-    _debounceTimer?.cancel();
     _endTextEditingSession();
 
     if (kDebugMode) {
@@ -1538,7 +1589,7 @@ class SocialActionPostCoordinator extends ChangeNotifier {
   Future<void> processVoiceCommand(String transcription,
       {List<MediaItem>? preSelectedMedia}) async {
     try {
-      _isProcessing = true;
+      // NO _isProcessing management here anymore - controlled by parent
       _hasError = false;
       _errorMessage = null;
       notifyListeners();
@@ -1555,10 +1606,10 @@ class SocialActionPostCoordinator extends ChangeNotifier {
       _currentPost = _mergeWithExisting(action);
       _hasContent = _currentPost.content.text.isNotEmpty;
       _hasMedia = _currentPost.content.media.isNotEmpty;
-      _isProcessing = false;
+      // _isProcessing managed by parent
       notifyListeners();
     } catch (e) {
-      _isProcessing = false;
+      // _isProcessing managed by parent
       setError(e.toString());
       rethrow;
     }
@@ -1579,7 +1630,8 @@ class SocialActionPostCoordinator extends ChangeNotifier {
   void setError(String message) {
     _hasError = true;
     _errorMessage = message;
-    requestStatusUpdate(message, StatusMessageType.error);
+    requestStatusUpdate(message, StatusMessageType.error,
+        priority: StatusPriority.high);
   }
 
   /// Stop recording state
@@ -1589,9 +1641,8 @@ class SocialActionPostCoordinator extends ChangeNotifier {
 
     try {
       // Reset core recording flags
+      // NOTE: _isProcessing is managed by parent scope
       _isRecording = false;
-      _isStartLocked = false;
-      _isProcessing = false;
       _isVoiceDictating = false;
 
       // Clear recording mode context
@@ -1613,17 +1664,17 @@ class SocialActionPostCoordinator extends ChangeNotifier {
       // Handle no speech detection case
       if (!_hasSpeechDetected) {
         _isTransitioning = false;
-        _isStartLocked = false; // Ensure start lock is cleared
 
         // Request a temporary status update that will be cleared on next recording
         requestStatusUpdate(
           'No speech detected. Please try again.',
           StatusMessageType.warning,
           duration: const Duration(seconds: 3),
+          priority: StatusPriority.high,
         );
 
         // Reset state but keep the temporary status
-        reset();
+        resetRecordingState(preserveStatus: true);
         return;
       }
 
@@ -1633,9 +1684,8 @@ class SocialActionPostCoordinator extends ChangeNotifier {
         print('❌ Error stopping recording: $e');
       }
       // Ensure states are reset even on error
+      // NOTE: _isProcessing is managed by parent scope
       _isRecording = false;
-      _isStartLocked = false;
-      _isProcessing = false;
       _isVoiceDictating = false;
       setError('Failed to stop recording: $e');
     } finally {
@@ -1678,7 +1728,16 @@ class SocialActionPostCoordinator extends ChangeNotifier {
 
   /// Toggle voice dictation mode with proper MediaCoordinator sync
   Future<void> toggleVoiceDictation() async {
-    if (_isDisposed || _isTransitioning) return;
+    if (_isDisposed || _isTransitioning || _isProcessing) {
+      if (kDebugMode) {
+        print('⚠️ Cannot toggle voice dictation:');
+        print('   _isDisposed: $_isDisposed');
+        print('   _isTransitioning: $_isTransitioning');
+        print('   _isProcessing: $_isProcessing');
+      }
+      return;
+    }
+
     _isTransitioning = true;
 
     try {
@@ -1709,7 +1768,10 @@ class SocialActionPostCoordinator extends ChangeNotifier {
       }
       return;
     } else if (_hasContent) {
-      await finalizeAndExecutePost();
+      // CRITICAL: Use processing state management for post execution
+      await executeWithProcessingState(() async {
+        await finalizeAndExecutePost();
+      });
     } else {
       await startRecordingWithMode(isVoiceDictation: false);
     }
@@ -1759,8 +1821,21 @@ class SocialActionPostCoordinator extends ChangeNotifier {
       _temporaryStatus ?? _computePrimaryStatus();
 
   void requestStatusUpdate(String message, StatusMessageType type,
-      {Duration? duration}) {
+      {Duration? duration, StatusPriority priority = StatusPriority.medium}) {
+    // Only override if new status has higher or equal priority
+    if (_temporaryStatus != null &&
+        priority.index < _currentStatusPriority.index) {
+      if (kDebugMode) {
+        print(
+            '⚠️ Status update blocked: ${priority.name} < ${_currentStatusPriority.name}');
+        print('   Blocked message: "$message"');
+        print('   Current message: "${_temporaryStatus?.message}"');
+      }
+      return;
+    }
+
     _statusTimer?.cancel();
+    _currentStatusPriority = priority;
 
     _temporaryStatus = StatusMessage(
       message: message,
@@ -1770,6 +1845,7 @@ class SocialActionPostCoordinator extends ChangeNotifier {
     if (duration != null) {
       _statusTimer = Timer(duration, () {
         _temporaryStatus = null;
+        _currentStatusPriority = StatusPriority.low; // Reset priority
         _safeNotifyListeners();
       });
     }
@@ -1806,6 +1882,45 @@ class SocialActionPostCoordinator extends ChangeNotifier {
       }
       setError('Failed to request permissions: $e');
       return false;
+    }
+  }
+
+  /// Synchronize media states to ensure consistency between preSelectedMedia and currentPost
+  void _syncMediaStates() {
+    // If we have pre-selected media but current post doesn't have it, add it
+    if (_preSelectedMedia.isNotEmpty && _currentPost.content.media.isEmpty) {
+      _currentPost = _currentPost.copyWith(
+        content: _currentPost.content.copyWith(
+          media: List.from(_preSelectedMedia),
+        ),
+      );
+      if (kDebugMode) {
+        print(
+            '🔄 Synced ${_preSelectedMedia.length} pre-selected media to current post');
+      }
+    }
+
+    // Update hasMedia flag based on final consolidated state
+    _hasMedia = _currentPost.content.media.isNotEmpty;
+  }
+
+  /// Confirm post and reset state
+  Future<void> confirmPost() async {
+    try {
+      // Confirm the post logic here
+      // ... existing code ...
+
+      // Reset recording state to allow further recordings
+      resetRecordingState();
+
+      if (kDebugMode) {
+        print('✅ Post confirmed and state reset for further recordings');
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ Error confirming post: $e');
+      }
+      setError('Failed to confirm post: $e');
     }
   }
 }

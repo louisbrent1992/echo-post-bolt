@@ -331,7 +331,7 @@ You MUST return a complete JSON object with this exact structure:
       "facebook": "public",
       "instagram": "public",
       "youtube": "public", 
-      "twitter": "public",
+      "twitter": "public", 
       "tiktok": "public"
     },
     "location_tag": null,
