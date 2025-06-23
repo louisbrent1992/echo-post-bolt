@@ -374,7 +374,7 @@ class _CommandScreenState extends State<CommandScreen>
       // CRITICAL: Use coordinator's processing state management with timeout
       await _postCoordinator!.executeWithProcessingStateAndTimeout(
         () => _postCoordinator!.processVoiceTranscription(transcription),
-        timeout: const Duration(seconds: 30),
+        timeout: const Duration(seconds: 120),
       );
     } catch (e) {
       if (kDebugMode) {
