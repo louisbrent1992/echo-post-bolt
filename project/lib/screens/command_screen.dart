@@ -365,14 +365,17 @@ class _CommandScreenState extends State<CommandScreen>
         return;
       }
 
-      // Transcribe and process through coordinator
+      // Transcribe and process through coordinator with proper state management
       final transcription = await _transcribeWithWhisper(pathToProcess);
       if (transcription.isEmpty) {
         throw Exception('Whisper returned empty transcription');
       }
 
-      // Use coordinator for processing
-      await _postCoordinator!.processVoiceTranscription(transcription);
+      // CRITICAL: Use coordinator's processing state management with timeout
+      await _postCoordinator!.executeWithProcessingStateAndTimeout(
+        () => _postCoordinator!.processVoiceTranscription(transcription),
+        timeout: const Duration(seconds: 30),
+      );
     } catch (e) {
       if (kDebugMode) {
         print('❌ Failed to stop recording: $e');

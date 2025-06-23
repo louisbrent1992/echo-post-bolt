@@ -296,7 +296,7 @@ class SocialActionPostCoordinator extends ChangeNotifier {
   void resetRecordingState({bool preserveStatus = false}) {
     _currentRecordingPath = null;
     _isRecording = false;
-    _isProcessing = false;
+    // NOTE: _isProcessing is managed by parent scope
     _isVoiceDictating = false;
     _recordingDuration = 0;
 
@@ -344,10 +344,49 @@ class SocialActionPostCoordinator extends ChangeNotifier {
     return hasContent && hasPlatforms;
   }
 
+  /// CRITICAL: Top-level processing state management
+  /// These methods ensure isProcessing is controlled at the orchestration level
+  void setProcessingState(bool isProcessing) {
+    _isProcessing = isProcessing;
+    _safeNotifyListeners();
+
+    if (kDebugMode) {
+      print('🔄 Processing state changed: $_isProcessing');
+    }
+  }
+
+  Future<void> executeWithProcessingState<T>(
+      Future<T> Function() operation) async {
+    setProcessingState(true);
+    try {
+      await operation();
+    } finally {
+      setProcessingState(false);
+    }
+  }
+
+  Future<void> executeWithProcessingStateAndTimeout<T>(
+      Future<T> Function() operation,
+      {Duration timeout = const Duration(seconds: 30)}) async {
+    setProcessingState(true);
+    try {
+      await operation().timeout(timeout);
+    } catch (e) {
+      if (e is TimeoutException) {
+        if (kDebugMode) {
+          print('⏰ Operation timed out, forcing processing state reset');
+        }
+      }
+      rethrow;
+    } finally {
+      setProcessingState(false);
+    }
+  }
+
   /// Process voice transcription and generate social action
   Future<void> processVoiceTranscription(String transcription) async {
     try {
-      _isProcessing = true;
+      // NO _isProcessing management here anymore - controlled by parent
       _currentTranscription = transcription;
       _safeNotifyListeners();
 
@@ -366,8 +405,7 @@ class SocialActionPostCoordinator extends ChangeNotifier {
       _needsMediaSelection =
           _transcriptionReferencesMedia(transcription) && !_hasMedia;
 
-      // CRITICAL: Reset recording states to ensure microphones are reactivated
-      _isProcessing = false;
+      // CRITICAL: Reset recording states but NOT _isProcessing (managed by parent)
       _isRecording = false;
       _isVoiceDictating = false;
       _isTransitioning = false;
@@ -380,7 +418,7 @@ class SocialActionPostCoordinator extends ChangeNotifier {
       if (kDebugMode) {
         print('✅ Voice transcription processed and states reset:');
         print('   _isRecording: $_isRecording');
-        print('   _isProcessing: $_isProcessing');
+        print('   _isProcessing: $_isProcessing (managed by parent)');
         print('   _isVoiceDictating: $_isVoiceDictating');
         print('   _isTransitioning: $_isTransitioning');
       }
@@ -391,8 +429,7 @@ class SocialActionPostCoordinator extends ChangeNotifier {
         print('❌ Failed to process voice transcription: $e');
       }
 
-      // CRITICAL: Reset all states even on error
-      _isProcessing = false;
+      // CRITICAL: Reset recording states but NOT _isProcessing (managed by parent)
       _isRecording = false;
       _isVoiceDictating = false;
       _isTransitioning = false;
@@ -516,7 +553,7 @@ class SocialActionPostCoordinator extends ChangeNotifier {
   void reset() {
     _initializeCleanPost();
     _isRecording = false;
-    _isProcessing = false;
+    // NOTE: _isProcessing is managed by parent scope
     _isTransitioning = false; // Reset transition lock
 
     // CRITICAL: Reset all recording states including locks
@@ -1349,8 +1386,8 @@ class SocialActionPostCoordinator extends ChangeNotifier {
       final allSucceeded = executionResults.values.every((success) => success);
       if (allSucceeded) {
         // CRITICAL: Reset recording states immediately to unfreeze microphones
+        // NOTE: _isProcessing is managed by parent scope
         _isRecording = false;
-        _isProcessing = false;
         _isVoiceDictating = false;
         _isTransitioning = false;
         _mediaCoordinator.setRecordingModeContext(false);
@@ -1364,7 +1401,7 @@ class SocialActionPostCoordinator extends ChangeNotifier {
         if (kDebugMode) {
           print('🔄 Coordinator state fully reset after successful posting');
           print('   _isRecording: $_isRecording');
-          print('   _isProcessing: $_isProcessing');
+          print('   _isProcessing: $_isProcessing (managed by parent)');
           print('   _isVoiceDictating: $_isVoiceDictating');
           print('   _isTransitioning: $_isTransitioning');
         }
@@ -1376,8 +1413,8 @@ class SocialActionPostCoordinator extends ChangeNotifier {
             priority: StatusPriority.high);
       } else {
         // CRITICAL: Even on partial failure, ensure recording states are cleared
+        // NOTE: _isProcessing is managed by parent scope
         _isRecording = false;
-        _isProcessing = false;
         _isVoiceDictating = false;
         _isTransitioning = false;
         _mediaCoordinator.setRecordingModeContext(false);
@@ -1397,8 +1434,8 @@ class SocialActionPostCoordinator extends ChangeNotifier {
       }
 
       // CRITICAL: Ensure recording states are cleared even on error
+      // NOTE: _isProcessing is managed by parent scope
       _isRecording = false;
-      _isProcessing = false;
       _isVoiceDictating = false;
       _isTransitioning = false;
       _mediaCoordinator.setRecordingModeContext(false);
@@ -1552,7 +1589,7 @@ class SocialActionPostCoordinator extends ChangeNotifier {
   Future<void> processVoiceCommand(String transcription,
       {List<MediaItem>? preSelectedMedia}) async {
     try {
-      _isProcessing = true;
+      // NO _isProcessing management here anymore - controlled by parent
       _hasError = false;
       _errorMessage = null;
       notifyListeners();
@@ -1569,10 +1606,10 @@ class SocialActionPostCoordinator extends ChangeNotifier {
       _currentPost = _mergeWithExisting(action);
       _hasContent = _currentPost.content.text.isNotEmpty;
       _hasMedia = _currentPost.content.media.isNotEmpty;
-      _isProcessing = false;
+      // _isProcessing managed by parent
       notifyListeners();
     } catch (e) {
-      _isProcessing = false;
+      // _isProcessing managed by parent
       setError(e.toString());
       rethrow;
     }
@@ -1604,8 +1641,8 @@ class SocialActionPostCoordinator extends ChangeNotifier {
 
     try {
       // Reset core recording flags
+      // NOTE: _isProcessing is managed by parent scope
       _isRecording = false;
-      _isProcessing = false;
       _isVoiceDictating = false;
 
       // Clear recording mode context
@@ -1647,8 +1684,8 @@ class SocialActionPostCoordinator extends ChangeNotifier {
         print('❌ Error stopping recording: $e');
       }
       // Ensure states are reset even on error
+      // NOTE: _isProcessing is managed by parent scope
       _isRecording = false;
-      _isProcessing = false;
       _isVoiceDictating = false;
       setError('Failed to stop recording: $e');
     } finally {
@@ -1731,7 +1768,10 @@ class SocialActionPostCoordinator extends ChangeNotifier {
       }
       return;
     } else if (_hasContent) {
-      await finalizeAndExecutePost();
+      // CRITICAL: Use processing state management for post execution
+      await executeWithProcessingState(() async {
+        await finalizeAndExecutePost();
+      });
     } else {
       await startRecordingWithMode(isVoiceDictation: false);
     }
