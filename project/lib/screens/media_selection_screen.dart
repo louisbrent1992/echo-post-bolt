@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import 'package:flutter/foundation.dart';
 
 import '../models/social_action.dart';
+import '../models/media_validation.dart';
 import '../services/media_coordinator.dart';
 import '../services/video_validation_service.dart';
 import '../screens/directory_selection_screen.dart';
@@ -353,8 +354,11 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
         mediaTypes: _mediaType != null ? [_mediaType!] : null,
       );
 
+      // Proactively validate and filter out broken media
+      final validatedCandidates = await _validateAndFilterMedia(candidates);
+
       setState(() {
-        _mediaCandidates = candidates;
+        _mediaCandidates = validatedCandidates;
         _selectedMedia = null;
         _isLoading = false;
       });
@@ -368,6 +372,77 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
         );
       }
     }
+  }
+
+  /// Proactively validate media and exclude broken references
+  Future<List<Map<String, dynamic>>> _validateAndFilterMedia(
+    List<Map<String, dynamic>> candidates,
+  ) async {
+    if (candidates.isEmpty) return candidates;
+
+    final validatedCandidates = <Map<String, dynamic>>[];
+    final config = MediaValidationConfig.production;
+
+    // Process in small batches to avoid overwhelming the system
+    const batchSize = 10;
+    for (int i = 0; i < candidates.length; i += batchSize) {
+      final batch = candidates.skip(i).take(batchSize);
+
+      final batchResults = await Future.wait(
+        batch.map((candidate) async {
+          final fileUri = candidate['file_uri'] as String;
+
+          try {
+            final validationResult =
+                await _mediaCoordinator.validateAndRecoverMediaURI(
+              fileUri,
+              config: config,
+            );
+
+            if (validationResult.isValid) {
+              // Update candidate with recovered URI if needed
+              if (validationResult.wasRecovered) {
+                candidate = Map<String, dynamic>.from(candidate);
+                candidate['file_uri'] = validationResult.effectiveUri;
+                candidate['_recovered'] = true;
+              }
+              return candidate;
+            }
+          } catch (e) {
+            // Skip broken media silently
+          }
+
+          return null;
+        }),
+      );
+
+      // Add valid candidates to the list
+      for (final result in batchResults) {
+        if (result != null) {
+          validatedCandidates.add(result);
+        }
+      }
+    }
+
+    // Purge stale references from the excluded media
+    final excludedCount = candidates.length - validatedCandidates.length;
+    if (excludedCount > 0) {
+      final brokenUris = candidates
+          .where((c) =>
+              !validatedCandidates.any((v) => v['file_uri'] == c['file_uri']))
+          .map((c) => c['file_uri'] as String)
+          .toList();
+
+      // Purge stale references in background
+      _mediaCoordinator.purgeStaleReferences(specificUris: brokenUris);
+
+      if (kDebugMode) {
+        print(
+            '🧹 MediaSelectionScreen: Excluded $excludedCount broken media items');
+      }
+    }
+
+    return validatedCandidates;
   }
 
   Future<void> _fetchMedia() async {
@@ -384,8 +459,11 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
         mediaTypes: _mediaType != null ? [_mediaType!] : null,
       );
 
+      // Validate and filter results before displaying
+      final validatedResults = await _validateAndFilterMedia(results);
+
       setState(() {
-        _mediaCandidates = results;
+        _mediaCandidates = validatedResults;
         _isSearching = false;
       });
     } catch (e) {
@@ -1266,7 +1344,7 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
     );
   }
 
-  /// Enhanced image preview widget
+  /// Enhanced image preview widget with real-time validation
   Widget _buildImagePreview(Map<String, dynamic> media, bool isSelected) {
     return GestureDetector(
       onTap: () {
@@ -1287,22 +1365,77 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
         child: Stack(
           fit: StackFit.expand,
           children: [
-            // Image thumbnail
+            // Enhanced image thumbnail with validation
             ClipRRect(
               borderRadius: BorderRadius.circular(8),
-              child: Image.file(
-                File(Uri.parse(media['file_uri']).path),
-                fit: BoxFit.cover,
-                errorBuilder: (context, error, stackTrace) {
-                  return Container(
-                    color: const Color(0xFF2A2A2A),
-                    child: const Center(
-                      child: Icon(
-                        Icons.broken_image,
-                        color: Colors.white54,
-                        size: 48,
+              child: FutureBuilder<MediaValidationResult>(
+                future: _mediaCoordinator.validateAndRecoverMediaURI(
+                  media['file_uri'] as String,
+                  config: MediaValidationConfig.production,
+                ),
+                builder: (context, validationSnapshot) {
+                  if (validationSnapshot.connectionState ==
+                      ConnectionState.waiting) {
+                    return Container(
+                      color: const Color(0xFF2A2A2A),
+                      child: const Center(
+                        child: SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Color(0xFFFF0080),
+                          ),
+                        ),
                       ),
-                    ),
+                    );
+                  }
+
+                  final validationResult = validationSnapshot.data;
+
+                  if (validationResult == null || !validationResult.isValid) {
+                    // Hide broken images instead of showing broken icon
+                    // This effectively excludes stale references from display
+                    return Container(
+                      color: const Color(0xFF2A2A2A),
+                      child: const SizedBox.shrink(),
+                    );
+                  }
+
+                  // Use the effective URI (recovered or original)
+                  final effectiveUri = validationResult.effectiveUri;
+
+                  return Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      Image.file(
+                        File(Uri.parse(effectiveUri).path),
+                        fit: BoxFit.cover,
+                        errorBuilder: (context, error, stackTrace) {
+                          // Final fallback - hide completely if still broken
+                          return const SizedBox.shrink();
+                        },
+                      ),
+                      // Show recovery indicator if media was recovered
+                      if (validationResult.wasRecovered)
+                        Positioned(
+                          top: 4,
+                          left: 4,
+                          child: Container(
+                            padding: const EdgeInsets.all(2),
+                            decoration: BoxDecoration(
+                              color: Colors.green.withValues(alpha: 0.8),
+                              shape: BoxShape.circle,
+                              border: Border.all(color: Colors.white, width: 1),
+                            ),
+                            child: const Icon(
+                              Icons.refresh,
+                              color: Colors.white,
+                              size: 8,
+                            ),
+                          ),
+                        ),
+                    ],
                   );
                 },
               ),

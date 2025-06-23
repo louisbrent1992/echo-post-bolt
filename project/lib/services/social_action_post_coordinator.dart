@@ -6,6 +6,7 @@ import 'package:photo_manager/photo_manager.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import '../models/social_action.dart';
+import '../models/media_validation.dart';
 import '../services/media_coordinator.dart';
 import '../services/firestore_service.dart';
 import '../services/ai_service.dart';
@@ -1359,93 +1360,42 @@ class SocialActionPostCoordinator extends ChangeNotifier {
     }
   }
 
-  /// Complete post workflow: Upload to Firestore + Execute on social media
-  Future<Map<String, bool>> finalizeAndExecutePost() async {
+  /// Synchronize media states to ensure consistency between preSelectedMedia and currentPost
+  void _syncMediaStates() {
+    // If we have pre-selected media but current post doesn't have it, add it
+    if (_preSelectedMedia.isNotEmpty && _currentPost.content.media.isEmpty) {
+      _currentPost = _currentPost.copyWith(
+        content: _currentPost.content.copyWith(
+          media: List.from(_preSelectedMedia),
+        ),
+      );
+      if (kDebugMode) {
+        print(
+            '🔄 Synced ${_preSelectedMedia.length} pre-selected media to current post');
+      }
+    }
+
+    // Update hasMedia flag based on final consolidated state
+    _hasMedia = _currentPost.content.media.isNotEmpty;
+  }
+
+  /// Confirm post and reset state
+  Future<void> confirmPost() async {
     try {
-      if (kDebugMode) {
-        print('🎯 Finalizing and executing post: ${_currentPost.actionId}');
-      }
+      // Confirm the post logic here
+      // ... existing code ...
 
-      // CRITICAL: Ensure media is included from preSelectedMedia if not already in post
-      if (_currentPost.content.media.isEmpty && _preSelectedMedia.isNotEmpty) {
-        _currentPost = _currentPost.copyWith(
-          content: _currentPost.content.copyWith(
-            media: List.from(_preSelectedMedia),
-          ),
-        );
-        if (kDebugMode) {
-          print(
-              '✅ Added ${_preSelectedMedia.length} pre-selected media items to post');
-        }
-      }
-
-      // Step 1: Upload finalized post to Firestore
-      await uploadFinalizedPost();
-
-      // Step 2: Execute post across social media platforms
-      final executionResults = await executePostToSocialMedia();
-
-      // Step 3: Handle results and transition to appropriate state
-      final allSucceeded = executionResults.values.every((success) => success);
-      if (allSucceeded) {
-        // CRITICAL: Reset recording states immediately to unfreeze microphones
-        // NOTE: _isProcessing is managed by parent scope
-        _isRecording = false;
-        _isVoiceDictating = false;
-        _isTransitioning = false;
-        _mediaCoordinator.setRecordingModeContext(false);
-
-        // Reset recording state first to ensure microphones are reactivated
-        resetRecordingState();
-
-        // Then perform full reset of other states
-        reset();
-
-        if (kDebugMode) {
-          print('🔄 Coordinator state fully reset after successful posting');
-          print('   _isRecording: $_isRecording');
-          print('   _isProcessing: $_isProcessing (managed by parent)');
-          print('   _isVoiceDictating: $_isVoiceDictating');
-          print('   _isTransitioning: $_isTransitioning');
-        }
-
-        // Show success message
-        requestStatusUpdate(
-            'Post successfully shared! 🎉', StatusMessageType.success,
-            duration: const Duration(seconds: 3),
-            priority: StatusPriority.high);
-      } else {
-        // CRITICAL: Even on partial failure, ensure recording states are cleared
-        // NOTE: _isProcessing is managed by parent scope
-        _isRecording = false;
-        _isVoiceDictating = false;
-        _isTransitioning = false;
-        _mediaCoordinator.setRecordingModeContext(false);
-        resetRecordingState();
-
-        setError(
-            'Some platforms failed: ${executionResults.entries.where((e) => !e.value).map((e) => e.key).join(', ')}');
-        if (kDebugMode) {
-          print('⚠️ Some platforms failed, but recording states cleared');
-        }
-      }
-
-      return executionResults;
-    } catch (e) {
-      if (kDebugMode) {
-        print('❌ Failed to finalize and execute post: $e');
-      }
-
-      // CRITICAL: Ensure recording states are cleared even on error
-      // NOTE: _isProcessing is managed by parent scope
-      _isRecording = false;
-      _isVoiceDictating = false;
-      _isTransitioning = false;
-      _mediaCoordinator.setRecordingModeContext(false);
+      // Reset recording state to allow further recordings
       resetRecordingState();
 
-      setError(e.toString());
-      rethrow;
+      if (kDebugMode) {
+        print('✅ Post confirmed and state reset for further recordings');
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ Error confirming post: $e');
+      }
+      setError('Failed to confirm post: $e');
     }
   }
 
@@ -1874,42 +1824,391 @@ class SocialActionPostCoordinator extends ChangeNotifier {
     }
   }
 
-  /// Synchronize media states to ensure consistency between preSelectedMedia and currentPost
-  void _syncMediaStates() {
-    // If we have pre-selected media but current post doesn't have it, add it
-    if (_preSelectedMedia.isNotEmpty && _currentPost.content.media.isEmpty) {
-      _currentPost = _currentPost.copyWith(
-        content: _currentPost.content.copyWith(
-          media: List.from(_preSelectedMedia),
-        ),
-      );
+  /// Validates and recovers media for the current post
+  /// This method ensures all media URIs are valid and attempts recovery for broken ones
+  Future<bool> validateAndRecoverCurrentPostMedia({
+    MediaValidationConfig? config,
+  }) async {
+    if (_currentPost.content.media.isEmpty) {
       if (kDebugMode) {
         print(
-            '🔄 Synced ${_preSelectedMedia.length} pre-selected media to current post');
+            'ℹ️ SocialActionPostCoordinator: No media to validate in current post');
       }
+      return true;
     }
 
-    // Update hasMedia flag based on final consolidated state
-    _hasMedia = _currentPost.content.media.isNotEmpty;
-  }
+    final validationConfig = config ??
+        (kDebugMode
+            ? MediaValidationConfig.debug
+            : MediaValidationConfig.production);
 
-  /// Confirm post and reset state
-  Future<void> confirmPost() async {
     try {
-      // Confirm the post logic here
-      // ... existing code ...
+      if (kDebugMode) {
+        print(
+            '🔍 SocialActionPostCoordinator: Validating ${_currentPost.content.media.length} media items');
+      }
 
-      // Reset recording state to allow further recordings
-      resetRecordingState();
+      final batchResult = await _mediaCoordinator.validateAndRecoverMediaList(
+        _currentPost.content.media,
+        config: validationConfig,
+      );
+
+      final recoveredMedia = <MediaItem>[];
+      bool hasRecoveredItems = false;
+      bool hasFailedItems = false;
+
+      for (int i = 0; i < batchResult.results.length; i++) {
+        final result = batchResult.results[i];
+        final originalMedia = _currentPost.content.media[i];
+
+        if (result.isValid) {
+          if (result.wasRecovered) {
+            // Create new MediaItem with recovered URI
+            final recoveredItem = _mediaCoordinator.createRecoveredMediaItem(
+                originalMedia, result);
+            if (recoveredItem != null) {
+              recoveredMedia.add(recoveredItem);
+              hasRecoveredItems = true;
+
+              if (kDebugMode) {
+                print(
+                    '✅ SocialActionPostCoordinator: Recovered media via ${result.recoveryMethodDescription}');
+              }
+            } else {
+              hasFailedItems = true;
+            }
+          } else {
+            // Keep original valid media
+            recoveredMedia.add(originalMedia);
+          }
+        } else {
+          // Media couldn't be recovered
+          hasFailedItems = true;
+          if (kDebugMode) {
+            print(
+                '❌ SocialActionPostCoordinator: Failed to recover media: ${result.errorMessage}');
+          }
+        }
+      }
+
+      // Update the current post with recovered media
+      if (recoveredMedia.isNotEmpty) {
+        _currentPost = _currentPost.copyWith(
+          content: _currentPost.content.copyWith(media: recoveredMedia),
+        );
+
+        // Sync with pre-selected media if needed
+        if (hasRecoveredItems) {
+          _preSelectedMedia = List.from(recoveredMedia);
+        }
+
+        // Update Firestore with recovered URIs if configured
+        if (validationConfig.updateFirestore && hasRecoveredItems) {
+          try {
+            await _firestoreService.updateAction(
+                _currentPost.actionId, _currentPost.toJson());
+            if (kDebugMode) {
+              print(
+                  '✅ SocialActionPostCoordinator: Updated Firestore with recovered media URIs');
+            }
+          } catch (e) {
+            if (kDebugMode) {
+              print(
+                  '⚠️ SocialActionPostCoordinator: Failed to update Firestore with recovered URIs: $e');
+            }
+          }
+        }
+      }
+
+      // Update media states
+      _syncMediaStates();
+      _safeNotifyListeners();
+
+      // Provide user feedback if there were recoveries or failures
+      if (hasRecoveredItems && hasFailedItems) {
+        requestStatusUpdate(
+          'Some media recovered, others removed',
+          StatusMessageType.warning,
+          duration: const Duration(seconds: 3),
+          priority: StatusPriority.medium,
+        );
+      } else if (hasRecoveredItems) {
+        requestStatusUpdate(
+          'Media recovered successfully',
+          StatusMessageType.success,
+          duration: const Duration(seconds: 2),
+          priority: StatusPriority.medium,
+        );
+      } else if (hasFailedItems) {
+        requestStatusUpdate(
+          'Some media could not be recovered',
+          StatusMessageType.warning,
+          duration: const Duration(seconds: 3),
+          priority: StatusPriority.medium,
+        );
+      }
 
       if (kDebugMode) {
-        print('✅ Post confirmed and state reset for further recordings');
+        print(
+            '✅ SocialActionPostCoordinator: Media validation completed: $batchResult');
       }
+
+      return batchResult.allItemsValid;
     } catch (e) {
       if (kDebugMode) {
-        print('❌ Error confirming post: $e');
+        print(
+            '❌ SocialActionPostCoordinator: Error during media validation: $e');
       }
-      setError('Failed to confirm post: $e');
+      setError('Media validation failed: $e');
+      return false;
+    }
+  }
+
+  /// Validates and recovers media for an existing post (used for loading from Firestore)
+  Future<SocialAction> validateAndRecoverPostMedia(
+    SocialAction action, {
+    MediaValidationConfig? config,
+  }) async {
+    if (action.content.media.isEmpty) {
+      return action;
+    }
+
+    final validationConfig = config ??
+        (kDebugMode
+            ? MediaValidationConfig.debug
+            : MediaValidationConfig.production);
+
+    try {
+      if (kDebugMode) {
+        print(
+            '🔍 SocialActionPostCoordinator: Validating media for post: ${action.actionId}');
+      }
+
+      final batchResult = await _mediaCoordinator.validateAndRecoverMediaList(
+        action.content.media,
+        config: validationConfig,
+      );
+
+      final recoveredMedia = <MediaItem>[];
+      bool hasRecoveredItems = false;
+
+      for (int i = 0; i < batchResult.results.length; i++) {
+        final result = batchResult.results[i];
+        final originalMedia = action.content.media[i];
+
+        if (result.isValid) {
+          if (result.wasRecovered) {
+            final recoveredItem = _mediaCoordinator.createRecoveredMediaItem(
+                originalMedia, result);
+            if (recoveredItem != null) {
+              recoveredMedia.add(recoveredItem);
+              hasRecoveredItems = true;
+            }
+          } else {
+            recoveredMedia.add(originalMedia);
+          }
+        }
+        // Skip media that couldn't be recovered
+      }
+
+      final updatedAction = action.copyWith(
+        content: action.content.copyWith(media: recoveredMedia),
+      );
+
+      // Update Firestore with recovered URIs if configured and items were recovered
+      if (validationConfig.updateFirestore && hasRecoveredItems) {
+        try {
+          await _firestoreService.updateAction(
+              action.actionId, updatedAction.toJson());
+          if (kDebugMode) {
+            print(
+                '✅ SocialActionPostCoordinator: Updated Firestore with recovered media for post: ${action.actionId}');
+          }
+        } catch (e) {
+          if (kDebugMode) {
+            print(
+                '⚠️ SocialActionPostCoordinator: Failed to update Firestore for post ${action.actionId}: $e');
+          }
+        }
+      }
+
+      if (kDebugMode) {
+        print(
+            '✅ SocialActionPostCoordinator: Post media validation completed for ${action.actionId}: $batchResult');
+      }
+
+      return updatedAction;
+    } catch (e) {
+      if (kDebugMode) {
+        print(
+            '❌ SocialActionPostCoordinator: Error validating post media for ${action.actionId}: $e');
+      }
+      return action; // Return original action if validation fails
+    }
+  }
+
+  /// Validates media before posting to ensure all URIs are accessible
+  Future<bool> validateMediaBeforePosting() async {
+    if (_currentPost.content.media.isEmpty) {
+      return true; // No media to validate
+    }
+
+    try {
+      if (kDebugMode) {
+        print(
+            '🔍 SocialActionPostCoordinator: Pre-posting media validation with recovery');
+      }
+
+      final config = MediaValidationConfig.production;
+      final validationResults = await Future.wait(
+        _currentPost.content.media.map((item) => _mediaCoordinator
+            .validateAndRecoverMediaURI(item.fileUri, config: config)),
+      );
+
+      final validMediaItems = <MediaItem>[];
+      bool hasRecoveredMedia = false;
+      bool hasFailedMedia = false;
+
+      for (int i = 0; i < _currentPost.content.media.length; i++) {
+        final result = validationResults[i];
+        final originalItem = _currentPost.content.media[i];
+
+        if (result.isValid) {
+          if (result.wasRecovered) {
+            // Create updated media item with recovered URI
+            final updatedItem = MediaItem(
+              fileUri: result.effectiveUri,
+              mimeType: originalItem.mimeType,
+              deviceMetadata: originalItem.deviceMetadata,
+            );
+            validMediaItems.add(updatedItem);
+            hasRecoveredMedia = true;
+          } else {
+            validMediaItems.add(originalItem);
+          }
+        } else {
+          hasFailedMedia = true;
+        }
+      }
+
+      // Update current post with validated media
+      if (hasRecoveredMedia || hasFailedMedia) {
+        _currentPost = _currentPost.copyWith(
+          content: _currentPost.content.copyWith(media: validMediaItems),
+        );
+
+        // Sync with pre-selected media
+        _preSelectedMedia = List.from(validMediaItems);
+        _syncMediaStates();
+        _safeNotifyListeners();
+
+        // Provide user feedback
+        if (hasFailedMedia && hasRecoveredMedia) {
+          requestStatusUpdate(
+            'Some media recovered, others excluded from posting',
+            StatusMessageType.warning,
+            duration: const Duration(seconds: 3),
+            priority: StatusPriority.medium,
+          );
+        } else if (hasRecoveredMedia) {
+          requestStatusUpdate(
+            'Media files recovered for posting',
+            StatusMessageType.success,
+            duration: const Duration(seconds: 2),
+            priority: StatusPriority.medium,
+          );
+        } else if (hasFailedMedia) {
+          requestStatusUpdate(
+            'Some media excluded - files no longer available',
+            StatusMessageType.warning,
+            duration: const Duration(seconds: 3),
+            priority: StatusPriority.medium,
+          );
+        }
+      }
+
+      // Ensure we still have content to post (either text or valid media)
+      final hasValidContent =
+          _currentPost.content.text.isNotEmpty || validMediaItems.isNotEmpty;
+
+      if (!hasValidContent) {
+        setError('No valid content available for posting');
+        return false;
+      }
+
+      return true;
+    } catch (e) {
+      if (kDebugMode) {
+        print(
+            '❌ SocialActionPostCoordinator: Pre-posting validation failed: $e');
+      }
+      setError('Media validation failed before posting: $e');
+      return false;
+    }
+  }
+
+  /// Enhanced finalizeAndExecutePost method with comprehensive media validation
+  Future<Map<String, bool>> finalizeAndExecutePost() async {
+    try {
+      if (kDebugMode) {
+        print(
+            '🎯 SocialActionPostCoordinator: Finalizing and executing post with media validation: ${_currentPost.actionId}');
+      }
+
+      // CRITICAL: Validate media before posting
+      final mediaValidationPassed = await validateMediaBeforePosting();
+      if (!mediaValidationPassed) {
+        throw Exception(
+            'Media validation failed - cannot proceed with posting');
+      }
+
+      // CRITICAL: Ensure media is included from preSelectedMedia if not already in post
+      if (_currentPost.content.media.isEmpty && _preSelectedMedia.isNotEmpty) {
+        _currentPost = _currentPost.copyWith(
+          content: _currentPost.content.copyWith(
+            media: List.from(_preSelectedMedia),
+          ),
+        );
+        if (kDebugMode) {
+          print(
+              '✅ SocialActionPostCoordinator: Added ${_preSelectedMedia.length} pre-selected media items to post');
+        }
+      }
+
+      // Step 1: Upload finalized post to Firestore
+      await uploadFinalizedPost();
+
+      // Step 2: Execute post across social media platforms
+      final executionResults = await executePostToSocialMedia();
+
+      // Step 3: Handle results and transition to appropriate state
+      final allSucceeded = executionResults.values.every((success) => success);
+
+      if (allSucceeded) {
+        if (kDebugMode) {
+          print(
+              '🎉 SocialActionPostCoordinator: Post successfully executed across all platforms');
+        }
+      } else {
+        final failedPlatforms = executionResults.entries
+            .where((entry) => !entry.value)
+            .map((entry) => entry.key)
+            .toList();
+
+        if (kDebugMode) {
+          print(
+              '⚠️ SocialActionPostCoordinator: Post failed on platforms: ${failedPlatforms.join(', ')}');
+        }
+      }
+
+      return executionResults;
+    } catch (e) {
+      if (kDebugMode) {
+        print(
+            '❌ SocialActionPostCoordinator: Failed to finalize and execute post: $e');
+      }
+      setError('Failed to execute post: $e');
+      rethrow;
     }
   }
 }

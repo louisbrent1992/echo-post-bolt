@@ -219,7 +219,7 @@ class _ServiceInitializationWrapperState
       final mediaCoordinator =
           Provider.of<MediaCoordinator>(context, listen: false);
 
-      // Wait a bit to ensure all providers are ready
+      // Wait a bit to ensure all providers are readyflut
       await Future.delayed(const Duration(milliseconds: 100));
 
       if (!mounted) {

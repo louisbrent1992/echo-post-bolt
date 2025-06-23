@@ -5,9 +5,11 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
 
 import '../models/social_action.dart';
+import '../models/media_validation.dart';
 import '../services/firestore_service.dart';
 import '../services/social_post_service.dart';
 import '../services/auth_service.dart';
+import '../services/media_coordinator.dart';
 import '../widgets/social_icon.dart';
 
 class HistoryScreen extends StatefulWidget {
@@ -44,6 +46,9 @@ class _HistoryScreenState extends State<HistoryScreen> {
             color: const Color(0xFF2A2A2A),
             onSelected: (value) {
               switch (value) {
+                case 'validate_media':
+                  _validateAllPostsMedia(context);
+                  break;
                 case 'clear_all':
                   _showClearAllDialog(context, firestoreService);
                   break;
@@ -60,6 +65,17 @@ class _HistoryScreenState extends State<HistoryScreen> {
                     Icon(Icons.refresh, color: Colors.white70),
                     SizedBox(width: 8),
                     Text('Refresh', style: TextStyle(color: Colors.white70)),
+                  ],
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'validate_media',
+                child: Row(
+                  children: [
+                    Icon(Icons.healing, color: Colors.green),
+                    SizedBox(width: 8),
+                    Text('Validate & Recover Media',
+                        style: TextStyle(color: Colors.green)),
                   ],
                 ),
               ),
@@ -550,30 +566,189 @@ class _HistoryScreenState extends State<HistoryScreen> {
   }
 
   Widget _buildMediaThumbnail(MediaItem mediaItem) {
-    try {
-      final file = File(Uri.parse(mediaItem.fileUri).path);
-      return Image.file(
-        file,
-        fit: BoxFit.cover,
-        errorBuilder: (context, error, stackTrace) {
-          return Container(
-            color: Colors.white.withValues(alpha: 0.1),
-            child: Icon(
-              Icons.broken_image,
-              color: Colors.white.withValues(alpha: 0.5),
-            ),
-          );
-        },
-      );
-    } catch (e) {
-      return Container(
-        color: Colors.white.withValues(alpha: 0.1),
-        child: Icon(
-          Icons.broken_image,
-          color: Colors.white.withValues(alpha: 0.5),
+    return Consumer<MediaCoordinator>(
+      builder: (context, mediaCoordinator, child) {
+        return FutureBuilder<MediaValidationResult>(
+          future: mediaCoordinator.validateAndRecoverMediaURI(
+            mediaItem.fileUri,
+            config: MediaValidationConfig.production,
+          ),
+          builder: (context, validationSnapshot) {
+            if (validationSnapshot.connectionState == ConnectionState.waiting) {
+              // Show loading while validating
+              return Container(
+                width: 60,
+                height: 60,
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Center(
+                  child: SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: Color(0xFFFF0080),
+                    ),
+                  ),
+                ),
+              );
+            }
+
+            final validationResult = validationSnapshot.data;
+
+            if (validationResult == null || !validationResult.isValid) {
+              // Custom EchoPost-themed placeholder for unavailable media
+              return _buildCustomMediaPlaceholder();
+            }
+
+            // Use the effective URI (recovered or original)
+            final effectiveUri = validationResult.effectiveUri;
+
+            try {
+              final file = File(Uri.parse(effectiveUri).path);
+              return Stack(
+                children: [
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: SizedBox(
+                      width: 60,
+                      height: 60,
+                      child: Image.file(
+                        file,
+                        fit: BoxFit.cover, // Uniform square cropping
+                        errorBuilder: (context, error, stackTrace) {
+                          return _buildCustomMediaPlaceholder();
+                        },
+                      ),
+                    ),
+                  ),
+                  // Show recovery indicator if media was recovered
+                  if (validationResult.wasRecovered)
+                    Positioned(
+                      top: 2,
+                      right: 2,
+                      child: Container(
+                        width: 12,
+                        height: 12,
+                        decoration: BoxDecoration(
+                          color: Colors.green.withValues(alpha: 0.9),
+                          shape: BoxShape.circle,
+                          border: Border.all(color: Colors.white, width: 1),
+                        ),
+                        child: const Icon(
+                          Icons.refresh,
+                          color: Colors.white,
+                          size: 6,
+                        ),
+                      ),
+                    ),
+                ],
+              );
+            } catch (e) {
+              return _buildCustomMediaPlaceholder();
+            }
+          },
+        );
+      },
+    );
+  }
+
+  /// Custom EchoPost-themed placeholder for unavailable media
+  Widget _buildCustomMediaPlaceholder() {
+    return Container(
+      width: 60,
+      height: 60,
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            Color(0xFF2A2A2A),
+            Color(0xFF1A1A1A),
+          ],
         ),
-      );
-    }
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+          color: Colors.white.withValues(alpha: 0.1),
+          width: 1,
+        ),
+      ),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(
+            Icons.mic_none,
+            color: const Color(0xFFFF0080).withValues(alpha: 0.6),
+            size: 16,
+          ),
+          const SizedBox(height: 2),
+          Text(
+            'Media\nUnavailable',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: Colors.white.withValues(alpha: 0.4),
+              fontSize: 6,
+              height: 1.1,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Detailed media placeholder for modal view
+  Widget _buildDetailedMediaPlaceholder() {
+    return Container(
+      width: double.infinity,
+      height: 200,
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            Color(0xFF2A2A2A),
+            Color(0xFF1A1A1A),
+          ],
+        ),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: Colors.white.withValues(alpha: 0.1),
+          width: 1,
+        ),
+      ),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(
+            Icons.mic_none,
+            color: const Color(0xFFFF0080).withValues(alpha: 0.6),
+            size: 48,
+          ),
+          const SizedBox(height: 12),
+          Text(
+            'Media Unavailable',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: Colors.white.withValues(alpha: 0.6),
+              fontSize: 16,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'This media file is no longer accessible',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: Colors.white.withValues(alpha: 0.4),
+              fontSize: 12,
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   void _showActionDetails(
@@ -680,35 +855,141 @@ class _HistoryScreenState extends State<HistoryScreen> {
 
                     // Media preview
                     if (action.content.media.isNotEmpty) ...[
-                      Text(
-                        'Media',
-                        style: TextStyle(
-                          color: Colors.white.withValues(alpha: 0.9),
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
-                        ),
+                      Row(
+                        children: [
+                          Text(
+                            'Media',
+                            style: TextStyle(
+                              color: Colors.white.withValues(alpha: 0.9),
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const Spacer(),
+                          Consumer<MediaCoordinator>(
+                            builder: (context, mediaCoordinator, child) {
+                              return FutureBuilder<MediaValidationResult>(
+                                future:
+                                    mediaCoordinator.validateAndRecoverMediaURI(
+                                  action.content.media.first.fileUri,
+                                  config: MediaValidationConfig.production,
+                                ),
+                                builder: (context, validationSnapshot) {
+                                  final result = validationSnapshot.data;
+                                  if (result != null && result.wasRecovered) {
+                                    return Container(
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 8, vertical: 4),
+                                      decoration: BoxDecoration(
+                                        color:
+                                            Colors.green.withValues(alpha: 0.2),
+                                        borderRadius: BorderRadius.circular(12),
+                                        border: Border.all(
+                                            color: Colors.green
+                                                .withValues(alpha: 0.5)),
+                                      ),
+                                      child: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Icon(
+                                            Icons.refresh,
+                                            color: Colors.green,
+                                            size: 12,
+                                          ),
+                                          const SizedBox(width: 4),
+                                          Text(
+                                            'Recovered',
+                                            style: TextStyle(
+                                              color: Colors.green,
+                                              fontSize: 10,
+                                              fontWeight: FontWeight.bold,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    );
+                                  }
+                                  return const SizedBox.shrink();
+                                },
+                              );
+                            },
+                          ),
+                        ],
                       ),
                       const SizedBox(height: 12),
                       ClipRRect(
                         borderRadius: BorderRadius.circular(16),
-                        child: Image.file(
-                          File(Uri.parse(action.content.media.first.fileUri)
-                              .path),
-                          fit: BoxFit.cover,
-                          width: double.infinity,
-                          height: 200,
-                          errorBuilder: (context, error, stackTrace) {
-                            return Container(
-                              width: double.infinity,
-                              height: 200,
-                              color: Colors.white.withValues(alpha: 0.1),
-                              child: Center(
-                                child: Icon(
-                                  Icons.broken_image,
-                                  size: 48,
-                                  color: Colors.white.withValues(alpha: 0.5),
-                                ),
+                        child: Consumer<MediaCoordinator>(
+                          builder: (context, mediaCoordinator, child) {
+                            return FutureBuilder<MediaValidationResult>(
+                              future:
+                                  mediaCoordinator.validateAndRecoverMediaURI(
+                                action.content.media.first.fileUri,
+                                config: MediaValidationConfig.production,
                               ),
+                              builder: (context, validationSnapshot) {
+                                if (validationSnapshot.connectionState ==
+                                    ConnectionState.waiting) {
+                                  return Container(
+                                    width: double.infinity,
+                                    height: 200,
+                                    color: Colors.white.withValues(alpha: 0.1),
+                                    child: const Center(
+                                      child: CircularProgressIndicator(
+                                        color: Color(0xFFFF0080),
+                                      ),
+                                    ),
+                                  );
+                                }
+
+                                final validationResult =
+                                    validationSnapshot.data;
+
+                                if (validationResult == null ||
+                                    !validationResult.isValid) {
+                                  return Container(
+                                    width: double.infinity,
+                                    height: 200,
+                                    color: Colors.white.withValues(alpha: 0.1),
+                                    child: Column(
+                                      mainAxisAlignment:
+                                          MainAxisAlignment.center,
+                                      children: [
+                                        Icon(
+                                          Icons.broken_image,
+                                          size: 48,
+                                          color: Colors.white
+                                              .withValues(alpha: 0.5),
+                                        ),
+                                        const SizedBox(height: 8),
+                                        Text(
+                                          validationResult?.errorMessage ??
+                                              'Media not accessible',
+                                          style: TextStyle(
+                                            color: Colors.white
+                                                .withValues(alpha: 0.5),
+                                            fontSize: 12,
+                                          ),
+                                          textAlign: TextAlign.center,
+                                        ),
+                                      ],
+                                    ),
+                                  );
+                                }
+
+                                final effectiveUri =
+                                    validationResult.effectiveUri;
+
+                                return Image.file(
+                                  File(Uri.parse(effectiveUri).path),
+                                  fit: BoxFit.cover,
+                                  width: double.infinity,
+                                  height: 200,
+                                  errorBuilder: (context, error, stackTrace) {
+                                    return _buildDetailedMediaPlaceholder();
+                                  },
+                                );
+                              },
                             );
                           },
                         ),
@@ -1399,6 +1680,232 @@ class _HistoryScreenState extends State<HistoryScreen> {
         return Colors.white;
       default:
         return Colors.grey;
+    }
+  }
+
+  /// Validates and recovers media for all posts in the history
+  Future<void> _validateAllPostsMedia(BuildContext context) async {
+    final mediaCoordinator =
+        Provider.of<MediaCoordinator>(context, listen: false);
+    final firestoreService =
+        Provider.of<FirestoreService>(context, listen: false);
+    final scaffoldMessenger = ScaffoldMessenger.of(context);
+
+    // Show confirmation dialog
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF2A2A2A),
+        title: const Text(
+          'Validate All Media?',
+          style: TextStyle(color: Colors.white),
+        ),
+        content: const Text(
+          'This will check all media files in your post history and attempt to recover any broken links. This may take a few moments.',
+          style: TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text(
+              'CANCEL',
+              style: TextStyle(color: Colors.white70),
+            ),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: TextButton.styleFrom(
+              foregroundColor: Colors.green,
+            ),
+            child: const Text('VALIDATE'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    // Show progress dialog
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF2A2A2A),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const CircularProgressIndicator(color: Color(0xFFFF0080)),
+            const SizedBox(height: 16),
+            Text(
+              'Validating media files...',
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.9),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    try {
+      // Get all posts
+      final querySnapshot = await firestoreService.getActionsStream().first;
+      final posts = <SocialAction>[];
+
+      for (final doc in querySnapshot.docs) {
+        try {
+          final data = doc.data() as Map<String, dynamic>;
+          final actionJson = data['action_json'] as Map<String, dynamic>;
+          final action = SocialAction.fromJson(actionJson);
+          if (action.content.media.isNotEmpty) {
+            posts.add(action);
+          }
+        } catch (e) {
+          // Skip corrupted posts
+          continue;
+        }
+      }
+
+      if (posts.isEmpty) {
+        Navigator.pop(context); // Close progress dialog
+        scaffoldMessenger.showSnackBar(
+          const SnackBar(
+            content: Text('No posts with media found'),
+            backgroundColor: Colors.blue,
+          ),
+        );
+        return;
+      }
+
+      // Validate media for all posts
+      int totalMediaItems = 0;
+      int recoveredItems = 0;
+      int failedItems = 0;
+      int postsUpdated = 0;
+
+      for (final post in posts) {
+        totalMediaItems += post.content.media.length;
+
+        final batchResult = await mediaCoordinator.validateAndRecoverMediaList(
+          post.content.media,
+          config: MediaValidationConfig.production,
+        );
+
+        if (batchResult.hasRecoveredItems || batchResult.hasFailedItems) {
+          recoveredItems += batchResult.recoveredItems;
+          failedItems += batchResult.failedItems;
+
+          // Update post in Firestore if there were recoveries
+          if (batchResult.hasRecoveredItems) {
+            try {
+              final recoveredMedia = <MediaItem>[];
+
+              for (int i = 0; i < batchResult.results.length; i++) {
+                final result = batchResult.results[i];
+                final originalMedia = post.content.media[i];
+
+                if (result.isValid) {
+                  if (result.wasRecovered) {
+                    final recoveredItem = mediaCoordinator
+                        .createRecoveredMediaItem(originalMedia, result);
+                    if (recoveredItem != null) {
+                      recoveredMedia.add(recoveredItem);
+                    }
+                  } else {
+                    recoveredMedia.add(originalMedia);
+                  }
+                }
+              }
+
+              if (recoveredMedia.isNotEmpty) {
+                final updatedPost = post.copyWith(
+                  content: post.content.copyWith(media: recoveredMedia),
+                );
+
+                await firestoreService.updateAction(
+                    post.actionId, updatedPost.toJson());
+                postsUpdated++;
+              }
+            } catch (e) {
+              // Continue with other posts if one fails to update
+            }
+          }
+        }
+      }
+
+      Navigator.pop(context); // Close progress dialog
+
+      // Show results
+      final hasResults = recoveredItems > 0 || failedItems > 0;
+      if (hasResults) {
+        showDialog(
+          context: context,
+          builder: (context) => AlertDialog(
+            backgroundColor: const Color(0xFF2A2A2A),
+            title: const Text(
+              'Media Validation Results',
+              style: TextStyle(color: Colors.white),
+            ),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Total media items: $totalMediaItems',
+                  style: TextStyle(color: Colors.white.withValues(alpha: 0.9)),
+                ),
+                const SizedBox(height: 8),
+                if (recoveredItems > 0)
+                  Text(
+                    'Recovered: $recoveredItems',
+                    style: const TextStyle(color: Colors.green),
+                  ),
+                if (failedItems > 0)
+                  Text(
+                    'Failed to recover: $failedItems',
+                    style: const TextStyle(color: Colors.red),
+                  ),
+                if (postsUpdated > 0) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    'Posts updated: $postsUpdated',
+                    style: const TextStyle(color: Colors.blue),
+                  ),
+                ],
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text(
+                  'OK',
+                  style: TextStyle(color: Color(0xFFFF0080)),
+                ),
+              ),
+            ],
+          ),
+        );
+      } else {
+        scaffoldMessenger.showSnackBar(
+          const SnackBar(
+            content: Text('All media files are valid - no recovery needed'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+
+      // Refresh the screen to show updated media
+      if (mounted) {
+        setState(() {});
+      }
+    } catch (e) {
+      Navigator.pop(context); // Close progress dialog
+      scaffoldMessenger.showSnackBar(
+        SnackBar(
+          content: Text('Media validation failed: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
     }
   }
 }

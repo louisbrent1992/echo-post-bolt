@@ -318,19 +318,20 @@ class SocialPostService {
         'access_token': accessToken,
       };
 
-      if (facebookData?.postAsPage == true &&
-          facebookData?.pageId?.isNotEmpty == true) {
+      // FIXED: Restructure to avoid null-aware operator issues
+      final shouldPostAsPage = facebookData?.postAsPage == true;
+      final pageId = facebookData?.pageId;
+      
+      if (shouldPostAsPage && pageId != null && pageId.isNotEmpty) {
         // Post to Facebook page
-        endpoint =
-            'https://graph.facebook.com/v18.0/${facebookData!.pageId}/feed';
+        endpoint = 'https://graph.facebook.com/v18.0/$pageId/feed';
 
         // Get page access token for posting to pages
-        final pageAccessToken =
-            await _getPageAccessToken(accessToken, facebookData.pageId);
+        final pageAccessToken = await _getPageAccessToken(accessToken, pageId);
         if (pageAccessToken != null) {
           postData['access_token'] = pageAccessToken;
           if (kDebugMode) {
-            print('  📄 Posting to Facebook page: ${facebookData.pageId}');
+            print('  📄 Posting to Facebook page: $pageId');
           }
         } else {
           // Fallback to user timeline if page access token fails
@@ -352,9 +353,12 @@ class SocialPostService {
       if (action.content.media.isNotEmpty) {
         final mediaItem = action.content.media.first;
 
-        if (mediaItem.mimeType?.startsWith('image/') == true) {
+        // FIXED: Restructure to avoid null-aware operator issues
+        final mimeType = mediaItem.mimeType;
+        if (mimeType != null && mimeType.startsWith('image/')) {
           // For images, we can use the photos endpoint or include in feed
-          if (facebookData?.postType == 'photo') {
+          final postType = facebookData?.postType;
+          if (postType == 'photo') {
             // Use photos endpoint for image posts
             endpoint = endpoint.replaceFirst('/feed', '/photos');
             final mediaUrl = await _uploadMediaToFacebook(
@@ -376,9 +380,10 @@ class SocialPostService {
               postData['link'] = mediaUrl;
             }
           }
-        } else if (mediaItem.mimeType?.startsWith('video/') == true) {
+        } else if (mimeType != null && mimeType.startsWith('video/')) {
           // For videos, use the videos endpoint
-          if (facebookData?.postType == 'video') {
+          final postType = facebookData?.postType;
+          if (postType == 'video') {
             endpoint = endpoint.replaceFirst('/feed', '/videos');
             final mediaUrl = await _uploadMediaToFacebook(
                 accessToken, mediaItem.fileUri, 'video');
