@@ -92,6 +92,7 @@ class _CommandScreenState extends State<CommandScreen>
     _initializeAnimations(); // Initialize animations immediately
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _initializeScreen(); // Handle permissions after first frame
+      _ensureCleanStateForNewSession(); // Ensure coordinator is ready for new recordings
     });
   }
 
@@ -183,6 +184,43 @@ class _CommandScreenState extends State<CommandScreen>
           StatusMessageType.error,
           duration: const Duration(seconds: 4),
         );
+      }
+    }
+  }
+
+  /// Ensure coordinator is in clean state for new recording session
+  void _ensureCleanStateForNewSession() {
+    // This is called when the screen is initialized
+    // to ensure the coordinator is ready for new recordings
+    if (_postCoordinator != null) {
+      if (kDebugMode) {
+        print('🔍 Checking coordinator state for new session:');
+        print('   _isRecording: ${_postCoordinator!.isRecording}');
+        print('   _isProcessing: ${_postCoordinator!.isProcessing}');
+        print('   hasContent: ${_postCoordinator!.hasContent}');
+        print('   hasMedia: ${_postCoordinator!.hasMedia}');
+      }
+
+      // Only reset if coordinator is genuinely stuck in processing state
+      // without active recording (indicates a stuck state)
+      if (_postCoordinator!.isProcessing &&
+          !_postCoordinator!.isRecording &&
+          !_postCoordinator!.hasContent) {
+        if (kDebugMode) {
+          print(
+              '⚠️ Coordinator stuck in processing state without content - resetting processing flag');
+        }
+        _postCoordinator!.setProcessingState(false);
+      }
+
+      // Ensure command screen recording timers are clean
+      _recordingTimer?.cancel();
+      _amplitudeTimer?.cancel();
+      _recordingTimer = null;
+      _amplitudeTimer = null;
+
+      if (kDebugMode) {
+        print('✅ Coordinator state checked for new session');
       }
     }
   }
@@ -770,6 +808,14 @@ class _CommandScreenState extends State<CommandScreen>
     final coordinator = _postCoordinator;
     if (coordinator == null) return;
 
+    // Check if processing - if so, don't allow voice editing
+    if (coordinator.isProcessing) {
+      if (kDebugMode) {
+        print('⚠️ Cannot start voice editing: coordinator is processing');
+      }
+      return;
+    }
+
     // IDENTICAL logic to Unified Action Button - just check current state and toggle
     if (coordinator.isRecording) {
       // If currently recording, stop it (same as Unified Action Button onRecordStop)
@@ -1303,8 +1349,7 @@ class _CommandScreenState extends State<CommandScreen>
                 const SizedBox(height: spacing4),
                 _buildCommandMediaSection(coordinator),
                 PostContentBox(
-                  onVoiceEdit:
-                      coordinator.isProcessing ? null : _startVoiceEditing,
+                  onVoiceEdit: _startVoiceEditing,
                   onEditText: _editPostText,
                   onEditSchedule: _editSchedule,
                   onEditHashtags: _editPostHashtags,
@@ -1536,8 +1581,15 @@ class _CommandScreenState extends State<CommandScreen>
         print('🔄 User confirmed reset - clearing all post state');
       }
 
+      // CRITICAL: Comprehensive reset sequence
+      // 1. Reset coordinator state
       coordinator?.reset();
+
+      // 2. Reset command screen recording variables
       _resetAudioRecordingVariables(clearPreSelectedMedia: true);
+
+      // 3. Ensure clean state for new session
+      _ensureCleanStateForNewSession();
 
       if (mounted) {
         _postCoordinator?.requestStatusUpdate(
@@ -1545,6 +1597,10 @@ class _CommandScreenState extends State<CommandScreen>
           StatusMessageType.success,
           duration: const Duration(seconds: 2),
         );
+      }
+
+      if (kDebugMode) {
+        print('✅ Complete reset sequence finished - ready for new recordings');
       }
     }
   }

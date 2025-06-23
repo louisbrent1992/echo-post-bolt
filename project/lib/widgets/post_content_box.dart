@@ -68,8 +68,7 @@ class PostContentBox extends StatelessWidget {
                   // Voice dictation button
                   if (onVoiceEdit != null)
                     IconButton(
-                      onPressed:
-                          (isRecording || isProcessing) ? null : onVoiceEdit,
+                      onPressed: onVoiceEdit,
                       icon: Icon(
                         coordinator.getVoiceDictationIcon(),
                         color: coordinator.getVoiceDictationColor(),
