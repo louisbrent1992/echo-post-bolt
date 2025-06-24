@@ -271,7 +271,7 @@ class MediaMetadataService extends ChangeNotifier {
 
       final metadata = <String, dynamic>{
         'id': path.basename(file.path),
-        'file_uri': file.path,
+        'file_uri': file.uri.toString(),
         'mime_type': mimeType,
         'creation_time': stats.modified.toIso8601String(),
         'file_size_bytes': stats.size,
@@ -1112,6 +1112,71 @@ class MediaMetadataService extends ChangeNotifier {
       return 'evening';
     } else {
       return 'night';
+    }
+  }
+
+  /// Force a complete rescan of all directories
+  Future<void> rescanDirectories() async {
+    try {
+      if (kDebugMode) {
+        print('🔄 MediaMetadataService: Starting complete directory rescan');
+      }
+
+      // Clear existing cache
+      _metadataCache = {};
+
+      // Perform the scan
+      await _scanDirectories();
+
+      if (kDebugMode) {
+        final mediaItems =
+            _metadataCache['media_items'] as Map<String, dynamic>;
+        final directories = _directoryService!.enabledDirectories;
+        print('✅ MediaMetadataService: Directory rescan complete');
+        print('   Found ${mediaItems.length} media items');
+        print('   In ${directories.length} directories');
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ MediaMetadataService: Directory rescan failed: $e');
+      }
+      rethrow;
+    }
+  }
+
+  /// Updates cache from external source (used by MediaCoordinator's consolidated scanning)
+  /// This eliminates redundant directory scanning by allowing MediaCoordinator to provide
+  /// the cache data directly from its unified directory scanning system
+  Future<void> updateCacheFromExternalSource(
+      Map<String, dynamic> cacheData) async {
+    try {
+      if (kDebugMode) {
+        print('🔄 MediaMetadataService: Updating cache from external source');
+        final mediaItems =
+            cacheData['media_items'] as Map<String, dynamic>? ?? {};
+        print(
+            '   Received ${mediaItems.length} media items from external source');
+      }
+
+      // Update internal cache with provided data
+      _metadataCache = Map<String, dynamic>.from(cacheData);
+      _lastCacheUpdate = DateTime.now();
+
+      // Save the updated cache to file
+      await _saveCache();
+
+      // Notify listeners of the cache update
+      notifyListeners();
+
+      if (kDebugMode) {
+        print('✅ MediaMetadataService: Cache updated from external source');
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        print(
+            '❌ MediaMetadataService: Failed to update cache from external source: $e');
+      }
+      rethrow;
     }
   }
 }

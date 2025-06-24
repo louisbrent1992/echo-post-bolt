@@ -1786,9 +1786,14 @@ class _HistoryScreenState extends State<HistoryScreen> {
       for (final post in posts) {
         totalMediaItems += post.content.media.length;
 
-        final batchResult = await mediaCoordinator.validateAndRecoverMediaList(
-          post.content.media,
+        // ========== PHASE 4: USE UNIFIED VALIDATION SYSTEM ==========
+        // Use MediaCoordinator's unified validation instead of individual calls
+        final mediaUris = post.content.media.map((m) => m.fileUri).toList();
+        final batchResult = await mediaCoordinator.validateMediaBatch(
+          mediaUris,
           config: MediaValidationConfig.production,
+          enableRecovery: true,
+          enableCaching: true,
         );
 
         if (batchResult.hasRecoveredItems || batchResult.hasFailedItems) {

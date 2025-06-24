@@ -56,6 +56,8 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
   @override
   void dispose() {
     _searchController.dispose();
+    _selectedMedia = null;
+    _mediaCandidates = [];
     super.dispose();
   }
 
@@ -65,7 +67,6 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
     });
 
     try {
-      // Only log initialization details occasionally to prevent spam
       final now = DateTime.now();
       final shouldLogInit =
           _lastInitLog == null || now.difference(_lastInitLog!).inMinutes > 5;
@@ -73,21 +74,12 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
       if (kDebugMode && shouldLogInit) {
         print(
             '🔄 MediaSelectionScreen: Starting initialization with directory compliance enforcement');
-        print(
-            '   Custom directories enabled: ${_mediaCoordinator.isCustomDirectoriesEnabled}');
-        if (_mediaCoordinator.isCustomDirectoriesEnabled) {
-          final enabledDirs = _mediaCoordinator.enabledDirectories;
-          print(
-              '   Enabled directories: ${enabledDirs.map((d) => d.displayName).join(', ')}');
-        }
         _lastInitLog = now;
       }
 
-      // CRITICAL: Force complete cache invalidation before ANY media operations
-      await _mediaCoordinator.refreshMediaData();
-
-      // Add a small delay to ensure cache invalidation is complete
-      await Future.delayed(const Duration(milliseconds: 100));
+      // ========== PHASE 3: USE CONSOLIDATED DIRECTORY SCANNING ==========
+      // Use MediaCoordinator's unified directory refresh instead of individual refresh calls
+      await _mediaCoordinator.refreshDirectoryData(forceFullScan: true);
 
       // Initialize filters from MediaSearchQuery if available
       if (widget.action.mediaQuery != null) {
@@ -105,34 +97,42 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
             _mediaType = query.mediaTypes.first.toLowerCase();
           }
         });
+      } else {
+        // Clear any existing filters
+        setState(() {
+          _searchTerms = [];
+          _searchController.clear();
+          _dateRange = null;
+          _mediaType = null;
+        });
       }
 
-      // Check if we have an explicit file URI and validate it
+      // Get fresh media candidates with directory compliance
+      List<Map<String, dynamic>> candidates;
+
       if (widget.action.content.media.isNotEmpty &&
           widget.action.content.media.first.fileUri.isNotEmpty) {
         final mediaItem = widget.action.content.media.first;
 
-        // Double validation: both URI and directory compliance
-        final isUriValid =
-            await _mediaCoordinator.validateMediaURI(mediaItem.fileUri);
-        final isInAllowedDirectory =
-            _mediaCoordinator.isCustomDirectoriesEnabled
-                ? await _mediaCoordinator
-                    .isFileInEnabledDirectory(mediaItem.fileUri)
-                : true;
+        // Validate both URI and directory compliance
+        final validationResult =
+            await _mediaCoordinator.validateAndRecoverMediaURI(
+          mediaItem.fileUri,
+          config: MediaValidationConfig.production,
+        );
 
-        if (isUriValid && isInAllowedDirectory) {
-          // Get fresh media candidates (this will enforce directory compliance)
-          final additionalCandidates = await _mediaCoordinator.getMediaForQuery(
+        if (validationResult.isValid) {
+          // Get fresh media candidates
+          candidates = await _mediaCoordinator.getMediaForQuery(
             '', // Empty search to get recent media
             dateRange: null,
             mediaTypes: null,
           );
 
-          // Create existing media candidate with full validation
+          // Create existing media candidate
           final existingMediaAsCandidate = {
             'id': 'current',
-            'file_uri': mediaItem.fileUri,
+            'file_uri': validationResult.effectiveUri,
             'mime_type': mediaItem.mimeType,
             'device_metadata': {
               'creation_time': mediaItem.deviceMetadata.creationTime,
@@ -144,104 +144,39 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
             }
           };
 
-          // Deduplicate and validate all candidates
-          final existingUri = mediaItem.fileUri;
-          final deduplicatedCandidates = additionalCandidates
-              .where((candidate) => candidate['file_uri'] != existingUri)
-              .where((candidate) =>
-                  !_mediaCoordinator.isCustomDirectoriesEnabled ||
-                  _mediaCoordinator.enabledDirectories.any((dir) =>
-                      (candidate['file_uri'] as String).startsWith(dir.path)))
-              .toList();
+          // Deduplicate candidates
+          candidates = [
+            existingMediaAsCandidate,
+            ...candidates
+                .where((c) => c['file_uri'] != validationResult.effectiveUri)
+          ];
 
-          setState(() {
-            _mediaCandidates = [
-              existingMediaAsCandidate,
-              ...deduplicatedCandidates
-            ];
-            _selectedMedia = existingMediaAsCandidate;
-            _isLoading = false;
-          });
-
-          if (kDebugMode && shouldLogInit) {
-            print(
-                '✅ MediaSelectionScreen: Loaded ${_mediaCandidates.length} candidates (existing media retained)');
-          }
-          return;
+          _selectedMedia = existingMediaAsCandidate;
         } else {
-          if (kDebugMode) {
-            print(
-                '🚫 MediaSelectionScreen: Existing media no longer allowed (URI valid: $isUriValid, Directory allowed: $isInAllowedDirectory)');
-          }
+          candidates = await _mediaCoordinator.getMediaForQuery('');
         }
-      }
-
-      // Handle initial candidates with strict validation
-      if (widget.initialCandidates != null &&
-          widget.initialCandidates!.isNotEmpty) {
-        final validatedCandidates = <Map<String, dynamic>>[];
-        int excludedCount = 0;
-
-        for (final candidate in widget.initialCandidates!) {
-          final fileUri = candidate['file_uri'] as String;
-
-          // Double validation: both URI and directory compliance
-          final isUriValid = await _mediaCoordinator.validateMediaURI(fileUri);
-          final isInAllowedDirectory =
-              _mediaCoordinator.isCustomDirectoriesEnabled
-                  ? await _mediaCoordinator.isFileInEnabledDirectory(fileUri)
-                  : true;
-
-          if (isUriValid && isInAllowedDirectory) {
-            validatedCandidates.add(candidate);
-          } else {
-            excludedCount++;
-          }
-        }
-
-        if (validatedCandidates.isNotEmpty) {
-          setState(() {
-            _mediaCandidates = validatedCandidates;
-            _selectedMedia = null;
-            _isLoading = false;
-          });
-
-          if (kDebugMode && shouldLogInit && excludedCount > 0) {
-            print(
-                '🚫 MediaSelectionScreen: Excluded $excludedCount initial candidates from disabled directories');
-          }
-          return;
-        }
-      }
-
-      // Fallback: Get latest media with strict directory compliance
-      final latestMedia = await _mediaCoordinator.getMediaForQuery(
-        '',
-        mediaTypes: ['image', 'video'],
-        directory: widget.action.mediaQuery?.directoryPath,
-      );
-
-      if (latestMedia.isNotEmpty) {
-        setState(() {
-          _mediaCandidates = latestMedia;
-          _selectedMedia = null;
-          _isLoading = false;
-        });
+      } else if (widget.initialCandidates?.isNotEmpty == true) {
+        // Handle initial candidates with validation
+        candidates = await _validateAndFilterMedia(widget.initialCandidates!);
       } else {
-        // If no media found, apply filters to search for any media
-        await _applyFilters();
+        // Get fresh candidates
+        candidates = await _mediaCoordinator.getMediaForQuery('');
       }
+
+      // Final validation pass
+      final validatedCandidates = await _validateAndFilterMedia(candidates);
+
+      setState(() {
+        _mediaCandidates = validatedCandidates;
+        _isLoading = false;
+      });
     } catch (e) {
       if (kDebugMode) {
-        print('❌ MediaSelectionScreen initialization error: $e');
-      }
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to initialize screen: $e')),
-        );
+        print('❌ MediaSelectionScreen: Initialization failed: $e');
       }
       setState(() {
         _isLoading = false;
+        _mediaCandidates = [];
       });
     }
   }
@@ -283,8 +218,9 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
         );
       }
 
-      // Comprehensive refresh that clears all PhotoManager caches
-      await _mediaCoordinator.refreshMediaData();
+      // ========== PHASE 3: USE CONSOLIDATED REFRESH SYSTEM ==========
+      // Use MediaCoordinator's unified refresh instead of individual service calls
+      await _mediaCoordinator.refreshMediaData(forceFullScan: true);
 
       // Re-apply current filters to get the latest data with fresh cache
       await _applyFilters();
@@ -380,69 +316,12 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
   ) async {
     if (candidates.isEmpty) return candidates;
 
-    final validatedCandidates = <Map<String, dynamic>>[];
-    final config = MediaValidationConfig.production;
-
-    // Process in small batches to avoid overwhelming the system
-    const batchSize = 10;
-    for (int i = 0; i < candidates.length; i += batchSize) {
-      final batch = candidates.skip(i).take(batchSize);
-
-      final batchResults = await Future.wait(
-        batch.map((candidate) async {
-          final fileUri = candidate['file_uri'] as String;
-
-          try {
-            final validationResult =
-                await _mediaCoordinator.validateAndRecoverMediaURI(
-              fileUri,
-              config: config,
-            );
-
-            if (validationResult.isValid) {
-              // Update candidate with recovered URI if needed
-              if (validationResult.wasRecovered) {
-                candidate = Map<String, dynamic>.from(candidate);
-                candidate['file_uri'] = validationResult.effectiveUri;
-                candidate['_recovered'] = true;
-              }
-              return candidate;
-            }
-          } catch (e) {
-            // Skip broken media silently
-          }
-
-          return null;
-        }),
-      );
-
-      // Add valid candidates to the list
-      for (final result in batchResults) {
-        if (result != null) {
-          validatedCandidates.add(result);
-        }
-      }
-    }
-
-    // Purge stale references from the excluded media
-    final excludedCount = candidates.length - validatedCandidates.length;
-    if (excludedCount > 0) {
-      final brokenUris = candidates
-          .where((c) =>
-              !validatedCandidates.any((v) => v['file_uri'] == c['file_uri']))
-          .map((c) => c['file_uri'] as String)
-          .toList();
-
-      // Purge stale references in background
-      _mediaCoordinator.purgeStaleReferences(specificUris: brokenUris);
-
-      if (kDebugMode) {
-        print(
-            '🧹 MediaSelectionScreen: Excluded $excludedCount broken media items');
-      }
-    }
-
-    return validatedCandidates;
+    // ========== PHASE 3: USE UNIFIED VALIDATION SYSTEM ==========
+    // Use MediaCoordinator's consolidated validation instead of manual validation
+    return await _mediaCoordinator.validateAndFilterMediaCandidates(
+      candidates,
+      showProgress: false,
+    );
   }
 
   Future<void> _fetchMedia() async {

@@ -308,3 +308,182 @@ class MediaValidationConfig {
     enableStalePurging: true,
   );
 }
+
+/// Represents cached information about a directory's media files
+class DirectoryCache {
+  final String directoryPath;
+  final List<MediaFileInfo> mediaFiles;
+  final DateTime lastScanned;
+  final int fileCount;
+
+  const DirectoryCache({
+    required this.directoryPath,
+    required this.mediaFiles,
+    required this.lastScanned,
+    required this.fileCount,
+  });
+
+  /// Whether this cache entry is still valid (not expired)
+  bool get isValid {
+    const maxAge = Duration(hours: 6); // Cache valid for 6 hours
+    return DateTime.now().difference(lastScanned) < maxAge;
+  }
+
+  /// Gets files that match a specific pattern
+  List<MediaFileInfo> getFilesMatching(bool Function(MediaFileInfo) predicate) {
+    return mediaFiles.where(predicate).toList();
+  }
+
+  /// Gets files by extension
+  List<MediaFileInfo> getFilesByExtension(String extension) {
+    return mediaFiles
+        .where((f) => f.extension.toLowerCase() == extension.toLowerCase())
+        .toList();
+  }
+
+  @override
+  String toString() {
+    return 'DirectoryCache(path: $directoryPath, files: $fileCount, lastScanned: $lastScanned)';
+  }
+}
+
+/// Comprehensive information about a media file for the unified cache system
+class MediaFileInfo {
+  final String filePath;
+  final String fileName;
+  final String fileUri;
+  final String mimeType;
+  final int fileSize;
+  final DateTime lastModified;
+  final String extension;
+
+  // Metadata fields (populated by enrichWithMetadata)
+  DateTime? creationDate;
+  double? latitude;
+  double? longitude;
+  String? locationName;
+  String? city;
+  String? country;
+  int? width;
+  int? height;
+  double? duration;
+  int? orientation;
+
+  MediaFileInfo({
+    required this.filePath,
+    required this.fileName,
+    required this.fileUri,
+    required this.mimeType,
+    required this.fileSize,
+    required this.lastModified,
+    required this.extension,
+    this.creationDate,
+    this.latitude,
+    this.longitude,
+    this.locationName,
+    this.city,
+    this.country,
+    this.width,
+    this.height,
+    this.duration,
+    this.orientation,
+  });
+
+  /// Enriches this file info with metadata from MediaMetadataService
+  void enrichWithMetadata(Map<String, dynamic> metadata) {
+    try {
+      // Date information
+      final dateData = metadata['date_data'] as Map<String, dynamic>?;
+      if (dateData != null) {
+        if (dateData['creation_date'] != null) {
+          creationDate = DateTime.tryParse(dateData['creation_date']);
+        }
+      }
+
+      // Location information
+      final locationData = metadata['location_data'] as Map<String, dynamic>?;
+      if (locationData != null) {
+        latitude = locationData['latitude']?.toDouble();
+        longitude = locationData['longitude']?.toDouble();
+        locationName = locationData['location_name']?.toString();
+        city = locationData['city']?.toString();
+        country = locationData['country']?.toString();
+      }
+
+      // Media dimensions and properties
+      width = metadata['width']?.toInt();
+      height = metadata['height']?.toInt();
+      duration = metadata['duration']?.toDouble();
+      orientation = metadata['orientation']?.toInt();
+    } catch (e) {
+      // Silently continue if metadata enrichment fails
+    }
+  }
+
+  /// Converts this MediaFileInfo to the format expected by MediaMetadataService
+  Map<String, dynamic> toMetadataServiceFormat() {
+    return {
+      'id': fileName,
+      'file_uri': fileUri,
+      'mime_type': mimeType,
+      'file_size_bytes': fileSize,
+      'creation_time':
+          creationDate?.toIso8601String() ?? lastModified.toIso8601String(),
+      'width': width ?? 0,
+      'height': height ?? 0,
+      'duration': duration ?? 0.0,
+      'orientation': orientation ?? 1,
+      'folder': filePath.substring(0, filePath.lastIndexOf('/')),
+      'date_data': {
+        'creation_date':
+            creationDate?.toIso8601String() ?? lastModified.toIso8601String(),
+        'year': (creationDate ?? lastModified).year,
+        'month': (creationDate ?? lastModified).month,
+        'weekday': (creationDate ?? lastModified).weekday,
+      },
+      'location_data': {
+        'latitude': latitude,
+        'longitude': longitude,
+        'location_name': locationName,
+        'city': city,
+        'country': country,
+      },
+    };
+  }
+
+  /// Whether this file is an image
+  bool get isImage => mimeType.startsWith('image/');
+
+  /// Whether this file is a video
+  bool get isVideo => mimeType.startsWith('video/');
+
+  /// Gets a human-readable file size
+  String get formattedFileSize {
+    if (fileSize == 0) return '0 B';
+
+    const suffixes = ['B', 'KB', 'MB', 'GB'];
+    var size = fileSize.toDouble();
+    var suffixIndex = 0;
+
+    while (size >= 1024 && suffixIndex < suffixes.length - 1) {
+      size /= 1024;
+      suffixIndex++;
+    }
+
+    return '${size.toStringAsFixed(size < 10 ? 1 : 0)} ${suffixes[suffixIndex]}';
+  }
+
+  @override
+  String toString() {
+    return 'MediaFileInfo(fileName: $fileName, mimeType: $mimeType, size: $formattedFileSize)';
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    return other is MediaFileInfo && other.filePath == filePath;
+  }
+
+  @override
+  int get hashCode => filePath.hashCode;
+}

@@ -29,15 +29,17 @@ class MediaCoordinator extends ChangeNotifier {
   static DateTime? _lastCacheInvalidationLog;
   static DateTime? _lastQueryLog;
   static DateTime? _lastDeepCachePurge;
-  static DateTime? _lastDirectoryRescan;
   static int _queryCount = 0;
+
+  // ========== PHASE 1: CONSOLIDATED DIRECTORY SCANNING SYSTEM ==========
 
   // Enhanced validation cache with smart TTL management
   final Map<String, MediaValidationCacheEntry> _validationCache = {};
   final Map<String, MediaBirthprint> _birthprintCache = {};
   final Set<String> _staleUriReferences = {};
 
-  // Directory timestamp tracking for smart rescans
+  // Unified Directory Cache System (replaces multiple scattered caches)
+  final Map<String, DirectoryCache> _unifiedDirectoryCache = {};
   final Map<String, DateTime> _directoryTimestamps = {};
   final Map<String, List<String>> _directoryFileCache = {};
 
@@ -1435,66 +1437,65 @@ class MediaCoordinator extends ChangeNotifier {
     return await _mediaSearchService.getAssetById(id);
   }
 
-  /// OPTIMIZED: Smart media refresh that prevents excessive operations and stalling
-  /// This ensures the latest media files are available, including newly added files
-  Future<void> refreshMediaData() async {
-    if (!_isInitialized) {
-      throw StateError(
-          'MediaCoordinator not initialized. Call initialize() first.');
-    }
-
-    final now = DateTime.now();
-
-    // Prevent concurrent refreshes and throttle to every 10 seconds minimum
-    if (_lastDirectoryRescan != null &&
-        now.difference(_lastDirectoryRescan!).inSeconds < 10) {
-      if (kDebugMode) {
-        print('🔄 MediaCoordinator: Refresh throttled (too recent)');
+  /// Refreshes all media data, optionally forcing a full directory scan
+  Future<void> refreshMediaData({bool forceFullScan = false}) async {
+    if (_isCacheInvalidating) {
+      // Wait for ongoing invalidation to complete
+      while (_isCacheInvalidating) {
+        await Future.delayed(const Duration(milliseconds: 50));
       }
       return;
     }
 
-    _lastDirectoryRescan = now;
-
+    _isCacheInvalidating = true;
     try {
       if (kDebugMode) {
-        print('🔄 MediaCoordinator: Starting optimized media refresh...');
+        final now = DateTime.now();
+        final shouldLog = _lastCacheInvalidationLog == null ||
+            now.difference(_lastCacheInvalidationLog!).inMinutes > 5;
+        if (shouldLog) {
+          print(
+              '🔄 MediaCoordinator: Starting consolidated media refresh${forceFullScan ? ' with full scan' : ''}');
+          _lastCacheInvalidationLog = now;
+        }
       }
 
-      // Step 1: Smart cache invalidation (already optimized)
-      await _smartCacheInvalidation();
-
-      // Step 2: Update directory file caches for rename detection
-      await _updateAllDirectoryFileCaches();
-
-      // Step 3: Refresh metadata service cache efficiently
-      if (kDebugMode) {
-        print('📊 MediaCoordinator: Refreshing metadata cache...');
-      }
-      await _metadataService.refreshCache();
-
-      // Step 4: Re-initialize MediaSearchService efficiently
-      if (kDebugMode) {
-        print('🔍 MediaCoordinator: Re-initializing MediaSearchService...');
-      }
-      await _mediaSearchService.initialize();
-
-      // Step 5: Clear validation caches for fresh start
+      // Clear all caches
       _validationCache.clear();
       _birthprintCache.clear();
-      _staleUriReferences.clear();
 
-      // Step 6: Notify listeners about the refresh
+      // Reset operation flags
+      _isValidatingFileSystem = false;
+
+      // ========== PHASE 1: USE CONSOLIDATED DIRECTORY SCANNING ==========
+      // Instead of calling individual service methods, use our unified scanning system
+      await refreshDirectoryData(
+        forceFullScan: forceFullScan,
+        enableSmartCaching: !forceFullScan,
+      );
+
+      // Clear PhotoManager caches for fresh data
+      await PhotoManager.clearFileCache();
+      await PhotoManager.releaseCache();
+
+      // Re-initialize MediaSearchService if needed
+      if (forceFullScan) {
+        await _mediaSearchService.initialize();
+      }
+
+      // Notify listeners of the refresh
       notifyListeners();
 
       if (kDebugMode) {
-        print('✅ MediaCoordinator: Optimized media refresh completed');
+        final now = DateTime.now();
+        final shouldLog = _lastCacheInvalidationLog == null ||
+            now.difference(_lastCacheInvalidationLog!).inMinutes > 5;
+        if (shouldLog) {
+          print('✅ MediaCoordinator: Consolidated media refresh completed');
+        }
       }
-    } catch (e) {
-      if (kDebugMode) {
-        print('❌ MediaCoordinator: Failed to refresh media data: $e');
-      }
-      rethrow;
+    } finally {
+      _isCacheInvalidating = false;
     }
   }
 
@@ -2349,5 +2350,725 @@ class MediaCoordinator extends ChangeNotifier {
           '🗑️ MediaCoordinator: Being disposed (initialized: $_isInitialized)');
     }
     super.dispose();
+  }
+
+  /// ========== PHASE 1: CONSOLIDATED DIRECTORY SCANNING ==========
+
+  /// Single source of truth for directory scanning across the entire application
+  /// This method replaces all individual directory scanning in MediaMetadataService,
+  /// DirectorySelectionScreen, and other components
+  Future<void> refreshDirectoryData({
+    List<String>? specificDirectories,
+    bool forceFullScan = false,
+    bool enableSmartCaching = true,
+  }) async {
+    if (_isDirectoryScanning && !forceFullScan) {
+      // Wait for ongoing scan to complete unless force is requested
+      while (_isDirectoryScanning) {
+        await Future.delayed(const Duration(milliseconds: 100));
+      }
+      return;
+    }
+
+    _isDirectoryScanning = true;
+
+    try {
+      if (kDebugMode) {
+        print('🔄 MediaCoordinator: Starting consolidated directory scan');
+        print('   Force full scan: $forceFullScan');
+        print('   Smart caching: $enableSmartCaching');
+        print(
+            '   Specific directories: ${specificDirectories?.length ?? 'all'}');
+      }
+
+      final startTime = DateTime.now();
+
+      // Get directories to scan
+      final directoriesToScan = specificDirectories ??
+          (isCustomDirectoriesEnabled
+              ? _directoryService.enabledDirectories.map((d) => d.path).toList()
+              : DirectoryService.getPlatformDefaults()
+                  .map((d) => d.path)
+                  .toList());
+
+      // Phase 1a: Smart change detection (skip if forcing full scan)
+      final changedDirectories = <String>[];
+      if (!forceFullScan && enableSmartCaching) {
+        for (final dirPath in directoriesToScan) {
+          if (await _needsDirectoryRescan(dirPath)) {
+            changedDirectories.add(dirPath);
+          }
+        }
+
+        if (changedDirectories.isEmpty) {
+          if (kDebugMode) {
+            print(
+                '✅ MediaCoordinator: No directory changes detected, using cache');
+          }
+          return;
+        }
+
+        if (kDebugMode) {
+          print(
+              '📁 MediaCoordinator: Detected changes in ${changedDirectories.length} directories');
+        }
+      } else {
+        changedDirectories.addAll(directoriesToScan);
+      }
+
+      // Phase 1b: Consolidated directory scanning with parallel processing
+      final scanResults =
+          await _performConsolidatedDirectoryScan(changedDirectories);
+
+      // Phase 1c: Update unified cache system
+      await _updateUnifiedDirectoryCache(scanResults);
+
+      // Phase 1d: Notify dependent services of changes
+      await _notifyServicesOfDirectoryChanges(changedDirectories);
+
+      final duration = DateTime.now().difference(startTime);
+      if (kDebugMode) {
+        print(
+            '✅ MediaCoordinator: Consolidated directory scan completed in ${duration.inMilliseconds}ms');
+        print('   Scanned ${changedDirectories.length} directories');
+        print(
+            '   Found ${scanResults.values.fold(0, (sum, list) => sum + list.length)} media files');
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ MediaCoordinator: Consolidated directory scan failed: $e');
+      }
+      rethrow;
+    } finally {
+      _isDirectoryScanning = false;
+    }
+  }
+
+  /// Performs the actual directory scanning with optimized parallel processing
+  Future<Map<String, List<MediaFileInfo>>> _performConsolidatedDirectoryScan(
+    List<String> directoriesToScan,
+  ) async {
+    final scanResults = <String, List<MediaFileInfo>>{};
+
+    // Process directories in parallel batches for optimal performance
+    const maxConcurrentScans = 3;
+    for (int i = 0; i < directoriesToScan.length; i += maxConcurrentScans) {
+      final batch = directoriesToScan.skip(i).take(maxConcurrentScans);
+
+      final batchResults = await Future.wait(
+        batch.map((dirPath) => _scanSingleDirectory(dirPath)),
+      );
+
+      // Merge batch results
+      for (int j = 0; j < batchResults.length; j++) {
+        final dirPath = batch.elementAt(j);
+        scanResults[dirPath] = batchResults[j];
+      }
+    }
+
+    return scanResults;
+  }
+
+  /// Scans a single directory with comprehensive metadata extraction
+  Future<List<MediaFileInfo>> _scanSingleDirectory(String directoryPath) async {
+    final mediaFiles = <MediaFileInfo>[];
+
+    try {
+      final directory = Directory(directoryPath);
+      if (!await directory.exists()) {
+        if (kDebugMode) {
+          print(
+              '⚠️ MediaCoordinator: Directory does not exist: $directoryPath');
+        }
+        return mediaFiles;
+      }
+
+      await for (final entity in directory.list()) {
+        if (entity is File && _isSupportedMediaFile(entity.path)) {
+          try {
+            final fileInfo = await _extractMediaFileInfo(entity);
+            if (fileInfo != null) {
+              mediaFiles.add(fileInfo);
+            }
+          } catch (e) {
+            if (kDebugMode) {
+              print(
+                  '⚠️ MediaCoordinator: Failed to process ${entity.path}: $e');
+            }
+            // Continue with other files
+          }
+        }
+      }
+
+      // Update directory timestamp after successful scan
+      _directoryTimestamps[directoryPath] = DateTime.now();
+    } catch (e) {
+      if (kDebugMode) {
+        print(
+            '❌ MediaCoordinator: Failed to scan directory $directoryPath: $e');
+      }
+    }
+
+    return mediaFiles;
+  }
+
+  /// Extracts comprehensive media file information for the unified cache
+  Future<MediaFileInfo?> _extractMediaFileInfo(File file) async {
+    try {
+      final stats = await file.stat();
+      final fileName = path.basename(file.path);
+      final extension = path.extension(file.path).toLowerCase();
+
+      // Basic file information
+      final fileInfo = MediaFileInfo(
+        filePath: file.path,
+        fileName: fileName,
+        fileUri: file.uri.toString(),
+        mimeType: _getMimeTypeFromPath(file.path),
+        fileSize: stats.size,
+        lastModified: stats.modified,
+        extension: extension,
+      );
+
+      // Extract metadata using the existing metadata service
+      try {
+        final metadata = await _metadataService.extractMetadata(file);
+        fileInfo.enrichWithMetadata(metadata);
+      } catch (e) {
+        // Continue without metadata if extraction fails
+        if (kDebugMode) {
+          print(
+              '⚠️ MediaCoordinator: Metadata extraction failed for ${file.path}: $e');
+        }
+      }
+
+      return fileInfo;
+    } catch (e) {
+      if (kDebugMode) {
+        print(
+            '❌ MediaCoordinator: Failed to extract file info for ${file.path}: $e');
+      }
+      return null;
+    }
+  }
+
+  /// Updates the unified directory cache with scan results
+  Future<void> _updateUnifiedDirectoryCache(
+      Map<String, List<MediaFileInfo>> scanResults) async {
+    for (final entry in scanResults.entries) {
+      final directoryPath = entry.key;
+      final mediaFiles = entry.value;
+
+      // Create or update directory cache entry
+      _unifiedDirectoryCache[directoryPath] = DirectoryCache(
+        directoryPath: directoryPath,
+        mediaFiles: mediaFiles,
+        lastScanned: DateTime.now(),
+        fileCount: mediaFiles.length,
+      );
+
+      // Update file cache for rename detection
+      _directoryFileCache[directoryPath] =
+          mediaFiles.map((f) => f.fileName).toList();
+    }
+
+    if (kDebugMode) {
+      print(
+          '📊 MediaCoordinator: Updated unified cache for ${scanResults.length} directories');
+    }
+  }
+
+  /// Notifies dependent services of directory changes
+  Future<void> _notifyServicesOfDirectoryChanges(
+      List<String> changedDirectories) async {
+    try {
+      // Notify MediaMetadataService to update its cache from our unified cache
+      // This eliminates the need for MediaMetadataService to scan directories independently
+      await _syncMetadataServiceCache();
+
+      // Notify MediaSearchService if it needs to rebuild indices
+      if (changedDirectories.isNotEmpty) {
+        await _mediaSearchService.initialize();
+      }
+
+      // Notify listeners of changes
+      notifyListeners();
+    } catch (e) {
+      if (kDebugMode) {
+        print('⚠️ MediaCoordinator: Failed to notify services of changes: $e');
+      }
+    }
+  }
+
+  /// Syncs MediaMetadataService cache with our unified directory cache
+  /// This eliminates redundant scanning in MediaMetadataService
+  Future<void> _syncMetadataServiceCache() async {
+    try {
+      // Build the metadata cache structure that MediaMetadataService expects
+      final mediaItems = <String, Map<String, dynamic>>{};
+      final mediaByDate = <String, List<String>>{};
+      final mediaByFolder = <String, List<String>>{};
+      final mediaByLocation = <String, List<String>>{};
+      final directoriesInfo = <String, Map<String, dynamic>>{};
+
+      // Process each directory in our unified cache
+      for (final entry in _unifiedDirectoryCache.entries) {
+        final directoryPath = entry.key;
+        final directoryCache = entry.value;
+
+        // Directory info
+        final directory = _directoryService.enabledDirectories.firstWhere(
+            (d) => d.path == directoryPath,
+            orElse: () => MediaDirectory(
+                id: 'temp',
+                displayName: path.basename(directoryPath),
+                path: directoryPath,
+                isDefault: false,
+                isEnabled: true));
+
+        directoriesInfo[directoryPath] = {
+          'name': directory.displayName,
+          'path': directoryPath,
+          'media_count': directoryCache.fileCount,
+        };
+
+        // File info
+        final folderMediaIds = <String>[];
+        for (final mediaFile in directoryCache.mediaFiles) {
+          final mediaId = mediaFile.filePath;
+          folderMediaIds.add(mediaId);
+
+          // Convert our MediaFileInfo to the format expected by MediaMetadataService
+          mediaItems[mediaId] = mediaFile.toMetadataServiceFormat();
+
+          // Add to date indices
+          if (mediaFile.creationDate != null) {
+            final dateKey =
+                mediaFile.creationDate!.toIso8601String().split('T')[0];
+            mediaByDate.putIfAbsent(dateKey, () => []).add(mediaId);
+          }
+
+          // Add to location indices
+          if (mediaFile.latitude != null && mediaFile.longitude != null) {
+            final locationKey =
+                'location_${mediaFile.latitude}_${mediaFile.longitude}';
+            mediaByLocation.putIfAbsent(locationKey, () => []).add(mediaId);
+          }
+        }
+
+        mediaByFolder[directoryPath] = folderMediaIds;
+      }
+
+      // Update MediaMetadataService cache directly (bypassing its scanning)
+      await _metadataService.updateCacheFromExternalSource({
+        'media_items': mediaItems,
+        'media_by_date': mediaByDate,
+        'media_by_folder': mediaByFolder,
+        'media_by_location': mediaByLocation,
+        'directories': directoriesInfo,
+        'last_update': DateTime.now().toIso8601String(),
+      });
+
+      if (kDebugMode) {
+        print(
+            '🔄 MediaCoordinator: Synced ${mediaItems.length} items to MediaMetadataService cache');
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ MediaCoordinator: Failed to sync metadata service cache: $e');
+      }
+    }
+  }
+
+  /// Gets directory information from the unified cache
+  DirectoryCache? getDirectoryCache(String directoryPath) {
+    return _unifiedDirectoryCache[directoryPath];
+  }
+
+  /// Gets all cached directory information
+  Map<String, DirectoryCache> get allDirectoryCaches =>
+      Map.from(_unifiedDirectoryCache);
+
+  /// Clears directory caches for specific directories or all
+  void clearDirectoryCache({List<String>? specificDirectories}) {
+    if (specificDirectories != null) {
+      for (final dirPath in specificDirectories) {
+        _unifiedDirectoryCache.remove(dirPath);
+        _directoryFileCache.remove(dirPath);
+        _directoryTimestamps.remove(dirPath);
+      }
+    } else {
+      _unifiedDirectoryCache.clear();
+      _directoryFileCache.clear();
+      _directoryTimestamps.clear();
+    }
+
+    if (kDebugMode) {
+      print(
+          '🗑️ MediaCoordinator: Cleared directory cache for ${specificDirectories?.length ?? 'all'} directories');
+    }
+  }
+
+  /// ========== PHASE 2: UNIFIED MEDIA VALIDATION SYSTEM ==========
+
+  /// Central validation method that replaces all scattered validation calls
+  /// This method should be used by ALL components that need to validate media
+  Future<MediaValidationBatchResult> validateMediaBatch(
+    List<String> mediaUris, {
+    MediaValidationConfig config = const MediaValidationConfig(),
+    bool enableRecovery = true,
+    bool enableCaching = true,
+  }) async {
+    if (!_isInitialized) {
+      throw StateError(
+          'MediaCoordinator not initialized. Call initialize() first.');
+    }
+
+    if (kDebugMode && config.verboseLogging) {
+      print(
+          '🔍 MediaCoordinator: Starting unified media validation for ${mediaUris.length} items');
+    }
+
+    final results = <MediaValidationResult>[];
+    final startTime = DateTime.now();
+
+    // Process URIs in parallel batches for optimal performance
+    const maxConcurrentValidations = 5;
+    for (int i = 0; i < mediaUris.length; i += maxConcurrentValidations) {
+      final batch = mediaUris.skip(i).take(maxConcurrentValidations);
+
+      final batchResults = await Future.wait(
+        batch.map((uri) => _validateSingleMediaUri(
+              uri,
+              config: config,
+              enableRecovery: enableRecovery,
+              enableCaching: enableCaching,
+            )),
+      );
+
+      results.addAll(batchResults);
+    }
+
+    final batchResult = MediaValidationBatchResult(results: results);
+    final duration = DateTime.now().difference(startTime);
+
+    if (kDebugMode && config.verboseLogging) {
+      print(
+          '✅ MediaCoordinator: Unified validation completed in ${duration.inMilliseconds}ms');
+      print('   Valid: ${batchResult.validItems}');
+      print('   Recovered: ${batchResult.recoveredItems}');
+      print('   Failed: ${batchResult.failedItems}');
+    }
+
+    return batchResult;
+  }
+
+  /// Validates a single media URI with comprehensive caching and recovery
+  Future<MediaValidationResult> _validateSingleMediaUri(
+    String uri, {
+    required MediaValidationConfig config,
+    required bool enableRecovery,
+    required bool enableCaching,
+  }) async {
+    // Check cache first if enabled
+    if (enableCaching) {
+      final cachedResult = _getValidationFromCache(uri);
+      if (cachedResult != null) {
+        return cachedResult;
+      }
+    }
+
+    // Perform validation
+    MediaValidationResult result;
+    try {
+      // Step 1: Basic URI and file existence validation
+      if (!_isValidMediaURI(uri)) {
+        result = MediaValidationResult(
+          isValid: false,
+          originalUri: uri,
+          recoveredUri: null,
+          recoveryMethod: MediaRecoveryMethod.failed,
+          errorMessage: 'Invalid URI format',
+        );
+      } else {
+        final filePath = Uri.parse(uri).path;
+        final file = File(filePath);
+
+        if (await file.exists()) {
+          // Step 2: Directory compliance validation
+          final isAllowed =
+              await isFileAllowedByCurrentDirectoryState(filePath);
+          if (!isAllowed) {
+            result = MediaValidationResult(
+              isValid: false,
+              originalUri: uri,
+              recoveredUri: null,
+              recoveryMethod: MediaRecoveryMethod.failed,
+              errorMessage: 'File not in enabled directories',
+            );
+          } else {
+            // Step 3: File integrity validation
+            final isIntegrityValid = await _validateFileIntegrity(file);
+            if (isIntegrityValid) {
+              result = MediaValidationResult(
+                isValid: true,
+                originalUri: uri,
+                recoveredUri: uri,
+                recoveryMethod: MediaRecoveryMethod.none,
+              );
+            } else {
+              result = MediaValidationResult(
+                isValid: false,
+                originalUri: uri,
+                recoveredUri: null,
+                recoveryMethod: MediaRecoveryMethod.failed,
+                errorMessage: 'File integrity check failed',
+              );
+            }
+          }
+        } else {
+          // File doesn't exist - attempt recovery if enabled
+          if (enableRecovery) {
+            result = await _attemptMediaRecovery(uri, config);
+          } else {
+            result = MediaValidationResult(
+              isValid: false,
+              originalUri: uri,
+              recoveredUri: null,
+              recoveryMethod: MediaRecoveryMethod.failed,
+              errorMessage: 'File does not exist',
+            );
+          }
+        }
+      }
+    } catch (e) {
+      result = MediaValidationResult(
+        isValid: false,
+        originalUri: uri,
+        recoveredUri: null,
+        recoveryMethod: MediaRecoveryMethod.failed,
+        errorMessage: 'Validation error: $e',
+      );
+    }
+
+    // Cache result if enabled
+    if (enableCaching) {
+      _cacheValidationResult(uri, result);
+    }
+
+    return result;
+  }
+
+  /// Validates file integrity (format, size, readability)
+  Future<bool> _validateFileIntegrity(File file) async {
+    try {
+      // Check file size
+      final size = await file.length();
+      if (size == 0) return false;
+
+      // Check MIME type
+      final mimeType = _getMimeTypeFromPath(file.path);
+      if (!_isSupportedMediaType(mimeType)) return false;
+
+      // For images, validate headers
+      if (mimeType.startsWith('image/')) {
+        final bytes = await file.readAsBytes();
+        if (bytes.isEmpty) return false;
+        return _hasValidImageHeader(bytes, mimeType);
+      }
+
+      // For videos, basic existence check is sufficient for now
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /// Gets validation result from cache
+  MediaValidationResult? _getValidationFromCache(String uri) {
+    final cacheEntry = _validationCache[uri];
+    if (cacheEntry != null && cacheEntry.isValid) {
+      return cacheEntry.result;
+    }
+    return null;
+  }
+
+  /// Unified validation method for screens and services
+  /// This replaces individual validation calls in MediaSelectionScreen, HistoryScreen, etc.
+  Future<List<Map<String, dynamic>>> validateAndFilterMediaCandidates(
+    List<Map<String, dynamic>> candidates, {
+    MediaValidationConfig? config,
+    bool showProgress = false,
+  }) async {
+    if (candidates.isEmpty) return candidates;
+
+    final validationConfig = config ?? MediaValidationConfig.production;
+    final validatedCandidates = <Map<String, dynamic>>[];
+    final urisToValidate =
+        candidates.map((c) => c['file_uri'] as String).toList();
+
+    // Perform batch validation
+    final batchResult = await validateMediaBatch(
+      urisToValidate,
+      config: validationConfig,
+      enableRecovery: true,
+      enableCaching: true,
+    );
+
+    // Process results and update candidates
+    for (int i = 0; i < candidates.length; i++) {
+      final candidate = candidates[i];
+      final validationResult = batchResult.results[i];
+
+      if (validationResult.isValid) {
+        // Update candidate with recovered URI if needed
+        if (validationResult.wasRecovered) {
+          candidate['file_uri'] = validationResult.effectiveUri;
+          candidate['_recovered'] = true;
+        }
+        validatedCandidates.add(candidate);
+      }
+    }
+
+    // Purge stale references from excluded candidates
+    final excludedCount = candidates.length - validatedCandidates.length;
+    if (excludedCount > 0) {
+      final brokenUris = candidates
+          .where((c) =>
+              !validatedCandidates.any((v) => v['file_uri'] == c['file_uri']))
+          .map((c) => c['file_uri'] as String)
+          .toList();
+
+      // Purge stale references in background
+      _purgeStaleReferencesAsync(brokenUris);
+
+      if (kDebugMode) {
+        print(
+            '🧹 MediaCoordinator: Excluded $excludedCount broken media items from candidates');
+      }
+    }
+
+    return validatedCandidates;
+  }
+
+  /// ========== PHASE 4: CONSOLIDATED REFRESH PIPELINE ==========
+
+  /// Single entry point for all media refresh operations across the app
+  /// This method replaces all individual refresh calls in screens and services
+  Future<void> notifyMediaChange({
+    List<String>? changedDirectories,
+    bool forceFullRefresh = false,
+    String? source,
+  }) async {
+    if (!_isInitialized) {
+      throw StateError(
+          'MediaCoordinator not initialized. Call initialize() first.');
+    }
+
+    try {
+      if (kDebugMode) {
+        print('🔔 MediaCoordinator: Media change notification received');
+        print('   Source: ${source ?? 'unknown'}');
+        print('   Force full refresh: $forceFullRefresh');
+        print('   Changed directories: ${changedDirectories?.length ?? 'all'}');
+      }
+
+      final startTime = DateTime.now();
+
+      // Step 1: Refresh directory data with smart caching
+      await refreshDirectoryData(
+        specificDirectories: changedDirectories,
+        forceFullScan: forceFullRefresh,
+        enableSmartCaching: !forceFullRefresh,
+      );
+
+      // Step 2: Clear PhotoManager caches if needed
+      if (forceFullRefresh) {
+        await PhotoManager.clearFileCache();
+        await PhotoManager.releaseCache();
+      }
+
+      // Step 3: Clear validation caches for affected directories
+      if (changedDirectories != null) {
+        _clearValidationCacheForDirectories(changedDirectories);
+      } else if (forceFullRefresh) {
+        _validationCache.clear();
+        _birthprintCache.clear();
+      }
+
+      // Step 4: Notify all listeners
+      notifyListeners();
+
+      final duration = DateTime.now().difference(startTime);
+      if (kDebugMode) {
+        print(
+            '✅ MediaCoordinator: Media change notification processed in ${duration.inMilliseconds}ms');
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        print(
+            '❌ MediaCoordinator: Failed to process media change notification: $e');
+      }
+      rethrow;
+    }
+  }
+
+  /// Clears validation cache for specific directories
+  void _clearValidationCacheForDirectories(List<String> directoryPaths) {
+    final urisToRemove = <String>[];
+
+    for (final entry in _validationCache.entries) {
+      final uri = entry.key;
+      try {
+        final filePath = Uri.parse(uri).path;
+        for (final dirPath in directoryPaths) {
+          if (filePath.startsWith(dirPath)) {
+            urisToRemove.add(uri);
+            break;
+          }
+        }
+      } catch (e) {
+        // Skip invalid URIs
+      }
+    }
+
+    for (final uri in urisToRemove) {
+      _validationCache.remove(uri);
+    }
+
+    if (kDebugMode && urisToRemove.isNotEmpty) {
+      print(
+          '🗑️ MediaCoordinator: Cleared ${urisToRemove.length} validation cache entries for changed directories');
+    }
+  }
+
+  /// Provides consolidated media statistics for debugging and monitoring
+  Map<String, dynamic> getMediaSystemStatus() {
+    final directoryCount = _unifiedDirectoryCache.length;
+    final totalFiles = _unifiedDirectoryCache.values
+        .fold(0, (sum, cache) => sum + cache.fileCount);
+    final validationCacheSize = _validationCache.length;
+    final staleReferencesCount = _staleUriReferences.length;
+
+    return {
+      'is_initialized': _isInitialized,
+      'custom_directories_enabled': isCustomDirectoriesEnabled,
+      'enabled_directories_count': enabledDirectories.length,
+      'cached_directories_count': directoryCount,
+      'total_cached_files': totalFiles,
+      'validation_cache_size': validationCacheSize,
+      'stale_references_count': staleReferencesCount,
+      'last_directory_scan': _directoryTimestamps.values.isNotEmpty
+          ? _directoryTimestamps.values
+              .reduce((a, b) => a.isAfter(b) ? a : b)
+              .toIso8601String()
+          : null,
+      'cache_status':
+          _unifiedDirectoryCache.map((path, cache) => MapEntry(path, {
+                'file_count': cache.fileCount,
+                'last_scanned': cache.lastScanned.toIso8601String(),
+                'is_valid': cache.isValid,
+              })),
+    };
   }
 }

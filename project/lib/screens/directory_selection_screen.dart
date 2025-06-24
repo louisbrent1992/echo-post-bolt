@@ -66,6 +66,13 @@ class _DirectorySelectionScreenState extends State<DirectorySelectionScreen> {
     try {
       await _mediaCoordinator!.setCustomDirectoriesEnabled(enabled);
 
+      // ========== PHASE 4: USE CONSOLIDATED NOTIFICATION SYSTEM ==========
+      // Notify MediaCoordinator of the directory mode change
+      await _mediaCoordinator!.notifyMediaChange(
+        forceFullRefresh: true,
+        source: 'DirectorySelectionScreen.toggleCustomDirectories',
+      );
+
       setState(() {
         _isCustomEnabled = enabled;
         _hasChanges = true; // Mark that changes were made
@@ -92,6 +99,15 @@ class _DirectorySelectionScreenState extends State<DirectorySelectionScreen> {
 
     try {
       await _mediaCoordinator!.updateDirectoryEnabled(directoryId, enabled);
+
+      // ========== PHASE 4: USE CONSOLIDATED NOTIFICATION SYSTEM ==========
+      // Get the directory path for targeted refresh
+      final directory = _directories.firstWhere((d) => d.id == directoryId);
+      await _mediaCoordinator!.notifyMediaChange(
+        changedDirectories: [directory.path],
+        forceFullRefresh: false,
+        source: 'DirectorySelectionScreen.toggleDirectory',
+      );
 
       setState(() {
         _directories =
@@ -192,6 +208,14 @@ class _DirectorySelectionScreenState extends State<DirectorySelectionScreen> {
 
     try {
       await _mediaCoordinator!.addCustomDirectory(name, path);
+
+      // ========== PHASE 4: USE CONSOLIDATED NOTIFICATION SYSTEM ==========
+      // Notify MediaCoordinator of the new directory
+      await _mediaCoordinator!.notifyMediaChange(
+        changedDirectories: [path],
+        forceFullRefresh: false,
+        source: 'DirectorySelectionScreen.addDirectory',
+      );
 
       setState(() {
         _directories =
