@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import '../services/media_coordinator.dart';
 import '../services/directory_service.dart'; // For MediaDirectory class
 import 'package:provider/provider.dart';
@@ -64,6 +65,11 @@ class _DirectorySelectionScreenState extends State<DirectorySelectionScreen> {
     });
 
     try {
+      if (kDebugMode) {
+        print(
+            '🔄 DirectorySelectionScreen: Toggling custom directories to: $enabled');
+      }
+
       await _mediaCoordinator!.setCustomDirectoriesEnabled(enabled);
 
       // ========== PHASE 4: USE CONSOLIDATED NOTIFICATION SYSTEM ==========
@@ -78,6 +84,11 @@ class _DirectorySelectionScreenState extends State<DirectorySelectionScreen> {
         _hasChanges = true; // Mark that changes were made
         _isLoading = false;
       });
+
+      if (kDebugMode) {
+        print(
+            '✅ DirectorySelectionScreen: Custom directories toggled successfully - _hasChanges set to true');
+      }
     } catch (e) {
       setState(() {
         _isLoading = false;
@@ -98,6 +109,11 @@ class _DirectorySelectionScreenState extends State<DirectorySelectionScreen> {
     });
 
     try {
+      if (kDebugMode) {
+        print(
+            '🔄 DirectorySelectionScreen: Toggling directory $directoryId to: $enabled');
+      }
+
       await _mediaCoordinator!.updateDirectoryEnabled(directoryId, enabled);
 
       // ========== PHASE 4: USE CONSOLIDATED NOTIFICATION SYSTEM ==========
@@ -115,6 +131,11 @@ class _DirectorySelectionScreenState extends State<DirectorySelectionScreen> {
         _hasChanges = true; // Mark that changes were made
         _isLoading = false;
       });
+
+      if (kDebugMode) {
+        print(
+            '✅ DirectorySelectionScreen: Directory toggled successfully - _hasChanges set to true');
+      }
     } catch (e) {
       setState(() {
         _isLoading = false;
@@ -207,6 +228,10 @@ class _DirectorySelectionScreenState extends State<DirectorySelectionScreen> {
     });
 
     try {
+      if (kDebugMode) {
+        print('🔄 DirectorySelectionScreen: Adding directory: $name at $path');
+      }
+
       await _mediaCoordinator!.addCustomDirectory(name, path);
 
       // ========== PHASE 4: USE CONSOLIDATED NOTIFICATION SYSTEM ==========
@@ -223,6 +248,11 @@ class _DirectorySelectionScreenState extends State<DirectorySelectionScreen> {
         _hasChanges = true; // Mark that changes were made
         _isLoading = false;
       });
+
+      if (kDebugMode) {
+        print(
+            '✅ DirectorySelectionScreen: Directory added successfully - _hasChanges set to true');
+      }
     } catch (e) {
       setState(() {
         _isLoading = false;
@@ -238,9 +268,14 @@ class _DirectorySelectionScreenState extends State<DirectorySelectionScreen> {
   @override
   Widget build(BuildContext context) {
     return PopScope(
-      canPop: true,
+      canPop: false, // Prevent automatic pop to handle it manually
       onPopInvokedWithResult: (bool didPop, dynamic result) {
         if (!didPop) {
+          // Handle the pop manually and return the _hasChanges value
+          if (kDebugMode) {
+            print(
+                '🔄 DirectorySelectionScreen: Returning to MediaSelectionScreen with _hasChanges: $_hasChanges');
+          }
           Navigator.of(context).pop(_hasChanges);
         }
       },
@@ -250,6 +285,17 @@ class _DirectorySelectionScreenState extends State<DirectorySelectionScreen> {
           backgroundColor: Colors.black,
           foregroundColor: Colors.white,
           title: const Text('Media Directories'),
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back),
+            onPressed: () {
+              // Always return the _hasChanges value when navigating back
+              if (kDebugMode) {
+                print(
+                    '🔄 DirectorySelectionScreen: Manual back button pressed - returning with _hasChanges: $_hasChanges');
+              }
+              Navigator.of(context).pop(_hasChanges);
+            },
+          ),
           actions: [
             IconButton(
               onPressed: _showDirectoryPicker,

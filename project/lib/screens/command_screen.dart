@@ -1495,10 +1495,10 @@ class _CommandScreenState extends State<CommandScreen>
             Color(0xFF1F1F1F), // Slightly darker for subtle gradient
           ],
         ),
-        border: Border.all(
-          color: Colors.white.withValues(alpha: 0.15),
-          width: 1,
-        ),
+        // border: Border.all(
+        //   color: Colors.white.withValues(alpha: 0.15),
+        //   width: 1,
+        // ),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.2),

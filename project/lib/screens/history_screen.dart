@@ -575,18 +575,18 @@ class _HistoryScreenState extends State<HistoryScreen> {
           ),
           builder: (context, validationSnapshot) {
             if (validationSnapshot.connectionState == ConnectionState.waiting) {
-              // Show loading while validating
+              // Show loading while validating - match the 80x80 container size
               return Container(
-                width: 60,
-                height: 60,
+                width: 80,
+                height: 80,
                 decoration: BoxDecoration(
                   color: Colors.white.withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: const Center(
                   child: SizedBox(
-                    width: 16,
-                    height: 16,
+                    width: 20,
+                    height: 20,
                     child: CircularProgressIndicator(
                       strokeWidth: 2,
                       color: Color(0xFFFF0080),
@@ -613,11 +613,13 @@ class _HistoryScreenState extends State<HistoryScreen> {
                   ClipRRect(
                     borderRadius: BorderRadius.circular(8),
                     child: SizedBox(
-                      width: 60,
-                      height: 60,
+                      width: 80,
+                      height: 80,
                       child: Image.file(
                         file,
-                        fit: BoxFit.cover, // Uniform square cropping
+                        fit: BoxFit.cover, // Ensure full coverage
+                        width: 80,
+                        height: 80,
                         errorBuilder: (context, error, stackTrace) {
                           return _buildCustomMediaPlaceholder();
                         },
@@ -627,11 +629,11 @@ class _HistoryScreenState extends State<HistoryScreen> {
                   // Show recovery indicator if media was recovered
                   if (validationResult.wasRecovered)
                     Positioned(
-                      top: 2,
-                      right: 2,
+                      top: 4,
+                      right: 4,
                       child: Container(
-                        width: 12,
-                        height: 12,
+                        width: 16,
+                        height: 16,
                         decoration: BoxDecoration(
                           color: Colors.green.withValues(alpha: 0.9),
                           shape: BoxShape.circle,
@@ -640,7 +642,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
                         child: const Icon(
                           Icons.refresh,
                           color: Colors.white,
-                          size: 6,
+                          size: 8,
                         ),
                       ),
                     ),
@@ -658,8 +660,8 @@ class _HistoryScreenState extends State<HistoryScreen> {
   /// Custom EchoPost-themed placeholder for unavailable media
   Widget _buildCustomMediaPlaceholder() {
     return Container(
-      width: 60,
-      height: 60,
+      width: 80,
+      height: 80,
       decoration: BoxDecoration(
         gradient: const LinearGradient(
           begin: Alignment.topLeft,
@@ -681,15 +683,15 @@ class _HistoryScreenState extends State<HistoryScreen> {
           Icon(
             Icons.mic_none,
             color: const Color(0xFFFF0080).withValues(alpha: 0.6),
-            size: 16,
+            size: 24,
           ),
-          const SizedBox(height: 2),
+          const SizedBox(height: 4),
           Text(
             'Media\nUnavailable',
             textAlign: TextAlign.center,
             style: TextStyle(
               color: Colors.white.withValues(alpha: 0.4),
-              fontSize: 6,
+              fontSize: 8,
               height: 1.1,
               fontWeight: FontWeight.w500,
             ),
@@ -725,25 +727,25 @@ class _HistoryScreenState extends State<HistoryScreen> {
           Icon(
             Icons.mic_none,
             color: const Color(0xFFFF0080).withValues(alpha: 0.6),
-            size: 48,
+            size: 64,
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 16),
           Text(
             'Media Unavailable',
             textAlign: TextAlign.center,
             style: TextStyle(
-              color: Colors.white.withValues(alpha: 0.6),
-              fontSize: 16,
-              fontWeight: FontWeight.w500,
+              color: Colors.white.withValues(alpha: 0.8),
+              fontSize: 18,
+              fontWeight: FontWeight.w600,
             ),
           ),
-          const SizedBox(height: 4),
+          const SizedBox(height: 8),
           Text(
             'This media file is no longer accessible',
             textAlign: TextAlign.center,
             style: TextStyle(
-              color: Colors.white.withValues(alpha: 0.4),
-              fontSize: 12,
+              color: Colors.white.withValues(alpha: 0.5),
+              fontSize: 14,
             ),
           ),
         ],
@@ -950,25 +952,51 @@ class _HistoryScreenState extends State<HistoryScreen> {
                                   return Container(
                                     width: double.infinity,
                                     height: 200,
-                                    color: Colors.white.withValues(alpha: 0.1),
+                                    decoration: BoxDecoration(
+                                      gradient: const LinearGradient(
+                                        begin: Alignment.topLeft,
+                                        end: Alignment.bottomRight,
+                                        colors: [
+                                          Color(0xFF2A2A2A),
+                                          Color(0xFF1A1A1A),
+                                        ],
+                                      ),
+                                      borderRadius: BorderRadius.circular(16),
+                                      border: Border.all(
+                                        color:
+                                            Colors.white.withValues(alpha: 0.1),
+                                        width: 1,
+                                      ),
+                                    ),
                                     child: Column(
                                       mainAxisAlignment:
                                           MainAxisAlignment.center,
                                       children: [
                                         Icon(
-                                          Icons.broken_image,
-                                          size: 48,
-                                          color: Colors.white
-                                              .withValues(alpha: 0.5),
+                                          Icons.mic_none,
+                                          size: 64,
+                                          color: const Color(0xFFFF0080)
+                                              .withValues(alpha: 0.6),
+                                        ),
+                                        const SizedBox(height: 16),
+                                        Text(
+                                          'Media Unavailable',
+                                          style: TextStyle(
+                                            color: Colors.white
+                                                .withValues(alpha: 0.8),
+                                            fontSize: 18,
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                          textAlign: TextAlign.center,
                                         ),
                                         const SizedBox(height: 8),
                                         Text(
                                           validationResult?.errorMessage ??
-                                              'Media not accessible',
+                                              'This media file is no longer accessible',
                                           style: TextStyle(
                                             color: Colors.white
                                                 .withValues(alpha: 0.5),
-                                            fontSize: 12,
+                                            fontSize: 14,
                                           ),
                                           textAlign: TextAlign.center,
                                         ),

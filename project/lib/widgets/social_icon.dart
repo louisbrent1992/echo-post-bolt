@@ -66,11 +66,13 @@ class _SocialIconState extends State<SocialIcon> with TickerProviderStateMixin {
       child: Stack(
         alignment: Alignment.center,
         children: [
-          // Ripple effect when selected
+          // Beautiful ripple effect when selected - reusing Unified Action Button animation
           if (widget.isSelected)
-            RippleCircle(
+            SocialIconRipple(
               color: widget.platform.color,
-              amplitude: 1.0,
+              size: widget.size,
+              rippleCount: 3,
+              isActive: widget.isSelected,
             ),
 
           // Icon container
@@ -159,11 +161,13 @@ class SocialIconsRow extends StatelessWidget {
         child: Stack(
           alignment: Alignment.center,
           children: [
-            // Radiating ripple effect when selected - the "echo" animation
+            // Beautiful ripple effect when selected - reusing Unified Action Button animation
             if (isSelected)
-              RippleCircle(
+              SocialIconRipple(
                 color: color,
-                amplitude: 1.0,
+                size: maxHeight * 0.8,
+                rippleCount: 3,
+                isActive: isSelected,
               ),
 
             // Circular icon container

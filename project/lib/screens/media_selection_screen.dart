@@ -652,6 +652,10 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
   /// Navigate to directory selection screen and refresh media when returning
   Future<void> _navigateToDirectorySelection() async {
     try {
+      if (kDebugMode) {
+        print('🔄 MediaSelectionScreen: Navigating to directory selection...');
+      }
+
       final result = await Navigator.push<bool>(
         context,
         MaterialPageRoute(
@@ -659,12 +663,41 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
         ),
       );
 
+      if (kDebugMode) {
+        print(
+            '🔄 MediaSelectionScreen: Returned from directory selection with result: $result');
+      }
+
       // If directories were changed, refresh the media grid
       // Note: result will be true if changes were made, false if no changes, or null if cancelled
       if (result == true) {
         if (kDebugMode) {
           print(
-              '🔄 MediaSelectionScreen: Refreshing media after directory changes');
+              '🔄 MediaSelectionScreen: Directory changes detected - refreshing media automatically');
+        }
+
+        // Show immediate feedback to user
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Row(
+                children: [
+                  SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                    ),
+                  ),
+                  SizedBox(width: 12),
+                  Text('Directory settings updated - refreshing media...'),
+                ],
+              ),
+              duration: Duration(seconds: 2),
+              backgroundColor: Color(0xFFFF0080),
+            ),
+          );
         }
 
         // Clear current media and reload with full refresh
@@ -679,7 +712,7 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
       } else {
         if (kDebugMode) {
           print(
-              '🔄 MediaSelectionScreen: No directory changes detected, keeping current media');
+              '🔄 MediaSelectionScreen: No directory changes detected (result: $result) - keeping current media');
         }
       }
     } catch (e) {

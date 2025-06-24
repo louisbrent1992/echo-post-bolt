@@ -243,12 +243,12 @@ class _VideoPreviewWidgetState extends State<VideoPreviewWidget> {
       onTap: widget.onTap,
       child: Container(
         decoration: BoxDecoration(
-          border: Border.all(
-            color: widget.isSelected
-                ? const Color(0xFFFF0080)
-                : Colors.white.withValues(alpha: 0.3),
-            width: widget.isSelected ? 3 : 1,
-          ),
+          // border: Border.all(
+          //   color: widget.isSelected
+          //       ? const Color(0xFFFF0080)
+          //       : Colors.white.withValues(alpha: 0.3),
+          //   width: widget.isSelected ? 3 : 1,
+          // ),
           borderRadius: BorderRadius.circular(8),
         ),
         child: Stack(
