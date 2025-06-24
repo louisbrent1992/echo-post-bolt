@@ -25,6 +25,7 @@ import '../screens/media_selection_screen.dart';
 import '../screens/history_screen.dart';
 import '../screens/directory_selection_screen.dart';
 import '../constants/typography.dart';
+import '../widgets/triple_action_button_system.dart';
 
 /// EchoPost Voice-to-Post Pipeline
 ///
@@ -72,6 +73,12 @@ class _CommandScreenState extends State<CommandScreen>
   late AnimationController _backgroundController;
   late Animation<double> _backgroundAnimation;
 
+  // Triple Action Button System animation controllers
+  late AnimationController _leftButtonController;
+  late AnimationController _rightButtonController;
+  late Animation<double> _leftButtonAnimation;
+  late Animation<double> _rightButtonAnimation;
+
   Timer? _recordingTimer;
   Timer? _amplitudeTimer;
 
@@ -112,6 +119,8 @@ class _CommandScreenState extends State<CommandScreen>
   @override
   void dispose() {
     _backgroundController.dispose();
+    _leftButtonController.dispose();
+    _rightButtonController.dispose();
     _recordingTimer?.cancel();
     _amplitudeTimer?.cancel();
     _record.dispose();
@@ -134,6 +143,33 @@ class _CommandScreenState extends State<CommandScreen>
     ));
 
     _backgroundController.repeat(reverse: true);
+
+    // Initialize Triple Action Button System animations
+    _leftButtonController = AnimationController(
+      duration: const Duration(milliseconds: 300),
+      vsync: this,
+    );
+
+    _rightButtonController = AnimationController(
+      duration: const Duration(milliseconds: 300),
+      vsync: this,
+    );
+
+    _leftButtonAnimation = Tween<double>(
+      begin: 0.0,
+      end: 1.0,
+    ).animate(CurvedAnimation(
+      parent: _leftButtonController,
+      curve: Curves.elasticOut,
+    ));
+
+    _rightButtonAnimation = Tween<double>(
+      begin: 0.0,
+      end: 1.0,
+    ).animate(CurvedAnimation(
+      parent: _rightButtonController,
+      curve: Curves.elasticOut,
+    ));
   }
 
   double get normalizedAmplitude {
@@ -1281,6 +1317,11 @@ class _CommandScreenState extends State<CommandScreen>
           // Set the coordinator reference for use in other methods
           _postCoordinator = coordinator;
 
+          // Update button visibility based on coordinator state
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            _updateButtonVisibility(coordinator);
+          });
+
           return Scaffold(
             body: AnimatedBuilder(
               animation: _backgroundAnimation,
@@ -1380,17 +1421,16 @@ class _CommandScreenState extends State<CommandScreen>
                 child: SafeArea(
                   minimum: const EdgeInsets.only(bottom: 16),
                   child: Center(
-                    child: SizedBox(
-                      width: 120,
-                      height: 120,
-                      child: UnifiedActionButton(
-                        onRecordStart:
-                            coordinator.isProcessing ? null : _startRecording,
-                        onRecordStop:
-                            coordinator.isProcessing ? null : _stopRecording,
-                        onConfirmPost: _confirmAndPost,
-                        onAddMedia: _navigateToMediaSelection,
-                      ),
+                    child: TripleActionButtonSystem(
+                      leftButtonController: _leftButtonController,
+                      rightButtonController: _rightButtonController,
+                      onRecordStart:
+                          coordinator.isProcessing ? null : _startRecording,
+                      onRecordStop:
+                          coordinator.isProcessing ? null : _stopRecording,
+                      onConfirmPost: _confirmAndPost,
+                      onAddMedia: _navigateToMediaSelection,
+                      onSavePost: _savePost,
                     ),
                   ),
                 ),
@@ -1533,6 +1573,48 @@ class _CommandScreenState extends State<CommandScreen>
         ),
       ),
     );
+  }
+
+  /// Handle save post action for the Triple Action Button System
+  Future<void> _savePost() async {
+    if (_postCoordinator == null) {
+      if (kDebugMode) {
+        print('❌ Cannot save post: coordinator not available');
+      }
+      return;
+    }
+
+    try {
+      await _postCoordinator!.savePostAsDraft();
+      if (kDebugMode) {
+        print('✅ Post saved successfully via Triple Action Button');
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ Failed to save post: $e');
+      }
+    }
+  }
+
+  /// Update button visibility based on coordinator state
+  void _updateButtonVisibility(SocialActionPostCoordinator coordinator) {
+    // Left button (save) visibility
+    if (coordinator.shouldShowLeftButton &&
+        _leftButtonController.value == 0.0) {
+      _leftButtonController.forward();
+    } else if (!coordinator.shouldShowLeftButton &&
+        _leftButtonController.value == 1.0) {
+      _leftButtonController.reverse();
+    }
+
+    // Right button (media/confirm) visibility
+    if (coordinator.shouldShowRightButton &&
+        _rightButtonController.value == 0.0) {
+      _rightButtonController.forward();
+    } else if (!coordinator.shouldShowRightButton &&
+        _rightButtonController.value == 1.0) {
+      _rightButtonController.reverse();
+    }
   }
 
   void _showResetConfirmation() async {

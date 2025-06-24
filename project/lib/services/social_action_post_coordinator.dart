@@ -174,6 +174,10 @@ class SocialActionPostCoordinator extends ChangeNotifier {
   bool get hasSpeechDetected => _hasSpeechDetected;
   String? get currentRecordingPath => _currentRecordingPath;
 
+  // Triple Action Button System visibility getters
+  bool get shouldShowLeftButton => hasContent || hasMedia;
+  bool get shouldShowRightButton => needsMediaSelection || isReadyForExecution;
+
   /// Check if media requirement is met based on selected platforms
   bool get _isMediaRequirementMet {
     if (_currentPost.platforms.isEmpty) return hasMedia;
@@ -1329,6 +1333,40 @@ class SocialActionPostCoordinator extends ChangeNotifier {
         print('❌ Failed to upload finalized post: $e');
       }
       setError(e.toString());
+      rethrow;
+    }
+  }
+
+  /// Save current post as draft to Firestore
+  /// This leverages the same persistence mechanism as uploadFinalizedPost but is specifically
+  /// for draft saving without requiring social media posting confirmation
+  Future<void> savePostAsDraft() async {
+    try {
+      // Ensure media is synced before saving
+      _syncMediaStates();
+
+      // Save current post state to Firestore as draft
+      await _firestoreService.saveAction(_currentPost.toJson());
+
+      if (kDebugMode) {
+        print('✅ Post saved as draft: ${_currentPost.actionId}');
+        print('   Content: "${_currentPost.content.text}"');
+        print('   Platforms: ${_currentPost.platforms}');
+        print('   Media count: ${_currentPost.content.media.length}');
+      }
+
+      // Provide user feedback
+      requestStatusUpdate(
+        'Post saved as draft! 💾',
+        StatusMessageType.success,
+        duration: const Duration(seconds: 2),
+        priority: StatusPriority.medium,
+      );
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ Failed to save post as draft: $e');
+      }
+      setError('Failed to save post: $e');
       rethrow;
     }
   }
