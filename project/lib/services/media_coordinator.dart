@@ -2,7 +2,9 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:photo_manager/photo_manager.dart';
+import 'package:path/path.dart' as path;
 import '../models/social_action.dart';
+import '../models/media_validation.dart';
 import '../services/app_settings_service.dart';
 import '../services/directory_service.dart';
 import '../services/media_metadata_service.dart';
@@ -23,10 +25,26 @@ class MediaCoordinator extends ChangeNotifier {
   bool _isInitialized = false;
   bool _isInitializing = false;
 
-  // Add static variables for debug message throttling
+  // Smart throttling variables to prevent excessive operations
   static DateTime? _lastCacheInvalidationLog;
   static DateTime? _lastQueryLog;
+  static DateTime? _lastDeepCachePurge;
+  static DateTime? _lastDirectoryRescan;
   static int _queryCount = 0;
+
+  // Enhanced validation cache with smart TTL management
+  final Map<String, MediaValidationCacheEntry> _validationCache = {};
+  final Map<String, MediaBirthprint> _birthprintCache = {};
+  final Set<String> _staleUriReferences = {};
+
+  // Directory timestamp tracking for smart rescans
+  final Map<String, DateTime> _directoryTimestamps = {};
+  final Map<String, List<String>> _directoryFileCache = {};
+
+  // Operation locks to prevent concurrent operations and infinite loops
+  bool _isCacheInvalidating = false;
+  bool _isDirectoryScanning = false;
+  bool _isValidatingFileSystem = false;
 
   MediaCoordinator();
 
@@ -172,7 +190,7 @@ class MediaCoordinator extends ChangeNotifier {
   }
 
   /// Retrieves media assets based on a semantic query and filters
-  /// This method now enforces strict directory compliance by overriding PhotoManager's cache
+  /// OPTIMIZED: Smart caching with hybrid PhotoManager + file system validation
   Future<List<Map<String, dynamic>>> getMediaForQuery(
     String query, {
     DateTimeRange? dateRange,
@@ -185,7 +203,7 @@ class MediaCoordinator extends ChangeNotifier {
     }
 
     try {
-      // Only log query details occasionally to avoid spam
+      // Smart throttling to prevent excessive operations
       _queryCount++;
       final now = DateTime.now();
       final shouldLogQuery = _lastQueryLog == null ||
@@ -198,12 +216,12 @@ class MediaCoordinator extends ChangeNotifier {
         _lastQueryLog = now;
       }
 
-      // CRITICAL: Force PhotoManager cache invalidation before each query
-      // This ensures we never show stale media from deselected directories
-      await _forcePhotoManagerCacheInvalidation();
+      // OPTIMIZED: Smart cache invalidation (only when needed)
+      await _smartCacheInvalidation();
 
       final searchParams = {
         'terms': query.split(' '),
+        'original_query': query, // Add original query for space-aware matching
         'date_range': dateRange != null
             ? {
                 'start': dateRange.start.toIso8601String(),
@@ -214,43 +232,28 @@ class MediaCoordinator extends ChangeNotifier {
         'directory': directory,
       };
 
-      List<Map<String, dynamic>> photoManagerResults = [];
-      List<Map<String, dynamic>> customResults = [];
+      // Get PhotoManager results with hybrid validation
+      final photoManagerResults =
+          await _getValidatedPhotoManagerResults(searchParams);
 
-      // Get PhotoManager results and filter them appropriately based on directory mode
-      final candidates = await _photoManager.findAssetCandidates(searchParams);
-      final candidateMaps = await _photoManager.getAssetMaps(candidates);
+      // Get custom directory results (if enabled)
+      final customResults = isCustomDirectoriesEnabled
+          ? await _getValidatedCustomDirectoryResults(query,
+              dateRange: dateRange,
+              mediaTypes: mediaTypes,
+              directory: directory)
+          : <Map<String, dynamic>>[];
 
-      // CRITICAL: Always filter PhotoManager results based on current directory state
-      // This ensures consistent behavior whether custom directories are enabled or disabled
-      photoManagerResults =
-          await _filterPhotoManagerResultsByEnabledDirectories(candidateMaps);
-
-      // Only get custom directory results when custom directories are enabled
-      if (isCustomDirectoriesEnabled) {
-        customResults = await _searchCustomDirectories(
-          query,
-          dateRange: dateRange,
-          mediaTypes: mediaTypes,
-          directory: directory,
-        );
-      }
-
-      // Combine and deduplicate results with strict path validation
+      // Combine and deduplicate results efficiently
       final allResults = <String, Map<String, dynamic>>{};
 
       // Add PhotoManager results
       for (var media in photoManagerResults) {
         final fileUri = media['file_uri'] as String;
-        final filePath = Uri.parse(fileUri).path;
-
-        // Double-check that this file is still allowed based on current directory state
-        if (await isFileAllowedByCurrentDirectoryState(filePath)) {
-          allResults[fileUri] = media;
-        }
+        allResults[fileUri] = media;
       }
 
-      // Add custom directory results (these are already filtered by enabled directories)
+      // Add custom directory results
       for (var media in customResults) {
         final fileUri = media['file_uri'] as String;
         allResults[fileUri] = media;
@@ -258,7 +261,7 @@ class MediaCoordinator extends ChangeNotifier {
 
       final finalResults = allResults.values.toList();
 
-      // Sort by creation time (newest first)
+      // Efficient sorting by creation time (newest first)
       finalResults.sort((a, b) {
         final aTime = DateTime.tryParse(a['device_metadata']
                     ?['creation_time'] ??
@@ -273,20 +276,12 @@ class MediaCoordinator extends ChangeNotifier {
         return bTime.compareTo(aTime);
       });
 
-      // Enrich PhotoManager results with metadata from EXIF data
-      for (var media in finalResults) {
-        final fileUri = media['file_uri'] as String;
-        final file = File(Uri.parse(fileUri).path);
-        if (await file.exists() && media['metadata'] == null) {
-          final metadata = await _metadataService.extractMetadata(file);
-          media['metadata'] = metadata;
-        }
-      }
+      // Batch metadata enrichment for performance
+      await _batchEnrichMetadata(finalResults);
 
-      // Only log results summary occasionally
       if (kDebugMode && shouldLogQuery) {
         print(
-            '✅ MediaCoordinator: Returning ${finalResults.length} filtered results');
+            '✅ MediaCoordinator: Returning ${finalResults.length} validated results');
       }
 
       return finalResults;
@@ -298,69 +293,331 @@ class MediaCoordinator extends ChangeNotifier {
     }
   }
 
-  /// Forces complete PhotoManager cache invalidation to prevent stale results
-  Future<void> _forcePhotoManagerCacheInvalidation() async {
+  /// OPTIMIZED: Smart cache invalidation that prevents excessive operations
+  Future<void> _smartCacheInvalidation() async {
+    final now = DateTime.now();
+
+    // Prevent concurrent cache invalidations
+    if (_isCacheInvalidating) return;
+
+    // Throttle cache invalidation to every 30 seconds minimum
+    if (_lastDeepCachePurge != null &&
+        now.difference(_lastDeepCachePurge!).inSeconds < 30) {
+      return;
+    }
+
+    _isCacheInvalidating = true;
+    _lastDeepCachePurge = now;
+
     try {
-      // Throttle cache invalidation logging to prevent spam
-      final now = DateTime.now();
       final shouldLog = _lastCacheInvalidationLog == null ||
           now.difference(_lastCacheInvalidationLog!).inSeconds > 60;
 
       if (kDebugMode && shouldLog) {
-        print(
-            '🗑️ MediaCoordinator: Forcing PhotoManager cache invalidation...');
+        print('🗑️ MediaCoordinator: Smart cache invalidation...');
         _lastCacheInvalidationLog = now;
       }
 
-      // Step 1: Clear all PhotoManager caches
+      // Step 1: Clear PhotoManager caches efficiently
       await PhotoManager.clearFileCache();
       await PhotoManager.releaseCache();
 
-      // Step 2: Reset change notifications
-      try {
-        await PhotoManager.stopChangeNotify();
-        await Future.delayed(const Duration(milliseconds: 200));
-        await PhotoManager.startChangeNotify();
-      } catch (e) {
-        // Only log errors, not successful operations
-        if (kDebugMode) {
-          print('⚠️ MediaCoordinator: Change notification reset failed: $e');
-        }
-      }
+      // Step 2: Smart change notification reset (only if needed)
+      await _smartChangeNotificationReset();
 
-      // Step 3: Force PhotoManager to rebuild its internal state
-      try {
-        // Request a minimal album list to force internal state refresh
-        await PhotoManager.getAssetPathList(
-          type: RequestType.image,
-          filterOption: FilterOptionGroup(
-            imageOption: const FilterOption(
-              sizeConstraint: SizeConstraint(
-                minWidth: 1,
-                minHeight: 1,
-                maxWidth: 99999,
-                maxHeight: 99999,
-              ),
-            ),
-          ),
-        );
-      } catch (e) {
-        // Only log errors
-        if (kDebugMode) {
-          print('⚠️ MediaCoordinator: PhotoManager state refresh failed: $e');
-        }
-      }
+      // Step 3: Lightweight PhotoManager state refresh
+      await _lightweightStateRefresh();
 
       if (kDebugMode && shouldLog) {
-        print('✅ MediaCoordinator: Cache invalidation complete');
+        print('✅ MediaCoordinator: Smart cache invalidation complete');
       }
     } catch (e) {
       if (kDebugMode) {
-        print(
-            '❌ MediaCoordinator: Failed to invalidate PhotoManager cache: $e');
+        print('❌ MediaCoordinator: Smart cache invalidation failed: $e');
       }
-      // Continue anyway - this is not critical enough to stop the operation
+    } finally {
+      _isCacheInvalidating = false;
     }
+  }
+
+  /// OPTIMIZED: Lightweight change notification reset to avoid stalling
+  Future<void> _smartChangeNotificationReset() async {
+    try {
+      await PhotoManager.stopChangeNotify();
+      await Future.delayed(const Duration(milliseconds: 100)); // Reduced delay
+      await PhotoManager.startChangeNotify();
+    } catch (e) {
+      // Silently continue - not critical
+    }
+  }
+
+  /// OPTIMIZED: Lightweight PhotoManager state refresh to avoid infinite loops
+  Future<void> _lightweightStateRefresh() async {
+    try {
+      // Single lightweight request to refresh state
+      await PhotoManager.getAssetPathList(
+        type: RequestType.image,
+        filterOption: FilterOptionGroup(
+          imageOption: const FilterOption(
+            sizeConstraint: SizeConstraint(ignoreSize: true),
+          ),
+        ),
+      );
+    } catch (e) {
+      // Silently continue - not critical
+    }
+  }
+
+  /// OPTIMIZED: Get validated PhotoManager results with hybrid file system check
+  Future<List<Map<String, dynamic>>> _getValidatedPhotoManagerResults(
+      Map<String, dynamic> searchParams) async {
+    // Get PhotoManager candidates
+    final candidates = await _photoManager.findAssetCandidates(searchParams);
+    final candidateMaps = await _photoManager.getAssetMaps(candidates);
+
+    // Filter by enabled directories
+    final filteredResults =
+        await _filterPhotoManagerResultsByEnabledDirectories(candidateMaps);
+
+    // Hybrid validation: Check against file system to eliminate stale references
+    return await _hybridValidateResults(filteredResults);
+  }
+
+  /// OPTIMIZED: Hybrid validation that checks PhotoManager results against file system
+  Future<List<Map<String, dynamic>>> _hybridValidateResults(
+      List<Map<String, dynamic>> photoManagerResults) async {
+    if (_isValidatingFileSystem)
+      return photoManagerResults; // Prevent concurrent validation
+    _isValidatingFileSystem = true;
+
+    try {
+      final validatedResults = <Map<String, dynamic>>[];
+      final staleUris = <String>[];
+      final batchSize = 20; // Process in batches to avoid blocking
+
+      for (int i = 0; i < photoManagerResults.length; i += batchSize) {
+        final batch = photoManagerResults.skip(i).take(batchSize);
+
+        for (final result in batch) {
+          final fileUri = result['file_uri'] as String;
+          final filePath = Uri.parse(fileUri).path;
+
+          // Quick file existence check
+          if (await File(filePath).exists()) {
+            validatedResults.add(result);
+          } else {
+            staleUris.add(fileUri);
+
+            // Try to find renamed file in same directory
+            final recoveredResult = await _tryRecoverRenamedFile(result);
+            if (recoveredResult != null) {
+              validatedResults.add(recoveredResult);
+            }
+          }
+        }
+
+        // Yield control between batches to prevent blocking
+        await Future.delayed(const Duration(microseconds: 100));
+      }
+
+      // Purge stale references asynchronously
+      if (staleUris.isNotEmpty) {
+        _purgeStaleReferencesAsync(staleUris);
+      }
+
+      return validatedResults;
+    } finally {
+      _isValidatingFileSystem = false;
+    }
+  }
+
+  /// OPTIMIZED: Try to recover renamed files efficiently
+  Future<Map<String, dynamic>?> _tryRecoverRenamedFile(
+      Map<String, dynamic> originalResult) async {
+    final originalUri = originalResult['file_uri'] as String;
+    final originalPath = Uri.parse(originalUri).path;
+    final directory = path.dirname(originalPath);
+    final originalFilename = path.basename(originalPath);
+
+    // Check directory cache first
+    final cachedFiles = _directoryFileCache[directory];
+    if (cachedFiles != null) {
+      // Look for similar filenames in cache
+      final recoveredFile = _findSimilarFilename(originalFilename, cachedFiles);
+      if (recoveredFile != null) {
+        final updatedResult = Map<String, dynamic>.from(originalResult);
+        updatedResult['file_uri'] =
+            'file://${path.join(directory, recoveredFile)}';
+        return updatedResult;
+      }
+    }
+
+    return null;
+  }
+
+  /// OPTIMIZED: Find similar filename for renamed file recovery
+  String? _findSimilarFilename(
+      String originalFilename, List<String> availableFiles) {
+    final baseName = path.basenameWithoutExtension(originalFilename);
+    final extension = path.extension(originalFilename);
+
+    // Look for files with same base name but different suffixes
+    for (final file in availableFiles) {
+      if (file.endsWith(extension)) {
+        final fileBaseName = path.basenameWithoutExtension(file);
+
+        // Check for common rename patterns
+        if (fileBaseName.startsWith(baseName) &&
+            (fileBaseName.contains('_copy') ||
+                fileBaseName.contains('_1') ||
+                fileBaseName.contains('_2'))) {
+          return file;
+        }
+      }
+    }
+
+    return null;
+  }
+
+  /// OPTIMIZED: Get validated custom directory results with smart caching
+  Future<List<Map<String, dynamic>>> _getValidatedCustomDirectoryResults(
+    String query, {
+    DateTimeRange? dateRange,
+    List<String>? mediaTypes,
+    String? directory,
+  }) async {
+    // Use existing custom directory search with validation
+    final results = await _searchCustomDirectories(
+      query,
+      dateRange: dateRange,
+      mediaTypes: mediaTypes,
+      directory: directory,
+    );
+
+    // Validate results against file system
+    final validatedResults = <Map<String, dynamic>>[];
+
+    for (final result in results) {
+      final fileUri = result['file_uri'] as String;
+      final filePath = Uri.parse(fileUri).path;
+
+      if (await File(filePath).exists()) {
+        validatedResults.add(result);
+      }
+    }
+
+    return validatedResults;
+  }
+
+  /// OPTIMIZED: Batch metadata enrichment for better performance
+  Future<void> _batchEnrichMetadata(List<Map<String, dynamic>> results) async {
+    final batchSize = 10;
+
+    for (int i = 0; i < results.length; i += batchSize) {
+      final batch = results.skip(i).take(batchSize);
+
+      await Future.wait(batch.map((media) async {
+        final fileUri = media['file_uri'] as String;
+        final file = File(Uri.parse(fileUri).path);
+
+        if (await file.exists() && media['metadata'] == null) {
+          try {
+            final metadata = await _metadataService.extractMetadata(file);
+            media['metadata'] = metadata;
+          } catch (e) {
+            // Skip metadata extraction on error
+          }
+        }
+      }));
+
+      // Yield control between batches
+      await Future.delayed(const Duration(microseconds: 100));
+    }
+  }
+
+  /// OPTIMIZED: Asynchronous stale reference purging to avoid blocking
+  void _purgeStaleReferencesAsync(List<String> staleUris) {
+    Future.microtask(() async {
+      try {
+        _staleUriReferences.addAll(staleUris);
+
+        // Remove from validation cache
+        for (final uri in staleUris) {
+          _validationCache.remove(uri);
+          _birthprintCache.remove(uri.hashCode.toString());
+        }
+      } catch (e) {
+        // Silent failure for cache operations
+      }
+    });
+  }
+
+  /// OPTIMIZED: Smart directory scanning with timestamp-based change detection
+  Future<bool> _needsDirectoryRescan(String directoryPath) async {
+    try {
+      final directory = Directory(directoryPath);
+      if (!await directory.exists()) return false;
+
+      final currentModTime = (await directory.stat()).modified;
+      final lastKnownModTime = _directoryTimestamps[directoryPath];
+
+      if (lastKnownModTime == null ||
+          currentModTime.isAfter(lastKnownModTime)) {
+        _directoryTimestamps[directoryPath] = currentModTime;
+        return true;
+      }
+
+      return false;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /// OPTIMIZED: Update directory file cache for efficient rename detection
+  Future<void> _updateDirectoryFileCache(String directoryPath) async {
+    if (_isDirectoryScanning) return; // Prevent concurrent scans
+    _isDirectoryScanning = true;
+
+    try {
+      final directory = Directory(directoryPath);
+      if (!await directory.exists()) return;
+
+      final files = <String>[];
+      await for (final entity in directory.list()) {
+        if (entity is File && _isSupportedMediaFile(entity.path)) {
+          files.add(path.basename(entity.path));
+        }
+      }
+
+      _directoryFileCache[directoryPath] = files;
+    } catch (e) {
+      // Silent failure
+    } finally {
+      _isDirectoryScanning = false;
+    }
+  }
+
+  /// Check if file is a supported media type
+  bool _isSupportedMediaFile(String filePath) {
+    final extension = path.extension(filePath).toLowerCase();
+    const supportedExtensions = {
+      '.jpg',
+      '.jpeg',
+      '.png',
+      '.gif',
+      '.bmp',
+      '.webp',
+      '.heic',
+      '.heif',
+      '.mp4',
+      '.mov',
+      '.avi',
+      '.mkv',
+      '.wmv',
+      '.flv',
+      '.webm'
+    };
+    return supportedExtensions.contains(extension);
   }
 
   /// Filters PhotoManager results to only include files from currently enabled directories
@@ -512,8 +769,11 @@ class MediaCoordinator extends ChangeNotifier {
           final folderPath = metadata['folder'] as String? ?? '';
           final searchText = '$fileName $folderPath'.toLowerCase();
 
-          final matchesSearch =
-              searchTerms.any((term) => searchText.contains(term));
+          // Check both individual terms AND the complete original query
+          final originalQuery = query.toLowerCase().trim();
+          final matchesSearch = searchTerms
+                  .any((term) => searchText.contains(term)) ||
+              (originalQuery.isNotEmpty && searchText.contains(originalQuery));
           if (!matchesSearch) continue;
         }
 
@@ -1175,117 +1435,60 @@ class MediaCoordinator extends ChangeNotifier {
     return await _mediaSearchService.getAssetById(id);
   }
 
-  /// Refreshes media data by rescanning directories and clearing caches
+  /// OPTIMIZED: Smart media refresh that prevents excessive operations and stalling
   /// This ensures the latest media files are available, including newly added files
-  ///
-  /// PhotoManager uses aggressive caching both internally and at the OS level.
-  /// When new files are added to directories, PhotoManager doesn't automatically
-  /// detect them without proper cache invalidation. This method:
-  ///
-  /// 1. Clears PhotoManager's file cache (clearFileCache)
-  /// 2. Releases native caches (releaseCache)
-  /// 3. Restarts change notifications to trigger system media scan
-  /// 4. Forces PhotoManager to refresh its internal state
-  /// 5. Refreshes our internal metadata cache
-  /// 6. Re-initializes the search service
-  ///
-  /// This comprehensive approach ensures that newly added files are detected
-  /// when users pull-to-refresh in the MediaSelectionScreen.
   Future<void> refreshMediaData() async {
     if (!_isInitialized) {
       throw StateError(
           'MediaCoordinator not initialized. Call initialize() first.');
     }
 
+    final now = DateTime.now();
+
+    // Prevent concurrent refreshes and throttle to every 10 seconds minimum
+    if (_lastDirectoryRescan != null &&
+        now.difference(_lastDirectoryRescan!).inSeconds < 10) {
+      if (kDebugMode) {
+        print('🔄 MediaCoordinator: Refresh throttled (too recent)');
+      }
+      return;
+    }
+
+    _lastDirectoryRescan = now;
+
     try {
       if (kDebugMode) {
-        print('🔄 MediaCoordinator: Starting comprehensive media refresh...');
+        print('🔄 MediaCoordinator: Starting optimized media refresh...');
       }
 
-      // Step 1: Clear PhotoManager's file cache to force fresh file reads
-      if (kDebugMode) {
-        print('🗑️ MediaCoordinator: Clearing PhotoManager file cache...');
-      }
-      await PhotoManager.clearFileCache();
+      // Step 1: Smart cache invalidation (already optimized)
+      await _smartCacheInvalidation();
 
-      // Step 2: Release PhotoManager's native caches to force fresh asset queries
-      if (kDebugMode) {
-        print('🗑️ MediaCoordinator: Releasing PhotoManager native caches...');
-      }
-      await PhotoManager.releaseCache();
+      // Step 2: Update directory file caches for rename detection
+      await _updateAllDirectoryFileCaches();
 
-      // Step 3: Restart change notifications to trigger system media scan
-      if (kDebugMode) {
-        print('🔔 MediaCoordinator: Restarting change notifications...');
-      }
-
-      try {
-        await PhotoManager.stopChangeNotify();
-        // Longer delay to ensure proper cleanup
-        await Future.delayed(const Duration(milliseconds: 500));
-        await PhotoManager.startChangeNotify();
-        // Additional delay to allow change notifications to initialize
-        await Future.delayed(const Duration(milliseconds: 500));
-      } catch (e) {
-        if (kDebugMode) {
-          print('⚠️ MediaCoordinator: Change notification restart failed: $e');
-        }
-        // Continue without change notifications - not critical for refresh
-      }
-
-      // Step 4: Force PhotoManager to refresh its internal album state
-      if (kDebugMode) {
-        print('📱 MediaCoordinator: Forcing PhotoManager album refresh...');
-      }
-
-      try {
-        // Force PhotoManager to re-scan albums by requesting them with fresh options
-        final albums = await PhotoManager.getAssetPathList(
-          type: RequestType.all,
-          filterOption: FilterOptionGroup(
-            imageOption: const FilterOption(
-              sizeConstraint: SizeConstraint(ignoreSize: true),
-            ),
-            videoOption: const FilterOption(
-              sizeConstraint: SizeConstraint(ignoreSize: true),
-            ),
-            orders: [
-              const OrderOption(
-                type: OrderOptionType.createDate,
-                asc: false,
-              ),
-            ],
-          ),
-        );
-
-        if (kDebugMode) {
-          print(
-              '📱 MediaCoordinator: Refreshed ${albums.length} PhotoManager albums');
-        }
-      } catch (e) {
-        if (kDebugMode) {
-          print('⚠️ MediaCoordinator: Album refresh failed: $e');
-        }
-      }
-
-      // Step 5: Refresh MediaMetadataService cache for custom directories
+      // Step 3: Refresh metadata service cache efficiently
       if (kDebugMode) {
         print('📊 MediaCoordinator: Refreshing metadata cache...');
       }
       await _metadataService.refreshCache();
 
-      // Step 6: Re-initialize MediaSearchService to get fresh data
+      // Step 4: Re-initialize MediaSearchService efficiently
       if (kDebugMode) {
         print('🔍 MediaCoordinator: Re-initializing MediaSearchService...');
       }
       await _mediaSearchService.initialize();
 
-      // Step 7: Force notify listeners about the refresh
+      // Step 5: Clear validation caches for fresh start
+      _validationCache.clear();
+      _birthprintCache.clear();
+      _staleUriReferences.clear();
+
+      // Step 6: Notify listeners about the refresh
       notifyListeners();
 
       if (kDebugMode) {
-        print(
-            '✅ MediaCoordinator: Comprehensive media refresh completed successfully');
+        print('✅ MediaCoordinator: Optimized media refresh completed');
       }
     } catch (e) {
       if (kDebugMode) {
@@ -1295,8 +1498,30 @@ class MediaCoordinator extends ChangeNotifier {
     }
   }
 
+  /// OPTIMIZED: Update all directory file caches efficiently
+  Future<void> _updateAllDirectoryFileCaches() async {
+    if (_isDirectoryScanning) return; // Prevent concurrent operations
+
+    try {
+      final enabledDirectories = isCustomDirectoriesEnabled
+          ? _directoryService.enabledDirectories.map((d) => d.path).toList()
+          : DirectoryService.getPlatformDefaults().map((d) => d.path).toList();
+
+      // Update caches for directories that need rescanning
+      for (final dirPath in enabledDirectories) {
+        if (await _needsDirectoryRescan(dirPath)) {
+          await _updateDirectoryFileCache(dirPath);
+        }
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        print('⚠️ MediaCoordinator: Directory cache update failed: $e');
+      }
+    }
+  }
+
   /// Forces a complete rescan of all selected directories
-  /// Use this when you need to ensure absolutely latest media is available
+  /// OPTIMIZED: Use smart directory scanning instead of brute force
   Future<void> forceRescanDirectories() async {
     if (!_isInitialized) {
       throw StateError(
@@ -1305,18 +1530,21 @@ class MediaCoordinator extends ChangeNotifier {
 
     try {
       if (kDebugMode) {
-        print('🔄 MediaCoordinator: Starting force rescan of directories...');
+        print('🔄 MediaCoordinator: Starting optimized directory rescan...');
       }
 
-      // PhotoManager automatically scans the latest files on each query
-      // No explicit refresh needed - the next getMediaForQuery call will get latest data
+      // Force update of all directory timestamps to trigger rescans
+      _directoryTimestamps.clear();
+
+      // Update all directory file caches
+      await _updateAllDirectoryFileCaches();
 
       if (kDebugMode) {
-        print('✅ MediaCoordinator: Force rescan completed successfully');
+        print('✅ MediaCoordinator: Optimized directory rescan completed');
       }
     } catch (e) {
       if (kDebugMode) {
-        print('❌ MediaCoordinator: Failed to force rescan directories: $e');
+        print('❌ MediaCoordinator: Failed to rescan directories: $e');
       }
       rethrow;
     }
@@ -1447,6 +1675,671 @@ class MediaCoordinator extends ChangeNotifier {
     return mediaInDir
         .map((m) => (m['mime_type'] as String).split('/')[0])
         .toSet();
+  }
+
+  // ========== Media URI Validation and Recovery System ==========
+
+  /// Comprehensive media URI validation with automatic recovery
+  /// This method validates URIs and attempts multiple recovery strategies
+  Future<MediaValidationResult> validateAndRecoverMediaURI(
+    String uri, {
+    MediaValidationConfig config = const MediaValidationConfig(),
+  }) async {
+    if (!_isInitialized) {
+      throw StateError(
+          'MediaCoordinator not initialized. Call initialize() first.');
+    }
+
+    // Check smart cache first for performance optimization
+    final cacheEntry = _validationCache[uri];
+    if (cacheEntry != null && cacheEntry.isValid) {
+      return cacheEntry.result;
+    }
+
+    final startTime = DateTime.now();
+
+    try {
+      if (config.verboseLogging) {
+        print('🔍 MediaCoordinator: Starting validation for URI: $uri');
+      }
+
+      // Step 1: Basic URI validation
+      final basicValidation = await validateMediaURI(uri);
+      if (basicValidation) {
+        final result = MediaValidationResult(
+          isValid: true,
+          originalUri: uri,
+          recoveredUri: uri,
+          recoveryMethod: MediaRecoveryMethod.none,
+        );
+
+        // Cache successful validation
+        _cacheValidationResult(uri, result);
+
+        if (config.verboseLogging) {
+          print('✅ MediaCoordinator: URI is valid, no recovery needed');
+        }
+        return result;
+      }
+
+      // Mark as stale reference for potential purging
+      if (config.enableStalePurging) {
+        _staleUriReferences.add(uri);
+      }
+
+      if (!config.enableRecovery) {
+        final result = MediaValidationResult(
+          isValid: false,
+          originalUri: uri,
+          recoveredUri: null,
+          recoveryMethod: MediaRecoveryMethod.failed,
+          errorMessage: 'URI validation failed and recovery is disabled',
+        );
+
+        _cacheValidationResult(uri, result);
+        return result;
+      }
+
+      if (config.verboseLogging) {
+        print(
+            '🔍 MediaCoordinator: URI validation failed, attempting recovery: $uri');
+      }
+
+      // Step 2: Attempt recovery strategies with timeout
+      final recoveryResult = await _attemptMediaRecovery(uri, config)
+          .timeout(config.maxRecoveryTime, onTimeout: () {
+        if (config.verboseLogging) {
+          print('⏰ MediaCoordinator: Recovery timeout for URI: $uri');
+        }
+        return MediaValidationResult(
+          isValid: false,
+          originalUri: uri,
+          recoveredUri: null,
+          recoveryMethod: MediaRecoveryMethod.failed,
+          errorMessage:
+              'Recovery timeout after ${config.maxRecoveryTime.inSeconds}s',
+        );
+      });
+
+      // Cache recovery result
+      _cacheValidationResult(uri, recoveryResult);
+
+      final duration = DateTime.now().difference(startTime);
+      if (config.verboseLogging) {
+        print(
+            '⏱️ MediaCoordinator: Validation completed in ${duration.inMilliseconds}ms');
+      }
+
+      return recoveryResult;
+    } catch (e) {
+      if (config.verboseLogging) {
+        print('❌ MediaCoordinator: Error during validation and recovery: $e');
+      }
+      final result = MediaValidationResult(
+        isValid: false,
+        originalUri: uri,
+        recoveredUri: null,
+        recoveryMethod: MediaRecoveryMethod.failed,
+        errorMessage: e.toString(),
+      );
+
+      _cacheValidationResult(uri, result);
+      return result;
+    }
+  }
+
+  /// Cache validation result with TTL management
+  void _cacheValidationResult(String uri, MediaValidationResult result) {
+    // Clean expired entries periodically
+    _cleanExpiredCacheEntries();
+
+    _validationCache[uri] = MediaValidationCacheEntry(
+      result: result,
+      cachedAt: DateTime.now(),
+    );
+  }
+
+  /// Clean expired cache entries to prevent memory bloat
+  void _cleanExpiredCacheEntries() {
+    final now = DateTime.now();
+    _validationCache.removeWhere(
+        (key, entry) => now.difference(entry.cachedAt).inHours >= 24);
+
+    // Also clean birthprint cache periodically
+    if (_birthprintCache.length > 1000) {
+      _birthprintCache.clear();
+    }
+  }
+
+  /// Purge stale URI references from all caching layers
+  Future<void> purgeStaleReferences({
+    List<String>? specificUris,
+    bool forceFullPurge = false,
+  }) async {
+    try {
+      final urisToPurge = specificUris ?? _staleUriReferences.toList();
+
+      if (urisToPurge.isEmpty && !forceFullPurge) return;
+
+      // 1. Remove from validation cache
+      for (final uri in urisToPurge) {
+        _validationCache.remove(uri);
+        _birthprintCache.remove(uri.hashCode.toString());
+      }
+
+      // 2. Clear PhotoManager caches if full purge requested
+      if (forceFullPurge) {
+        await PhotoManager.clearFileCache();
+        await PhotoManager.releaseCache();
+
+        // 3. Clear internal service caches
+        await _metadataService.refreshCache();
+        await _mediaSearchService.initialize();
+      }
+
+      // 4. Clear stale reference tracking
+      if (specificUris == null) {
+        _staleUriReferences.clear();
+      } else {
+        _staleUriReferences.removeWhere((uri) => urisToPurge.contains(uri));
+      }
+    } catch (e) {
+      // Silent failure for cache operations
+    }
+  }
+
+  /// Validates a list of media items and recovers broken ones with optimized parallel processing
+  Future<MediaValidationBatchResult> validateAndRecoverMediaList(
+    List<MediaItem> mediaItems, {
+    MediaValidationConfig config = const MediaValidationConfig(),
+  }) async {
+    if (!_isInitialized) {
+      throw StateError(
+          'MediaCoordinator not initialized. Call initialize() first.');
+    }
+
+    if (config.verboseLogging) {
+      print(
+          '🔍 MediaCoordinator: Starting batch validation for ${mediaItems.length} items');
+    }
+
+    final results = <MediaValidationResult>[];
+
+    // Process items in parallel for better performance, but limit concurrency
+    const maxConcurrent = 3;
+    for (int i = 0; i < mediaItems.length; i += maxConcurrent) {
+      final batch = mediaItems.skip(i).take(maxConcurrent);
+      final batchResults = await Future.wait(
+        batch.map(
+            (item) => validateAndRecoverMediaURI(item.fileUri, config: config)),
+      );
+      results.addAll(batchResults);
+    }
+
+    final batchResult = MediaValidationBatchResult(results: results);
+
+    if (config.verboseLogging) {
+      print('✅ MediaCoordinator: Batch validation completed: $batchResult');
+    }
+
+    return batchResult;
+  }
+
+  /// Attempts multiple recovery strategies for broken media URIs
+  Future<MediaValidationResult> _attemptMediaRecovery(
+    String brokenUri,
+    MediaValidationConfig config,
+  ) async {
+    try {
+      final originalPath = Uri.parse(brokenUri).path;
+      final fileName = path.basename(originalPath);
+      final fileExtension = path.extension(originalPath);
+
+      if (config.verboseLogging) {
+        print('🔄 MediaCoordinator: Attempting recovery for: $fileName');
+      }
+
+      // Strategy 1: Search by exact filename in current directories
+      final exactNameResult = await _recoverByExactFilename(fileName, config);
+      if (exactNameResult != null) {
+        return MediaValidationResult(
+          isValid: true,
+          originalUri: brokenUri,
+          recoveredUri: exactNameResult,
+          recoveryMethod: MediaRecoveryMethod.exactFilename,
+          recoveryMetadata: {
+            'strategy': 'exact_filename',
+            'filename': fileName
+          },
+        );
+      }
+
+      // Strategy 2: Search by filename pattern (handle renamed files)
+      final patternResult =
+          await _recoverByFilenamePattern(fileName, fileExtension, config);
+      if (patternResult != null) {
+        return MediaValidationResult(
+          isValid: true,
+          originalUri: brokenUri,
+          recoveredUri: patternResult,
+          recoveryMethod: MediaRecoveryMethod.filenamePattern,
+          recoveryMetadata: {
+            'strategy': 'filename_pattern',
+            'original_filename': fileName
+          },
+        );
+      }
+
+      // Strategy 3: Search by metadata birthprint (if enabled)
+      if (config.enableMetadataMatching) {
+        final metadataResult = await _recoverByMetadata(originalPath, config);
+        if (metadataResult != null) {
+          return MediaValidationResult(
+            isValid: true,
+            originalUri: brokenUri,
+            recoveredUri: metadataResult,
+            recoveryMethod: MediaRecoveryMethod.metadata,
+            recoveryMetadata: {'strategy': 'metadata_birthprint'},
+          );
+        }
+      }
+
+      // Strategy 4: Force PhotoManager cache refresh and retry (if enabled)
+      if (config.enableCacheRefresh) {
+        await _forceComprehensiveCacheRefresh();
+        final refreshResult =
+            await _recoverAfterCacheRefresh(brokenUri, config);
+        if (refreshResult != null) {
+          return MediaValidationResult(
+            isValid: true,
+            originalUri: brokenUri,
+            recoveredUri: refreshResult,
+            recoveryMethod: MediaRecoveryMethod.cacheRefresh,
+            recoveryMetadata: {'strategy': 'cache_refresh'},
+          );
+        }
+      }
+
+      return MediaValidationResult(
+        isValid: false,
+        originalUri: brokenUri,
+        recoveredUri: null,
+        recoveryMethod: MediaRecoveryMethod.failed,
+        errorMessage: 'All recovery strategies failed',
+      );
+    } catch (e) {
+      if (config.verboseLogging) {
+        print('❌ MediaCoordinator: Recovery attempt failed: $e');
+      }
+      return MediaValidationResult(
+        isValid: false,
+        originalUri: brokenUri,
+        recoveredUri: null,
+        recoveryMethod: MediaRecoveryMethod.failed,
+        errorMessage: 'Recovery error: $e',
+      );
+    }
+  }
+
+  /// Recovery Strategy 1: Search by exact filename
+  Future<String?> _recoverByExactFilename(
+      String fileName, MediaValidationConfig config) async {
+    try {
+      final searchResults = await getMediaForQuery(
+        fileName.replaceAll(
+            path.extension(fileName), ''), // Search without extension
+        mediaTypes: ['image', 'video'],
+      );
+
+      for (final result in searchResults) {
+        final resultPath = Uri.parse(result['file_uri'] as String).path;
+        if (path.basename(resultPath) == fileName) {
+          if (config.verboseLogging) {
+            print(
+                '✅ MediaCoordinator: Recovered by exact filename: ${result['file_uri']}');
+          }
+          return result['file_uri'] as String;
+        }
+      }
+      return null;
+    } catch (e) {
+      if (config.verboseLogging) {
+        print('❌ MediaCoordinator: Exact filename recovery failed: $e');
+      }
+      return null;
+    }
+  }
+
+  /// Recovery Strategy 2: Search by filename pattern (handles renamed files)
+  Future<String?> _recoverByFilenamePattern(
+    String originalFileName,
+    String extension,
+    MediaValidationConfig config,
+  ) async {
+    try {
+      // Extract base name without extension and common suffixes
+      final baseName = path
+          .basenameWithoutExtension(originalFileName)
+          .replaceAll(RegExp(r'_\d+$'), '') // Remove _1, _2, etc.
+          .replaceAll(RegExp(r'\(\d+\)$'), '') // Remove (1), (2), etc.
+          .replaceAll(RegExp(r'_copy$'), '') // Remove _copy
+          .replaceAll(RegExp(r'_Copy$'), '') // Remove _Copy
+          .replaceAll(RegExp(r' copy$'), '') // Remove " copy"
+          .replaceAll(RegExp(r' Copy$'), ''); // Remove " Copy"
+
+      if (baseName.length < 3) {
+        // Base name too short for meaningful pattern matching
+        return null;
+      }
+
+      final searchResults = await getMediaForQuery(
+        baseName,
+        mediaTypes: ['image', 'video'],
+      );
+
+      // Look for files with similar names and same extension
+      for (final result in searchResults) {
+        final resultPath = Uri.parse(result['file_uri'] as String).path;
+        final resultBaseName = path.basenameWithoutExtension(resultPath);
+
+        if (path.extension(resultPath).toLowerCase() ==
+                extension.toLowerCase() &&
+            (resultBaseName.contains(baseName) ||
+                baseName.contains(resultBaseName))) {
+          if (config.verboseLogging) {
+            print(
+                '✅ MediaCoordinator: Recovered by filename pattern: ${result['file_uri']}');
+          }
+          return result['file_uri'] as String;
+        }
+      }
+      return null;
+    } catch (e) {
+      if (config.verboseLogging) {
+        print('❌ MediaCoordinator: Filename pattern recovery failed: $e');
+      }
+      return null;
+    }
+  }
+
+  /// Recovery Strategy 3: Search by metadata birthprint (creation time + file size)
+  Future<String?> _recoverByMetadata(
+      String originalPath, MediaValidationConfig config) async {
+    try {
+      // Extract birthprint from original file or cache
+      final originalBirthprint = await _extractFileBirthprint(originalPath);
+      if (originalBirthprint == null) return null;
+
+      // Search for matching files using birthprint
+      final candidates =
+          await _findFilesByBirthprint(originalBirthprint, config);
+
+      if (candidates.isEmpty) return null;
+
+      // Find best match using similarity scoring
+      final bestMatch =
+          _selectBestBirthprintMatch(candidates, originalBirthprint, config);
+
+      if (bestMatch != null && config.verboseLogging) {
+        print(
+            '✅ MediaCoordinator: Recovered by metadata birthprint: $bestMatch');
+      }
+
+      return bestMatch;
+    } catch (e) {
+      if (config.verboseLogging) {
+        print('❌ MediaCoordinator: Metadata recovery failed: $e');
+      }
+      return null;
+    }
+  }
+
+  /// Extract file birthprint from path or cached metadata
+  Future<MediaBirthprint?> _extractFileBirthprint(String filePath) async {
+    try {
+      // Check cache first for performance
+      final cacheKey = filePath.hashCode.toString();
+      if (_birthprintCache.containsKey(cacheKey)) {
+        return _birthprintCache[cacheKey];
+      }
+
+      // Try to extract from file system if file exists
+      final file = File(filePath);
+      if (await file.exists()) {
+        final stat = await file.stat();
+        final filename = path.basename(filePath);
+
+        final birthprint = MediaBirthprint(
+          creationTime: stat.modified,
+          fileSize: stat.size,
+          originalFilename: filename,
+        );
+
+        // Cache for future use
+        _birthprintCache[cacheKey] = birthprint;
+        return birthprint;
+      }
+
+      // Try to extract from PhotoManager metadata if available
+      final pmBirthprint = await _extractBirthprintFromPhotoManager(filePath);
+      if (pmBirthprint != null) {
+        _birthprintCache[cacheKey] = pmBirthprint;
+      }
+
+      return pmBirthprint;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /// Extract birthprint from PhotoManager asset metadata
+  Future<MediaBirthprint?> _extractBirthprintFromPhotoManager(
+      String filePath) async {
+    try {
+      // Search PhotoManager assets for matching path
+      final searchResults =
+          await getMediaForQuery('', mediaTypes: ['image', 'video']);
+
+      for (final result in searchResults) {
+        if (result['file_uri'] == filePath) {
+          final createdAt = result['created_at'] as DateTime?;
+          final fileSize = result['file_size'] as int?;
+          final filename = path.basename(filePath);
+
+          if (createdAt != null && fileSize != null) {
+            return MediaBirthprint(
+              creationTime: createdAt,
+              fileSize: fileSize,
+              originalFilename: filename,
+            );
+          }
+        }
+      }
+
+      return null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /// Find files with matching birthprint across all accessible directories
+  Future<List<Map<String, dynamic>>> _findFilesByBirthprint(
+    MediaBirthprint targetBirthprint,
+    MediaValidationConfig config,
+  ) async {
+    final candidates = <Map<String, dynamic>>[];
+
+    try {
+      // Get all media files from PhotoManager
+      final allMedia =
+          await getMediaForQuery('', mediaTypes: ['image', 'video']);
+
+      for (final mediaItem in allMedia) {
+        final filePath = mediaItem['file_uri'] as String;
+        final candidateBirthprint =
+            await _extractFileBirthprint(Uri.parse(filePath).path);
+
+        if (candidateBirthprint != null) {
+          final similarity = targetBirthprint.similarityTo(candidateBirthprint);
+
+          if (similarity >= config.metadataMatchThreshold) {
+            candidates.add({
+              'file_uri': filePath,
+              'birthprint': candidateBirthprint,
+              'similarity': similarity,
+              'metadata': mediaItem,
+            });
+          }
+        }
+      }
+
+      // Sort by similarity score (highest first)
+      candidates.sort((a, b) =>
+          (b['similarity'] as double).compareTo(a['similarity'] as double));
+    } catch (e) {
+      // Return empty list on error
+    }
+
+    return candidates;
+  }
+
+  /// Select best match from birthprint candidates using advanced scoring
+  String? _selectBestBirthprintMatch(
+    List<Map<String, dynamic>> candidates,
+    MediaBirthprint targetBirthprint,
+    MediaValidationConfig config,
+  ) {
+    if (candidates.isEmpty) return null;
+
+    // Get the highest scoring candidate
+    final bestCandidate = candidates.first;
+    final similarity = bestCandidate['similarity'] as double;
+
+    // Only return if similarity meets threshold
+    if (similarity >= config.metadataMatchThreshold) {
+      return bestCandidate['file_uri'] as String;
+    }
+
+    return null;
+  }
+
+  /// Recovery Strategy 4: Force comprehensive cache refresh and retry
+  Future<String?> _recoverAfterCacheRefresh(
+      String brokenUri, MediaValidationConfig config) async {
+    try {
+      // After comprehensive refresh, check if the original URI is now valid
+      final isNowValid = await validateMediaURI(brokenUri);
+      if (isNowValid) {
+        if (config.verboseLogging) {
+          print(
+              '✅ MediaCoordinator: URI recovered after cache refresh: $brokenUri');
+        }
+        return brokenUri;
+      }
+      return null;
+    } catch (e) {
+      if (config.verboseLogging) {
+        print('❌ MediaCoordinator: Cache refresh recovery failed: $e');
+      }
+      return null;
+    }
+  }
+
+  /// Force comprehensive cache refresh across all layers with intelligent purging
+  Future<void> _forceComprehensiveCacheRefresh() async {
+    try {
+      if (kDebugMode) {
+        print('🔄 MediaCoordinator: Starting comprehensive cache refresh...');
+      }
+
+      // Step 1: Purge stale references first for efficiency
+      await purgeStaleReferences(forceFullPurge: true);
+
+      // Step 2: Clear all PhotoManager caches with proper sequencing
+      await PhotoManager.clearFileCache();
+      await PhotoManager.releaseCache();
+
+      // Step 3: Reset change notifications with optimized timing
+      try {
+        await PhotoManager.stopChangeNotify();
+        await Future.delayed(const Duration(milliseconds: 500));
+        await PhotoManager.startChangeNotify();
+        await Future.delayed(const Duration(milliseconds: 500));
+      } catch (e) {
+        if (kDebugMode) {
+          print('⚠️ MediaCoordinator: Change notification reset failed: $e');
+        }
+      }
+
+      // Step 4: Force PhotoManager to rebuild its internal state with smart retry
+      for (int attempt = 0; attempt < 2; attempt++) {
+        try {
+          await PhotoManager.getAssetPathList(
+            type: RequestType.all,
+            filterOption: FilterOptionGroup(
+              imageOption: const FilterOption(
+                sizeConstraint: SizeConstraint(ignoreSize: true),
+              ),
+              videoOption: const FilterOption(
+                sizeConstraint: SizeConstraint(ignoreSize: true),
+              ),
+            ),
+          );
+
+          // Success, break retry loop
+          break;
+        } catch (e) {
+          if (kDebugMode) {
+            print(
+                '⚠️ MediaCoordinator: PhotoManager rebuild attempt ${attempt + 1} failed: $e');
+          }
+          if (attempt == 0) {
+            await Future.delayed(const Duration(milliseconds: 1000));
+          }
+        }
+      }
+
+      // Step 5: Refresh internal service caches
+      await _metadataService.refreshCache();
+      await _mediaSearchService.initialize();
+
+      // Step 6: Clear validation and birthprint caches for fresh start
+      _validationCache.clear();
+      _birthprintCache.clear();
+      _staleUriReferences.clear();
+
+      if (kDebugMode) {
+        print('✅ MediaCoordinator: Comprehensive cache refresh completed');
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ MediaCoordinator: Comprehensive cache refresh failed: $e');
+      }
+    }
+  }
+
+  /// Creates a recovered MediaItem from validation result
+  MediaItem? createRecoveredMediaItem(
+      MediaItem original, MediaValidationResult validationResult) {
+    if (!validationResult.isValid || validationResult.recoveredUri == null) {
+      return null;
+    }
+
+    return MediaItem(
+      fileUri: validationResult.recoveredUri!,
+      mimeType: original.mimeType,
+      deviceMetadata: original.deviceMetadata,
+    );
+  }
+
+  /// Convenience method to validate and recover a single MediaItem
+  Future<MediaItem?> validateAndRecoverMediaItem(
+    MediaItem mediaItem, {
+    MediaValidationConfig config = const MediaValidationConfig(),
+  }) async {
+    final result =
+        await validateAndRecoverMediaURI(mediaItem.fileUri, config: config);
+    return createRecoveredMediaItem(mediaItem, result);
   }
 
   @override

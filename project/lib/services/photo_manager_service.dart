@@ -14,6 +14,8 @@ class PhotoManagerService extends ChangeNotifier {
       // Extract search parameters
       final List<String> terms =
           (searchParams['terms'] as List<dynamic>?)?.cast<String>() ?? [];
+      final String originalQuery =
+          searchParams['original_query'] as String? ?? '';
       final Map<String, dynamic>? dateRange =
           searchParams['date_range'] as Map<String, dynamic>?;
       final String? mediaType = searchParams['media_type'] as String?;
@@ -115,12 +117,16 @@ class PhotoManagerService extends ChangeNotifier {
       if (terms.isNotEmpty) {
         final filteredResults = results.where((asset) {
           final title = asset.title?.toLowerCase() ?? '';
-          return terms.any((term) => title.contains(term.toLowerCase()));
+          // Check both individual terms AND the complete original query for space-aware matching
+          final originalQueryLower = originalQuery.toLowerCase().trim();
+          return terms.any((term) => title.contains(term.toLowerCase())) ||
+              (originalQueryLower.isNotEmpty &&
+                  title.contains(originalQueryLower));
         }).toList();
 
         if (kDebugMode) {
           print(
-              '🔍 PhotoManagerService: Filtered to ${filteredResults.length} assets matching search terms: ${terms.join(", ")}');
+              '🔍 PhotoManagerService: Filtered to ${filteredResults.length} assets matching search terms: ${terms.join(", ")} or original query: "$originalQuery"');
         }
 
         return filteredResults;
@@ -144,94 +150,31 @@ class PhotoManagerService extends ChangeNotifier {
       List<AssetEntity> candidates) async {
     final List<Map<String, dynamic>> results = [];
 
-    for (final asset in candidates) {
-      try {
-        // Get the actual file from the asset using PhotoManager's API
-        final file = await asset.file;
-        if (file != null) {
-          // Validate that this is a supported media file before processing
-          final mimeType = _getMimeTypeFromFile(file);
-          if (!_isSupportedMediaType(mimeType)) {
-            if (kDebugMode) {
-              print(
-                  '⚠️ Skipping unsupported media type: ${file.path} ($mimeType)');
-            }
-            continue; // Skip unsupported files
-          }
+    if (candidates.isEmpty) return results;
 
-          // Additional validation: try to get file size to ensure file is accessible
-          int fileSizeBytes;
-          try {
-            fileSizeBytes = await file.length();
-            if (fileSizeBytes == 0) {
-              if (kDebugMode) {
-                print('⚠️ Skipping empty file: ${file.path}');
-              }
-              continue; // Skip empty files
-            }
-          } catch (e) {
-            if (kDebugMode) {
-              print('⚠️ Cannot access file: ${file.path} - $e');
-            }
-            continue; // Skip inaccessible files
-          }
+    // FIXED: Process assets in batches with timeout and error isolation
+    const int batchSize = 5;
+    const Duration timeout = Duration(seconds: 3);
 
-          results.add({
-            'id': asset.id,
-            'file_uri': file.uri.toString(),
-            'mime_type': mimeType, // Use actual MIME type from file extension
-            'device_metadata': {
-              'creation_time': asset.createDateTime.toIso8601String(),
-              'latitude': asset.latitude,
-              'longitude': asset.longitude,
-              'width': asset.width,
-              'height': asset.height,
-              'file_size_bytes': fileSizeBytes,
-              'duration': asset.duration.toDouble(),
-              'orientation': asset.orientation,
-            }
-          });
-        } else {
-          // For fallback case, we need to be more careful about MIME type detection
-          final fallbackPath =
-              '${asset.relativePath ?? ''}/${asset.title ?? asset.id}';
-          final mimeType = _getMimeTypeFromPath(fallbackPath);
+    for (int i = 0; i < candidates.length; i += batchSize) {
+      final batch = candidates.skip(i).take(batchSize).toList();
 
-          if (!_isSupportedMediaType(mimeType)) {
-            if (kDebugMode) {
-              print(
-                  '⚠️ Skipping unsupported fallback media type: $fallbackPath ($mimeType)');
-            }
-            continue; // Skip unsupported files
-          }
+      // Process batch in parallel with timeout protection
+      final batchResults = await Future.wait(
+        batch.map((asset) => _processAssetSafely(asset, timeout)),
+        eagerError: false, // Continue even if some assets fail
+      );
 
-          if (kDebugMode) {
-            print(
-                '⚠️ Could not get file for asset ${asset.id}, using fallback path');
-          }
-
-          results.add({
-            'id': asset.id,
-            'file_uri': 'file://$fallbackPath',
-            'mime_type': mimeType, // Use detected MIME type
-            'device_metadata': {
-              'creation_time': asset.createDateTime.toIso8601String(),
-              'latitude': asset.latitude,
-              'longitude': asset.longitude,
-              'width': asset.width,
-              'height': asset.height,
-              'file_size_bytes': 0, // Unknown file size for fallback
-              'duration': asset.duration.toDouble(),
-              'orientation': asset.orientation,
-            }
-          });
+      // Add successful results
+      for (final result in batchResults) {
+        if (result != null) {
+          results.add(result);
         }
-      } catch (e) {
-        if (kDebugMode) {
-          print('❌ Error processing asset ${asset.id}: $e');
-        }
-        // Skip this asset if we can't process it
-        continue;
+      }
+
+      if (kDebugMode) {
+        print(
+            '🔄 PhotoManagerService: Processed batch ${(i ~/ batchSize) + 1}/${(candidates.length / batchSize).ceil()}, got ${batchResults.where((r) => r != null).length} valid assets');
       }
     }
 
@@ -241,6 +184,98 @@ class PhotoManagerService extends ChangeNotifier {
     }
 
     return results;
+  }
+
+  /// Process a single asset with error protection
+  Future<Map<String, dynamic>?> _processAssetSafely(
+      AssetEntity asset, Duration timeout) async {
+    try {
+      // Get the actual file from the asset using PhotoManager's API
+      final file = await asset.file;
+      if (file != null) {
+        // Validate that this is a supported media file before processing
+        final mimeType = _getMimeTypeFromFile(file);
+        if (!_isSupportedMediaType(mimeType)) {
+          if (kDebugMode) {
+            print(
+                '⚠️ Skipping unsupported media type: ${file.path} ($mimeType)');
+          }
+          return null;
+        }
+
+        // Additional validation: try to get file size to ensure file is accessible
+        int fileSizeBytes;
+        try {
+          fileSizeBytes = await file.length();
+          if (fileSizeBytes == 0) {
+            if (kDebugMode) {
+              print('⚠️ Skipping empty file: ${file.path}');
+            }
+            return null;
+          }
+        } catch (e) {
+          if (kDebugMode) {
+            print('⚠️ Cannot access file: ${file.path} - $e');
+          }
+          return null;
+        }
+
+        return {
+          'id': asset.id,
+          'file_uri': file.uri.toString(),
+          'mime_type': mimeType,
+          'device_metadata': {
+            'creation_time': asset.createDateTime.toIso8601String(),
+            'latitude': asset.latitude,
+            'longitude': asset.longitude,
+            'width': asset.width,
+            'height': asset.height,
+            'file_size_bytes': fileSizeBytes,
+            'duration': asset.duration.toDouble(),
+            'orientation': asset.orientation,
+          }
+        };
+      } else {
+        // For fallback case, we need to be more careful about MIME type detection
+        final fallbackPath =
+            '${asset.relativePath ?? ''}/${asset.title ?? asset.id}';
+        final mimeType = _getMimeTypeFromPath(fallbackPath);
+
+        if (!_isSupportedMediaType(mimeType)) {
+          if (kDebugMode) {
+            print(
+                '⚠️ Skipping unsupported fallback media type: $fallbackPath ($mimeType)');
+          }
+          return null;
+        }
+
+        if (kDebugMode) {
+          print(
+              '⚠️ Could not get file for asset ${asset.id}, using fallback path');
+        }
+
+        return {
+          'id': asset.id,
+          'file_uri': 'file://$fallbackPath',
+          'mime_type': mimeType,
+          'device_metadata': {
+            'creation_time': asset.createDateTime.toIso8601String(),
+            'latitude': asset.latitude,
+            'longitude': asset.longitude,
+            'width': asset.width,
+            'height': asset.height,
+            'file_size_bytes': 0,
+            'duration': asset.duration.toDouble(),
+            'orientation': asset.orientation,
+          }
+        };
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ Error processing asset ${asset.id}: $e');
+      }
+      return null; // Skip problematic assets
+    }
   }
 
   /// Determines MIME type from actual file extension

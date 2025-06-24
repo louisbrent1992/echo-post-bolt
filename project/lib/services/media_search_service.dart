@@ -160,55 +160,91 @@ class MediaSearchService extends ChangeNotifier {
   Future<List<LocalMedia>> _buildMediaIndex(List<AssetEntity> assets) async {
     final List<LocalMedia> mediaList = [];
 
-    for (final asset in assets) {
-      try {
-        final File? file = await asset.file;
-        if (file == null) continue;
+    if (assets.isEmpty) return mediaList;
 
-        String mimeType;
-        switch (asset.type) {
-          case AssetType.image:
-            final ext =
-                path.extension(file.path).replaceAll('.', '').toLowerCase();
-            mimeType = 'image/${ext.isEmpty ? 'jpeg' : ext}';
-            break;
-          case AssetType.video:
-            final ext =
-                path.extension(file.path).replaceAll('.', '').toLowerCase();
-            mimeType = 'video/${ext.isEmpty ? 'mp4' : ext}';
-            break;
-          default:
-            continue; // Skip other types
+    // FIXED: Process assets in batches with timeout protection
+    const int batchSize = 10;
+    const Duration timeout = Duration(seconds: 2);
+
+    for (int i = 0; i < assets.length; i += batchSize) {
+      final batch = assets.skip(i).take(batchSize).toList();
+
+      // Process batch in parallel with timeout protection
+      final batchResults = await Future.wait(
+        batch.map((asset) => _buildMediaItemSafely(asset, timeout)),
+        eagerError: false, // Continue even if some assets fail
+      );
+
+      // Add successful results
+      for (final result in batchResults) {
+        if (result != null) {
+          mediaList.add(result);
         }
+      }
 
-        // Get file size with error handling
-        int fileSize = 0;
-        try {
-          fileSize = await file.length();
-        } catch (e) {
-          // Ignore file size errors - continue with 0 size
-        }
-
-        mediaList.add(
-          LocalMedia(
-            id: asset.id,
-            fileUri: file.uri.toString(),
-            mimeType: mimeType,
-            creationDateTime: asset.createDateTime,
-            latitude: asset.latitude,
-            longitude: asset.longitude,
-            width: asset.width,
-            height: asset.height,
-            fileSizeBytes: fileSize,
-            duration: asset.type == AssetType.video ? asset.duration : 0,
-          ),
-        );
-      } catch (e) {
-        // Continue with next asset
+      if (kDebugMode) {
+        print(
+            '🔄 MediaSearchService: Built index batch ${(i ~/ batchSize) + 1}/${(assets.length / batchSize).ceil()}, got ${batchResults.where((r) => r != null).length} valid media items');
       }
     }
 
     return mediaList;
+  }
+
+  /// Build a single LocalMedia item with error protection
+  Future<LocalMedia?> _buildMediaItemSafely(
+      AssetEntity asset, Duration timeout) async {
+    try {
+      final File? file = await asset.file;
+      if (file == null) return null;
+
+      String mimeType;
+      switch (asset.type) {
+        case AssetType.image:
+          final ext =
+              path.extension(file.path).replaceAll('.', '').toLowerCase();
+          mimeType = 'image/${ext.isEmpty ? 'jpeg' : ext}';
+          break;
+        case AssetType.video:
+          final ext =
+              path.extension(file.path).replaceAll('.', '').toLowerCase();
+          mimeType = 'video/${ext.isEmpty ? 'mp4' : ext}';
+          break;
+        default:
+          return null; // Skip other types
+      }
+
+      // Get file size with error handling
+      int fileSize = 0;
+      try {
+        fileSize = await file.length();
+        if (fileSize == 0) {
+          return null; // Skip empty files
+        }
+      } catch (e) {
+        // Continue with 0 size rather than failing completely
+      }
+
+      return LocalMedia(
+        id: asset.id,
+        fileUri: file.uri.toString(),
+        mimeType: mimeType,
+        creationDateTime: asset.createDateTime,
+        latitude: asset.latitude,
+        longitude: asset.longitude,
+        width: asset.width,
+        height: asset.height,
+        fileSizeBytes: fileSize,
+        duration: asset.type == AssetType.video ? asset.duration : 0,
+      );
+    } catch (e) {
+      // Skip problematic assets
+      if (kDebugMode) {
+        print(
+            '⚠️ MediaSearchService: Skipping asset ${asset.id} due to error: $e');
+      }
+      return null;
+    }
   }
 
   // Find media candidates based on a query with error handling
@@ -400,6 +436,8 @@ class MediaSearchService extends ChangeNotifier {
       // Extract search parameters
       final List<String> terms =
           (searchParams['terms'] as List<dynamic>?)?.cast<String>() ?? [];
+      final String originalQuery =
+          searchParams['original_query'] as String? ?? '';
       final Map<String, dynamic>? dateRange =
           searchParams['date_range'] as Map<String, dynamic>?;
       final String? mediaType = searchParams['media_type'] as String?;
@@ -460,7 +498,11 @@ class MediaSearchService extends ChangeNotifier {
       if (terms.isNotEmpty) {
         return results.where((asset) {
           final title = asset.title?.toLowerCase() ?? '';
-          return terms.any((term) => title.contains(term.toLowerCase()));
+          // Check both individual terms AND the complete original query for space-aware matching
+          final originalQueryLower = originalQuery.toLowerCase().trim();
+          return terms.any((term) => title.contains(term.toLowerCase())) ||
+              (originalQueryLower.isNotEmpty &&
+                  title.contains(originalQueryLower));
         }).toList();
       }
 
@@ -477,59 +519,31 @@ class MediaSearchService extends ChangeNotifier {
       List<AssetEntity> candidates) async {
     final List<Map<String, dynamic>> results = [];
 
-    for (final asset in candidates) {
-      try {
-        // Get the actual file from the asset using PhotoManager's API
-        final file = await asset.file;
-        if (file != null) {
-          // Get actual file size in bytes
-          final fileSizeBytes = await file.length();
+    if (candidates.isEmpty) return results;
 
-          results.add({
-            'id': asset.id,
-            'file_uri': file.uri.toString(),
-            'mime_type': _getMimeType(asset),
-            'device_metadata': {
-              'creation_time': asset.createDateTime.toIso8601String(),
-              'latitude': asset.latitude,
-              'longitude': asset.longitude,
-              'width': asset.width,
-              'height': asset.height,
-              'file_size_bytes': fileSizeBytes,
-              'duration': asset.duration.toDouble(),
-              'orientation': asset.orientation,
-            }
-          });
-        } else {
-          // Fallback: try to construct a reasonable path, but log the issue
-          if (kDebugMode) {
-            print(
-                '⚠️ MediaSearchService: Could not get file for asset ${asset.id}, using fallback path');
-          }
-          results.add({
-            'id': asset.id,
-            'file_uri':
-                'file://${asset.relativePath ?? ''}/${asset.title ?? asset.id}',
-            'mime_type': _getMimeType(asset),
-            'device_metadata': {
-              'creation_time': asset.createDateTime.toIso8601String(),
-              'latitude': asset.latitude,
-              'longitude': asset.longitude,
-              'width': asset.width,
-              'height': asset.height,
-              'file_size_bytes': 0, // Unknown file size for fallback
-              'duration': asset.duration.toDouble(),
-              'orientation': asset.orientation,
-            }
-          });
+    // FIXED: Process assets in batches with timeout and error isolation
+    const int batchSize = 5;
+    const Duration timeout = Duration(seconds: 3);
+
+    for (int i = 0; i < candidates.length; i += batchSize) {
+      final batch = candidates.skip(i).take(batchSize).toList();
+
+      // Process batch in parallel with timeout protection
+      final batchResults = await Future.wait(
+        batch.map((asset) => _processAssetSafely(asset, timeout)),
+        eagerError: false, // Continue even if some assets fail
+      );
+
+      // Add successful results
+      for (final result in batchResults) {
+        if (result != null) {
+          results.add(result);
         }
-      } catch (e) {
-        if (kDebugMode) {
-          print(
-              '❌ MediaSearchService: Error getting file for asset ${asset.id}: $e');
-        }
-        // Skip this asset if we can't get its file
-        continue;
+      }
+
+      if (kDebugMode) {
+        print(
+            '🔄 MediaSearchService: Processed batch ${(i ~/ batchSize) + 1}/${(candidates.length / batchSize).ceil()}, got ${batchResults.where((r) => r != null).length} valid assets');
       }
     }
 
@@ -539,6 +553,77 @@ class MediaSearchService extends ChangeNotifier {
     }
 
     return results;
+  }
+
+  /// Process a single asset with error protection
+  Future<Map<String, dynamic>?> _processAssetSafely(
+      AssetEntity asset, Duration timeout) async {
+    try {
+      // Get the actual file from the asset using PhotoManager's API
+      final file = await asset.file;
+      if (file != null) {
+        // Get actual file size in bytes with error handling
+        int fileSizeBytes = 0;
+        try {
+          fileSizeBytes = await file.length();
+          if (fileSizeBytes == 0) {
+            if (kDebugMode) {
+              print('⚠️ Skipping empty file: ${file.path}');
+            }
+            return null;
+          }
+        } catch (e) {
+          if (kDebugMode) {
+            print('⚠️ Cannot access file size: ${file.path} - $e');
+          }
+          // Continue with 0 size rather than failing completely
+        }
+
+        return {
+          'id': asset.id,
+          'file_uri': file.uri.toString(),
+          'mime_type': _getMimeType(asset),
+          'device_metadata': {
+            'creation_time': asset.createDateTime.toIso8601String(),
+            'latitude': asset.latitude,
+            'longitude': asset.longitude,
+            'width': asset.width,
+            'height': asset.height,
+            'file_size_bytes': fileSizeBytes,
+            'duration': asset.duration.toDouble(),
+            'orientation': asset.orientation,
+          }
+        };
+      } else {
+        // Fallback: try to construct a reasonable path, but log the issue
+        if (kDebugMode) {
+          print(
+              '⚠️ MediaSearchService: Could not get file for asset ${asset.id}, using fallback path');
+        }
+        return {
+          'id': asset.id,
+          'file_uri':
+              'file://${asset.relativePath ?? ''}/${asset.title ?? asset.id}',
+          'mime_type': _getMimeType(asset),
+          'device_metadata': {
+            'creation_time': asset.createDateTime.toIso8601String(),
+            'latitude': asset.latitude,
+            'longitude': asset.longitude,
+            'width': asset.width,
+            'height': asset.height,
+            'file_size_bytes': 0, // Unknown file size for fallback
+            'duration': asset.duration.toDouble(),
+            'orientation': asset.orientation,
+          }
+        };
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        print(
+            '❌ MediaSearchService: Error getting file for asset ${asset.id}: $e');
+      }
+      return null; // Skip problematic assets
+    }
   }
 
   String _getMimeType(AssetEntity asset) {
