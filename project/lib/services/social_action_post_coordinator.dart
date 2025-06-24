@@ -77,6 +77,8 @@ class SocialActionPostCoordinator extends ChangeNotifier {
   StatusMessage? _temporaryStatus;
   Timer? _statusTimer;
   StatusPriority _currentStatusPriority = StatusPriority.low;
+  Timer? _processingWatchdog;
+  static const Duration _defaultProcessingTimeout = Duration(seconds: 45);
 
   SocialActionPostCoordinator({
     required MediaCoordinator mediaCoordinator,
@@ -304,6 +306,7 @@ class SocialActionPostCoordinator extends ChangeNotifier {
     // NOTE: _isProcessing is managed by parent scope
     _isVoiceDictating = false;
     _recordingDuration = 0;
+    _isTransitioning = false; // Ensure transitions are reset
 
     // Reset voice monitoring
     _currentAmplitude = -160.0;
@@ -321,6 +324,16 @@ class SocialActionPostCoordinator extends ChangeNotifier {
     }
 
     _safeNotifyListeners();
+  }
+
+  /// Clear recording mode context in MediaCoordinator
+  /// This is a public method to allow CommandScreen to clear the context on errors
+  void clearRecordingModeContext() {
+    _mediaCoordinator.setRecordingModeContext(false);
+
+    if (kDebugMode) {
+      print('🔄 Recording mode context cleared in MediaCoordinator');
+    }
   }
 
   /// Get normalized amplitude for UI
@@ -360,6 +373,77 @@ class SocialActionPostCoordinator extends ChangeNotifier {
     }
   }
 
+  /// NEW: Start processing state with optional watchdog timer
+  void startProcessing({Duration? timeout}) {
+    // Guard against double-calls
+    if (_isProcessing) {
+      if (kDebugMode) {
+        print(
+            '⚠️ startProcessing() called while already processing - ignoring');
+      }
+      return;
+    }
+
+    _isProcessing = true;
+    _hasError = false;
+    _errorMessage = null;
+
+    // Start watchdog timer
+    _processingWatchdog?.cancel();
+    _processingWatchdog = Timer(timeout ?? _defaultProcessingTimeout, () {
+      if (_isProcessing) {
+        if (kDebugMode) {
+          print(
+              '⏰ Processing watchdog timeout - forcing completion with failure');
+        }
+        completeProcessing(success: false, error: 'Processing timed out');
+      }
+    });
+
+    _safeNotifyListeners();
+
+    if (kDebugMode) {
+      print(
+          '🔄 Processing started with ${timeout?.inSeconds ?? _defaultProcessingTimeout.inSeconds}s timeout');
+    }
+  }
+
+  /// NEW: Complete processing state with explicit success/failure
+  void completeProcessing({required bool success, String? error}) {
+    _processingWatchdog?.cancel();
+    _processingWatchdog = null;
+    _isProcessing = false;
+
+    if (!success && error != null) {
+      setError(error);
+    }
+
+    _safeNotifyListeners();
+
+    if (kDebugMode) {
+      print('✅ Processing completed: ${success ? 'SUCCESS' : 'FAILURE'}');
+      if (error != null) print('   Error: $error');
+    }
+  }
+
+  /// NEW: Allow manual processing reset (for user-initiated retry)
+  void resetProcessing() {
+    _processingWatchdog?.cancel();
+    _processingWatchdog = null;
+    _isProcessing = false;
+    _hasError = false;
+    _errorMessage = null;
+    _safeNotifyListeners();
+
+    if (kDebugMode) {
+      print('🔄 Processing manually reset');
+    }
+  }
+
+  /// DEPRECATED: Use startProcessing() and completeProcessing() instead
+  /// This method will be removed in a future version
+  @Deprecated(
+      'Use startProcessing() and completeProcessing() for better state control')
   Future<void> executeWithProcessingState<T>(
       Future<T> Function() operation) async {
     setProcessingState(true);
@@ -370,6 +454,10 @@ class SocialActionPostCoordinator extends ChangeNotifier {
     }
   }
 
+  /// DEPRECATED: Use startProcessing() and completeProcessing() instead
+  /// This method will be removed in a future version
+  @Deprecated(
+      'Use startProcessing() and completeProcessing() for better state control with timeout')
   Future<void> executeWithProcessingStateAndTimeout<T>(
       Future<T> Function() operation,
       {Duration timeout = const Duration(seconds: 30)}) async {
@@ -569,6 +657,7 @@ class SocialActionPostCoordinator extends ChangeNotifier {
 
     // CRITICAL: Cancel any pending timers
     _statusTimer?.cancel();
+    _processingWatchdog?.cancel();
     _temporaryStatus = null;
     _stateTransitionDebouncer?.cancel();
 
@@ -1553,12 +1642,13 @@ class SocialActionPostCoordinator extends ChangeNotifier {
     _isDisposed = true;
     _stateTransitionDebouncer?.cancel();
     _endTextEditingSession();
+    _statusTimer?.cancel();
+    _processingWatchdog?.cancel();
 
     if (kDebugMode) {
       print('🗑️ SocialActionPostCoordinator: Disposal complete');
     }
 
-    _statusTimer?.cancel();
     super.dispose();
   }
 
@@ -1745,12 +1835,23 @@ class SocialActionPostCoordinator extends ChangeNotifier {
       }
       return;
     } else if (_hasContent) {
-      // CRITICAL: Use processing state management for post execution
-      await executeWithProcessingState(() async {
-        await finalizeAndExecutePost();
-      });
+      // NEW: Start processing for post execution
+      startProcessing(timeout: Duration(seconds: 30));
+
+      // Execute in background without blocking
+      _executePostInBackground();
     } else {
       await startRecordingWithMode(isVoiceDictation: false);
+    }
+  }
+
+  /// NEW: Background post execution without Future wrapper
+  void _executePostInBackground() async {
+    try {
+      await finalizeAndExecutePost();
+      completeProcessing(success: true);
+    } catch (e) {
+      completeProcessing(success: false, error: e.toString());
     }
   }
 

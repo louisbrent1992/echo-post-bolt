@@ -18,7 +18,6 @@ import '../services/app_settings_service.dart';
 import '../widgets/social_icon.dart';
 import '../widgets/post_content_box.dart';
 import '../widgets/transcription_status.dart';
-import '../widgets/unified_action_button.dart';
 import '../widgets/unified_media_buttons.dart';
 import '../widgets/enhanced_media_preview.dart';
 import '../screens/media_selection_screen.dart';
@@ -439,30 +438,37 @@ class _CommandScreenState extends State<CommandScreen>
           print('⚠️ No speech detected during recording, resetting state');
         }
         _resetAudioRecordingVariables();
+        _postCoordinator!.clearRecordingModeContext();
         _postCoordinator!.setError('No speech detected. Please try again.');
         return;
       }
 
-      // Transcribe and process through coordinator with proper state management
-      final transcription = await _transcribeWithWhisper(pathToProcess);
-      if (transcription.isEmpty) {
-        throw Exception('Whisper returned empty transcription');
-      }
-
-      // CRITICAL: Use coordinator's processing state management with timeout
-      await _postCoordinator!.executeWithProcessingStateAndTimeout(
-        () => _postCoordinator!.processVoiceTranscription(transcription),
+      // NEW: Start processing immediately with timeout
+      _postCoordinator!.startProcessing(
         timeout:
             Duration(seconds: _appSettingsService.voiceTranscriptionTimeout),
       );
+
+      // Process in background without Future wrapper
+      _processTranscriptionInBackground(pathToProcess);
     } catch (e) {
       if (kDebugMode) {
         print('❌ Failed to stop recording: $e');
       }
 
+      // CRITICAL: Comprehensive cleanup on recording stop failure
+      _resetAudioRecordingVariables();
+
       // Reset recording state through coordinator
       _postCoordinator!.resetRecordingState();
+
+      // Clear recording mode context
+      _postCoordinator!.clearRecordingModeContext();
+
       _postCoordinator!.setError(e.toString());
+
+      // Ensure processing state is reset in case it was started earlier
+      _postCoordinator!.completeProcessing(success: false, error: e.toString());
 
       if (mounted) {
         _postCoordinator?.requestStatusUpdate(
@@ -470,6 +476,44 @@ class _CommandScreenState extends State<CommandScreen>
           StatusMessageType.error,
           duration: const Duration(seconds: 5),
         );
+      }
+    }
+  }
+
+  /// NEW: Background transcription processing without blocking UI
+  void _processTranscriptionInBackground(String audioPath) async {
+    try {
+      final transcription = await _transcribeWithWhisper(audioPath);
+      if (transcription.isEmpty) {
+        throw Exception('Whisper returned empty transcription');
+      }
+
+      await _postCoordinator!.processVoiceTranscription(transcription);
+
+      // Signal success
+      _postCoordinator!.completeProcessing(success: true);
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ Background transcription processing failed: $e');
+      }
+
+      // CRITICAL: Reset recording state on ANY failure (including Whisper quota errors)
+      // This ensures the UI can recover and allow new recordings
+      _resetAudioRecordingVariables();
+
+      // CRITICAL: Also reset coordinator recording state
+      _postCoordinator!.resetRecordingState();
+
+      // CRITICAL: Clear recording mode context in MediaCoordinator
+      _postCoordinator!.clearRecordingModeContext();
+
+      // Signal failure with proper error message
+      _postCoordinator!.completeProcessing(
+          success: false, error: 'Failed to process recording: $e');
+
+      if (kDebugMode) {
+        print('✅ Recording state reset after transcription failure');
+        print('   Ready for new recording attempts');
       }
     }
   }
@@ -798,6 +842,9 @@ class _CommandScreenState extends State<CommandScreen>
       if (updatedAction != null) {
         // Update coordinator with new media - use replaceMedia to allow overriding pre-selected images
         await _postCoordinator?.replaceMedia(updatedAction.content.media);
+
+        // Ensure coordinator is in idle state after returning from media selection
+        _postCoordinator?.resetProcessing();
 
         // Clear the needsMediaSelection flag since media has been selected
         _postCoordinator?.clearNeedsMediaSelection();
@@ -1424,10 +1471,8 @@ class _CommandScreenState extends State<CommandScreen>
                     child: TripleActionButtonSystem(
                       leftButtonController: _leftButtonController,
                       rightButtonController: _rightButtonController,
-                      onRecordStart:
-                          coordinator.isProcessing ? null : _startRecording,
-                      onRecordStop:
-                          coordinator.isProcessing ? null : _stopRecording,
+                      onRecordStart: _startRecording,
+                      onRecordStop: _stopRecording,
                       onConfirmPost: _confirmAndPost,
                       onAddMedia: _navigateToMediaSelection,
                       onSavePost: _savePost,
@@ -1681,6 +1726,23 @@ class _CommandScreenState extends State<CommandScreen>
       if (kDebugMode) {
         print('✅ Complete reset sequence finished - ready for new recordings');
       }
+    }
+  }
+
+  /// NEW: User-initiated retry capability
+  void _handleRetryProcessing() {
+    _postCoordinator?.resetProcessing();
+
+    if (kDebugMode) {
+      print('🔄 User initiated processing retry');
+    }
+
+    if (mounted) {
+      _postCoordinator?.requestStatusUpdate(
+        'Ready to record again! 🎤',
+        StatusMessageType.success,
+        duration: const Duration(seconds: 2),
+      );
     }
   }
 
