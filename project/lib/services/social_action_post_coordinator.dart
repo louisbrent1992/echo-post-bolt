@@ -78,6 +78,8 @@ class SocialActionPostCoordinator extends ChangeNotifier {
   Timer? _statusTimer;
   StatusPriority _currentStatusPriority = StatusPriority.low;
   Timer? _processingWatchdog;
+  // Automatically clears error state after a short delay
+  Timer? _error_clear_timer;
   static const Duration _defaultProcessingTimeout = Duration(seconds: 45);
 
   SocialActionPostCoordinator({
@@ -321,6 +323,7 @@ class SocialActionPostCoordinator extends ChangeNotifier {
       _errorMessage = null;
       _temporaryStatus = null;
       _statusTimer?.cancel();
+      _error_clear_timer?.cancel();
     }
 
     _safeNotifyListeners();
@@ -660,6 +663,7 @@ class SocialActionPostCoordinator extends ChangeNotifier {
     _processingWatchdog?.cancel();
     _temporaryStatus = null;
     _stateTransitionDebouncer?.cancel();
+    _error_clear_timer?.cancel();
 
     _safeNotifyListeners();
 
@@ -1644,6 +1648,7 @@ class SocialActionPostCoordinator extends ChangeNotifier {
     _endTextEditingSession();
     _statusTimer?.cancel();
     _processingWatchdog?.cancel();
+    _error_clear_timer?.cancel();
 
     if (kDebugMode) {
       print('🗑️ SocialActionPostCoordinator: Disposal complete');
@@ -1693,12 +1698,28 @@ class SocialActionPostCoordinator extends ChangeNotifier {
     }
   }
 
-  /// Set error state
-  void setError(String message) {
+  /// Set an error message that auto-dismisses after [duration].
+  /// Defaults to 3 seconds.
+  void setError(String message,
+      {Duration duration = const Duration(seconds: 3)}) {
     _hasError = true;
     _errorMessage = message;
-    requestStatusUpdate(message, StatusMessageType.error,
-        priority: StatusPriority.high);
+
+    // Push the message to the status system with the same duration
+    requestStatusUpdate(
+      message,
+      StatusMessageType.error,
+      duration: duration,
+      priority: StatusPriority.high,
+    );
+
+    // Restart the auto-clear timer
+    _error_clear_timer?.cancel();
+    _error_clear_timer = Timer(duration, () {
+      _hasError = false;
+      _errorMessage = null;
+      _safeNotifyListeners();
+    });
   }
 
   /// Stop recording state
