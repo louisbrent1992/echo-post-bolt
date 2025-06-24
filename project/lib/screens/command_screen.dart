@@ -1323,22 +1323,19 @@ class _CommandScreenState extends State<CommandScreen>
       children: [
         Container(
           height: 60,
-          padding: const EdgeInsets.symmetric(horizontal: 20),
-          child: CommandHeader(
+          child: SevenIconHeader(
             selectedPlatforms: coordinator.currentPost.platforms,
             onPlatformToggle: _togglePlatform,
-            leftAction: coordinator.hasContent || coordinator.hasMedia
-                ? IconButton(
-                    onPressed: isProcessing ? null : _showResetConfirmation,
-                    icon: const Icon(Icons.refresh,
-                        color: Colors.white, size: 24),
-                    tooltip: 'Reset current post',
-                  )
-                : null,
+            leftAction: IconButton(
+              onPressed: isProcessing ? null : _showResetConfirmation,
+              icon: const Icon(Icons.refresh, color: Colors.white, size: 24),
+              tooltip: 'Reset current post',
+            ),
             rightAction: IconButton(
               onPressed: isProcessing ? null : _navigateToHistory,
               icon: const Icon(Icons.history, color: Colors.white, size: 28),
             ),
+            enableInteraction: !isProcessing,
           ),
         ),
         Expanded(
