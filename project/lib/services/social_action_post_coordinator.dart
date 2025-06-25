@@ -60,6 +60,11 @@ class SocialActionPostCoordinator extends ChangeNotifier {
   bool _isTextEditing = false;
   String? _editingOriginalText;
 
+  // CRITICAL: Persistent hashtag editing state
+  TextEditingController? _hashtagEditingController;
+  bool _isHashtagEditing = false;
+  List<String>? _editingOriginalHashtags;
+
   // Debouncing for state transitions only (removed auto-save debouncing)
   Timer? _stateTransitionDebouncer;
 
@@ -1649,6 +1654,141 @@ class SocialActionPostCoordinator extends ChangeNotifier {
     _safeNotifyListeners();
   }
 
+  // CRITICAL: Persistent hashtag editing management
+  // These methods provide coordinator-managed hashtag editing that integrates with AIService
+
+  /// Start hashtag editing session with persistent controller
+  TextEditingController startHashtagEditing() {
+    if (_isDisposed) {
+      throw StateError(
+          'Cannot start hashtag editing - coordinator is disposed');
+    }
+
+    // Dispose existing controller if any
+    _hashtagEditingController?.dispose();
+
+    // Create new controller with current hashtags (space-separated, no # symbols)
+    final currentHashtags = _currentPost.content.hashtags;
+    final hashtagText = currentHashtags.join(' ');
+    _hashtagEditingController = TextEditingController(text: hashtagText);
+    _editingOriginalHashtags = List.from(currentHashtags);
+    _isHashtagEditing = true;
+
+    if (kDebugMode) {
+      print('🏷️ Hashtag editing session started');
+      print('   Original hashtags: $currentHashtags');
+      print('   Controller text: "$hashtagText"');
+    }
+
+    _safeNotifyListeners();
+    return _hashtagEditingController!;
+  }
+
+  /// Commit hashtag editing changes with AI integration
+  Future<void> commitHashtagEdits() async {
+    if (!_isHashtagEditing || _hashtagEditingController == null) {
+      if (kDebugMode) {
+        print('⚠️ No active hashtag editing session to commit');
+      }
+      return;
+    }
+
+    final newHashtagText = _hashtagEditingController!.text.trim();
+
+    // Parse hashtags from text input (space or comma separated)
+    final newHashtags = _parseHashtagInput(newHashtagText);
+    final originalHashtags = _editingOriginalHashtags ?? [];
+
+    // Only process if hashtags actually changed
+    if (!_hashtagListsEqual(newHashtags, originalHashtags)) {
+      if (kDebugMode) {
+        print('🏷️ Hashtag editing - changes detected');
+        print('   Original: $originalHashtags');
+        print('   New: $newHashtags');
+        print('   Applying direct hashtag update...');
+      }
+
+      // FIXED: Use direct hashtag update instead of AI processing to ensure immediate UI update
+      // This preserves the existing text content while only updating hashtags
+      _currentPost = _currentPost.copyWith(
+        content: _currentPost.content.copyWith(hashtags: newHashtags),
+      );
+
+      // Update state flags
+      _hasContent =
+          _currentPost.content.text.isNotEmpty || newHashtags.isNotEmpty;
+      _hasError = false;
+      _errorMessage = null;
+
+      // CRITICAL: Notify listeners immediately so UI updates
+      _safeNotifyListeners();
+
+      if (kDebugMode) {
+        print('✅ Hashtag editing committed via direct update');
+        print('   Final hashtags: ${_currentPost.content.hashtags}');
+        print('   Text preserved: "${_currentPost.content.text}"');
+      }
+    } else {
+      if (kDebugMode) {
+        print('🏷️ Hashtag editing cancelled - no changes made');
+      }
+    }
+
+    _endHashtagEditingSession();
+  }
+
+  /// Cancel hashtag editing without saving changes
+  void cancelHashtagEditing() {
+    if (kDebugMode) {
+      print('❌ Hashtag editing cancelled');
+    }
+    _endHashtagEditingSession();
+  }
+
+  /// Internal method to clean up hashtag editing session
+  void _endHashtagEditingSession() {
+    _hashtagEditingController?.dispose();
+    _hashtagEditingController = null;
+    _editingOriginalHashtags = null;
+    _isHashtagEditing = false;
+    _safeNotifyListeners();
+  }
+
+  /// Parse hashtag input text into normalized list
+  List<String> _parseHashtagInput(String input) {
+    if (input.isEmpty) return [];
+
+    // Split by spaces and commas, clean up each hashtag
+    final parts = input.split(RegExp(r'[,\s]+'));
+    final hashtags = <String>[];
+
+    for (final part in parts) {
+      final cleaned = part.trim();
+      if (cleaned.isNotEmpty) {
+        // Remove # symbol if present, normalize to lowercase
+        final hashtag = cleaned.startsWith('#')
+            ? cleaned.substring(1).toLowerCase()
+            : cleaned.toLowerCase();
+
+        // Only add if it's a valid hashtag (alphanumeric + underscore)
+        if (RegExp(r'^[a-zA-Z0-9_]+$').hasMatch(hashtag)) {
+          hashtags.add(hashtag);
+        }
+      }
+    }
+
+    // Remove duplicates and return
+    return hashtags.toSet().toList();
+  }
+
+  /// Compare two hashtag lists for equality
+  bool _hashtagListsEqual(List<String> list1, List<String> list2) {
+    if (list1.length != list2.length) return false;
+    final set1 = list1.toSet();
+    final set2 = list2.toSet();
+    return set1.containsAll(set2) && set2.containsAll(set1);
+  }
+
   @override
   void dispose() {
     if (kDebugMode) {
@@ -1658,6 +1798,7 @@ class SocialActionPostCoordinator extends ChangeNotifier {
     _isDisposed = true;
     _stateTransitionDebouncer?.cancel();
     _endTextEditingSession();
+    _endHashtagEditingSession();
     _statusTimer?.cancel();
     _processingWatchdog?.cancel();
     _error_clear_timer?.cancel();

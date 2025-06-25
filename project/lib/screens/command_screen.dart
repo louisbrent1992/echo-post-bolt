@@ -1212,7 +1212,7 @@ class _CommandScreenState extends State<CommandScreen>
     return result;
   }
 
-  Future<void> _editPostHashtags(List<String> newHashtags) async {
+  Future<void> _editPostHashtags(List<String> currentHashtags) async {
     // CRITICAL: Ensure we're not in recording state when editing
     if (_postCoordinator?.isRecording == true) {
       if (kDebugMode) {
@@ -1224,20 +1224,21 @@ class _CommandScreenState extends State<CommandScreen>
 
     if (!mounted) return;
 
-    // CRITICAL: Capture coordinator reference before async operations
     final coordinator = _postCoordinator;
+    if (coordinator == null) return;
 
     try {
-      // CRITICAL: Call coordinator method directly without deferring
-      // The coordinator handles proper state management and notification
-      if (mounted && coordinator != null) {
-        await coordinator.updatePostHashtags(newHashtags);
+      // CRITICAL: Use overlay-based dialog to completely isolate from main widget tree
+      // This prevents context invalidation during state transitions
+      final result = await _showIsolatedHashtagEditDialog(coordinator);
 
+      // CRITICAL: Check mounted after async operation
+      if (!mounted) return;
+
+      if (result == true) {
         if (mounted) {
           _postCoordinator?.requestStatusUpdate(
-            newHashtags.isEmpty
-                ? 'All hashtags removed 🏷️'
-                : 'Hashtags updated! ${newHashtags.length} tags 🏷️',
+            'Hashtags updated! 🏷️',
             StatusMessageType.success,
             duration: const Duration(seconds: 2),
           );
@@ -1245,17 +1246,156 @@ class _CommandScreenState extends State<CommandScreen>
       }
     } catch (e) {
       if (kDebugMode) {
-        print('❌ Failed to update hashtags: $e');
+        print('❌ Failed to edit hashtags: $e');
       }
+
+      // Ensure cleanup even on error
+      coordinator.cancelHashtagEditing();
 
       if (mounted) {
         _postCoordinator?.requestStatusUpdate(
-          'Failed to update hashtags: $e',
+          'Failed to edit hashtags: $e',
           StatusMessageType.error,
           duration: const Duration(seconds: 3),
         );
       }
     }
+  }
+
+  /// Show hashtag editing dialog using overlay to isolate from main widget tree
+  Future<bool?> _showIsolatedHashtagEditDialog(
+      SocialActionPostCoordinator coordinator) async {
+    // CRITICAL: Start persistent hashtag editing session in coordinator
+    final hashtagController = coordinator.startHashtagEditing();
+
+    if (kDebugMode) {
+      print('🏷️ Started isolated hashtag editing session');
+    }
+
+    // Create overlay entry that's completely isolated from main widget tree
+    OverlayEntry? overlayEntry;
+    final completer = Completer<bool?>();
+
+    void closeDialog(bool? result) {
+      if (!completer.isCompleted) {
+        overlayEntry?.remove();
+        completer.complete(result);
+      }
+    }
+
+    overlayEntry = OverlayEntry(
+      builder: (overlayContext) => Material(
+        color: Colors.black.withValues(alpha: 0.5),
+        child: Center(
+          child: Container(
+            width: double.infinity,
+            constraints: const BoxConstraints(maxWidth: 400),
+            child: AlertDialog(
+              backgroundColor: Colors.black.withValues(alpha: 0.9),
+              title: const Text(
+                'Edit Hashtags',
+                style: TextStyle(color: Colors.white),
+              ),
+              content: SizedBox(
+                width: double.maxFinite,
+                height: 300,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Enter hashtags separated by spaces or commas (without # symbol):',
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.7),
+                        fontSize: 12,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Expanded(
+                      child: TextField(
+                        controller: hashtagController,
+                        style: const TextStyle(color: Colors.white),
+                        decoration: InputDecoration(
+                          hintText: 'photography nature sunset beautiful...',
+                          hintStyle: const TextStyle(color: Colors.white60),
+                          border: OutlineInputBorder(
+                            borderSide: BorderSide(
+                                color: Colors.white.withValues(alpha: 0.3)),
+                          ),
+                          enabledBorder: OutlineInputBorder(
+                            borderSide: BorderSide(
+                                color: Colors.white.withValues(alpha: 0.3)),
+                          ),
+                          focusedBorder: const OutlineInputBorder(
+                            borderSide: BorderSide(color: Color(0xFFFF0055)),
+                          ),
+                          filled: true,
+                          fillColor: Colors.white.withValues(alpha: 0.1),
+                        ),
+                        maxLines: null,
+                        expands: true,
+                        autofocus: true,
+                        textAlignVertical: TextAlignVertical.top,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Hashtags will be automatically formatted for each platform when posted',
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.5),
+                        fontSize: 10,
+                        fontStyle: FontStyle.italic,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () {
+                    coordinator.cancelHashtagEditing();
+                    closeDialog(false);
+                  },
+                  child: const Text(
+                    'CANCEL',
+                    style: TextStyle(color: Colors.white70),
+                  ),
+                ),
+                TextButton(
+                  onPressed: () async {
+                    try {
+                      await coordinator.commitHashtagEdits();
+                      closeDialog(true);
+                    } catch (e) {
+                      if (kDebugMode) {
+                        print('❌ Failed to commit hashtag editing: $e');
+                      }
+                      coordinator.cancelHashtagEditing();
+                      closeDialog(false);
+                    }
+                  },
+                  child: const Text(
+                    'SAVE',
+                    style: TextStyle(color: Color(0xFFFF0055)),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+
+    // Insert overlay entry
+    Overlay.of(context).insert(overlayEntry);
+
+    // Wait for result
+    final result = await completer.future;
+
+    if (kDebugMode) {
+      print('🏷️ Isolated hashtag editing completed: $result');
+    }
+
+    return result;
   }
 
   Future<void> _editSchedule() async {
