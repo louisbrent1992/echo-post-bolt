@@ -34,10 +34,9 @@ class _HistoryScreenState extends State<HistoryScreen> {
         child: TitleHeader(
           title: 'Post History',
           leftAction: IconButton(
-            icon: const Icon(Icons.home, color: Colors.white),
+            icon: const Icon(Icons.arrow_back, color: Colors.white),
             onPressed: () {
-              // Navigate to home (Command Screen) while preserving post state
-              // Use pop instead of pushAndRemoveUntil to maintain state
+              // Navigate back to the previous screen (Profile or Command Screen)
               Navigator.pop(context);
             },
           ),

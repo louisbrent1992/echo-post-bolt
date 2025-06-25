@@ -23,6 +23,7 @@ import '../widgets/enhanced_media_preview.dart';
 import '../screens/media_selection_screen.dart';
 import '../screens/history_screen.dart';
 import '../screens/directory_selection_screen.dart';
+import '../screens/profile_screen.dart';
 import '../constants/typography.dart';
 import '../widgets/triple_action_button_system.dart';
 
@@ -868,11 +869,11 @@ class _CommandScreenState extends State<CommandScreen>
     }
   }
 
-  void _navigateToHistory() {
+  void _navigateToProfile() {
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (context) => const HistoryScreen(),
+        builder: (context) => const ProfileScreen(),
       ),
     );
   }
@@ -1423,8 +1424,9 @@ class _CommandScreenState extends State<CommandScreen>
               tooltip: 'Reset current post',
             ),
             rightAction: IconButton(
-              onPressed: isProcessing ? null : _navigateToHistory,
-              icon: const Icon(Icons.history, color: Colors.white, size: 28),
+              onPressed: isProcessing ? null : _navigateToProfile,
+              icon: const Icon(Icons.person, color: Colors.white, size: 28),
+              tooltip: 'Profile',
             ),
             enableInteraction: !isProcessing,
           ),
