@@ -4,6 +4,9 @@ import 'package:provider/provider.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
 import 'package:flutter/foundation.dart';
+import 'package:video_thumbnail/video_thumbnail.dart';
+import 'package:photo_manager/photo_manager.dart';
+import 'dart:typed_data';
 
 import '../models/social_action.dart';
 import '../models/media_validation.dart';
@@ -24,6 +27,17 @@ class HistoryScreen extends StatefulWidget {
 
 class _HistoryScreenState extends State<HistoryScreen> {
   bool _isDeleting = false;
+
+  // Video thumbnail cache
+  final Map<String, Uint8List?> _videoThumbnailCache = {};
+  final Set<String> _generatingThumbnails = {};
+
+  @override
+  void dispose() {
+    _videoThumbnailCache.clear();
+    _generatingThumbnails.clear();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -584,6 +598,12 @@ class _HistoryScreenState extends State<HistoryScreen> {
               // Check if this is a video file based on MIME type
               final isVideo = mediaItem.mimeType.startsWith('video/');
 
+              if (isVideo) {
+                // Route videos directly to enhanced thumbnail generator
+                return _buildVideoThumbnail(file, mediaItem);
+              }
+
+              // Keep existing Image.file logic for images
               return Stack(
                 children: [
                   SizedBox(
@@ -597,31 +617,11 @@ class _HistoryScreenState extends State<HistoryScreen> {
                         width: 100,
                         height: 100,
                         errorBuilder: (context, error, stackTrace) {
-                          // If Image.file fails for videos, show video placeholder
-                          return isVideo
-                              ? _buildVideoThumbnail(file, mediaItem)
-                              : _buildCustomMediaPlaceholder();
+                          return _buildCustomMediaPlaceholder();
                         },
                       ),
                     ),
                   ),
-                  // Video play indicator overlay
-                  if (isVideo)
-                    Positioned.fill(
-                      child: Container(
-                        decoration: BoxDecoration(
-                          color: Colors.black.withValues(alpha: 0.3),
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: const Center(
-                          child: Icon(
-                            Icons.play_circle_filled,
-                            color: Colors.white,
-                            size: 32,
-                          ),
-                        ),
-                      ),
-                    ),
                   // Show recovery indicator if media was recovered
                   if (validationResult.wasRecovered)
                     Positioned(
@@ -675,46 +675,118 @@ class _HistoryScreenState extends State<HistoryScreen> {
     );
   }
 
-  /// Build video thumbnail with video-specific styling
+  /// Build video thumbnail with actual thumbnail generation
   Widget _buildVideoThumbnail(File videoFile, MediaItem mediaItem) {
-    return Container(
-      width: 100,
-      height: 100,
-      decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [
-            Color(0xFF3A3A3A),
-            Color(0xFF2A2A2A),
-          ],
-        ),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: const Color(0xFFFF0055).withOpacity(0.3),
-          width: 1,
-        ),
-      ),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
+    final videoPath = videoFile.path;
+    final cachedThumbnail = _videoThumbnailCache[videoPath];
+    final isGenerating = _generatingThumbnails.contains(videoPath);
+
+    // If we have a cached thumbnail, show it
+    if (cachedThumbnail != null) {
+      return Stack(
         children: [
-          const Icon(
-            Icons.videocam,
-            color: Color(0xFFFF0055),
-            size: 40,
+          ClipRRect(
+            borderRadius: BorderRadius.circular(12),
+            child: Image.memory(
+              cachedThumbnail,
+              fit: BoxFit.cover,
+              width: 100,
+              height: 100,
+              errorBuilder: (context, error, stackTrace) {
+                return _buildVideoPlaceholder();
+              },
+            ),
           ),
-          const SizedBox(height: 4),
-          Text(
-            'Video',
-            style: TextStyle(
-              color: Colors.white.withValues(alpha: 0.7),
-              fontSize: 10,
-              fontWeight: FontWeight.w500,
+          // Video play indicator overlay
+          Positioned.fill(
+            child: Container(
+              decoration: BoxDecoration(
+                color: Colors.black.withValues(alpha: 0.3),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: const Center(
+                child: Icon(
+                  Icons.play_circle_filled,
+                  color: Colors.white,
+                  size: 32,
+                ),
+              ),
             ),
           ),
         ],
-      ),
-    );
+      );
+    }
+
+    // If not generating and no cache, start generation
+    if (!isGenerating) {
+      _generateVideoThumbnail(videoPath);
+    }
+
+    // Show loading or placeholder while generating
+    return _buildVideoPlaceholder(isGenerating: isGenerating);
+  }
+
+  /// Generate video thumbnail using the same logic as VideoPreviewWidget
+  Future<void> _generateVideoThumbnail(String videoPath) async {
+    if (_generatingThumbnails.contains(videoPath)) return;
+
+    _generatingThumbnails.add(videoPath);
+
+    try {
+      Uint8List? thumbnailData;
+
+      // Method 1: Try PhotoManager first (same as VideoPreviewWidget)
+      final assetEntity = await _findAssetEntityByPath(videoPath);
+      if (assetEntity != null) {
+        thumbnailData = await assetEntity.thumbnailDataWithSize(
+          const ThumbnailSize(300, 300),
+          quality: 75,
+        );
+
+        if (kDebugMode && thumbnailData != null) {
+          print('✅ PostHistory: Generated video thumbnail using PhotoManager');
+        }
+      }
+
+      // Method 2: Fallback to video_thumbnail package
+      if (thumbnailData == null) {
+        final file = File(videoPath);
+        if (await file.exists()) {
+          thumbnailData = await VideoThumbnail.thumbnailData(
+            video: videoPath,
+            imageFormat: ImageFormat.JPEG,
+            maxWidth: 300,
+            maxHeight: 300,
+            quality: 75,
+            timeMs: 1000, // Get thumbnail at 1 second
+          );
+
+          if (kDebugMode && thumbnailData != null) {
+            print(
+                '✅ PostHistory: Generated video thumbnail using video_thumbnail package');
+          }
+        }
+      }
+
+      // Cache the result and update UI
+      if (mounted) {
+        setState(() {
+          _videoThumbnailCache[videoPath] = thumbnailData;
+          _generatingThumbnails.remove(videoPath);
+        });
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ PostHistory: Failed to generate video thumbnail: $e');
+      }
+
+      if (mounted) {
+        setState(() {
+          _videoThumbnailCache[videoPath] = null;
+          _generatingThumbnails.remove(videoPath);
+        });
+      }
+    }
   }
 
   /// Detailed media placeholder for modal view
@@ -1975,5 +2047,127 @@ class _HistoryScreenState extends State<HistoryScreen> {
         ),
       );
     }
+  }
+
+  /// Find AssetEntity by path (same logic as VideoPreviewWidget)
+  Future<AssetEntity?> _findAssetEntityByPath(String videoPath) async {
+    try {
+      // Get all video albums
+      final albums = await PhotoManager.getAssetPathList(
+        type: RequestType.video,
+        filterOption: FilterOptionGroup(
+          videoOption: const FilterOption(
+            sizeConstraint: SizeConstraint(ignoreSize: true),
+          ),
+        ),
+      );
+
+      // Search through albums to find matching asset
+      for (final album in albums) {
+        final assets = await album.getAssetListRange(
+          start: 0,
+          end: await album.assetCountAsync,
+        );
+
+        for (final asset in assets) {
+          final file = await asset.file;
+          if (file != null && file.path == videoPath) {
+            return asset;
+          }
+        }
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ PostHistory: Error finding AssetEntity: $e');
+      }
+    }
+
+    return null;
+  }
+
+  /// Enhanced video placeholder with loading state
+  Widget _buildVideoPlaceholder({bool isGenerating = false}) {
+    if (isGenerating) {
+      return Container(
+        width: 100,
+        height: 100,
+        decoration: BoxDecoration(
+          gradient: const LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [
+              Color(0xFF3A3A3A),
+              Color(0xFF2A2A2A),
+            ],
+          ),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: const Color(0xFFFF0055).withOpacity(0.3),
+            width: 1,
+          ),
+        ),
+        child: const Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            SizedBox(
+              width: 20,
+              height: 20,
+              child: CircularProgressIndicator(
+                valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFFF0055)),
+                strokeWidth: 2,
+              ),
+            ),
+            SizedBox(height: 8),
+            Text(
+              'Loading...',
+              style: TextStyle(
+                color: Colors.white70,
+                fontSize: 8,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return Container(
+      width: 100,
+      height: 100,
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            Color(0xFF3A3A3A),
+            Color(0xFF2A2A2A),
+          ],
+        ),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: const Color(0xFFFF0055).withOpacity(0.3),
+          width: 1,
+        ),
+      ),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const Icon(
+            Icons.videocam,
+            color: Color(0xFFFF0055),
+            size: 40,
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Video',
+            style: TextStyle(
+              color: Colors.white.withValues(alpha: 0.7),
+              fontSize: 10,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
