@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import '../services/media_coordinator.dart';
 import '../services/directory_service.dart'; // For MediaDirectory class
 import 'package:provider/provider.dart';
@@ -64,13 +65,30 @@ class _DirectorySelectionScreenState extends State<DirectorySelectionScreen> {
     });
 
     try {
+      if (kDebugMode) {
+        print(
+            '🔄 DirectorySelectionScreen: Toggling custom directories to: $enabled');
+      }
+
       await _mediaCoordinator!.setCustomDirectoriesEnabled(enabled);
+
+      // ========== PHASE 4: USE CONSOLIDATED NOTIFICATION SYSTEM ==========
+      // Notify MediaCoordinator of the directory mode change
+      await _mediaCoordinator!.notifyMediaChange(
+        forceFullRefresh: true,
+        source: 'DirectorySelectionScreen.toggleCustomDirectories',
+      );
 
       setState(() {
         _isCustomEnabled = enabled;
         _hasChanges = true; // Mark that changes were made
         _isLoading = false;
       });
+
+      if (kDebugMode) {
+        print(
+            '✅ DirectorySelectionScreen: Custom directories toggled successfully - _hasChanges set to true');
+      }
     } catch (e) {
       setState(() {
         _isLoading = false;
@@ -91,7 +109,21 @@ class _DirectorySelectionScreenState extends State<DirectorySelectionScreen> {
     });
 
     try {
+      if (kDebugMode) {
+        print(
+            '🔄 DirectorySelectionScreen: Toggling directory $directoryId to: $enabled');
+      }
+
       await _mediaCoordinator!.updateDirectoryEnabled(directoryId, enabled);
+
+      // ========== PHASE 4: USE CONSOLIDATED NOTIFICATION SYSTEM ==========
+      // Get the directory path for targeted refresh
+      final directory = _directories.firstWhere((d) => d.id == directoryId);
+      await _mediaCoordinator!.notifyMediaChange(
+        changedDirectories: [directory.path],
+        forceFullRefresh: false,
+        source: 'DirectorySelectionScreen.toggleDirectory',
+      );
 
       setState(() {
         _directories =
@@ -99,6 +131,11 @@ class _DirectorySelectionScreenState extends State<DirectorySelectionScreen> {
         _hasChanges = true; // Mark that changes were made
         _isLoading = false;
       });
+
+      if (kDebugMode) {
+        print(
+            '✅ DirectorySelectionScreen: Directory toggled successfully - _hasChanges set to true');
+      }
     } catch (e) {
       setState(() {
         _isLoading = false;
@@ -191,7 +228,19 @@ class _DirectorySelectionScreenState extends State<DirectorySelectionScreen> {
     });
 
     try {
+      if (kDebugMode) {
+        print('🔄 DirectorySelectionScreen: Adding directory: $name at $path');
+      }
+
       await _mediaCoordinator!.addCustomDirectory(name, path);
+
+      // ========== PHASE 4: USE CONSOLIDATED NOTIFICATION SYSTEM ==========
+      // Notify MediaCoordinator of the new directory
+      await _mediaCoordinator!.notifyMediaChange(
+        changedDirectories: [path],
+        forceFullRefresh: false,
+        source: 'DirectorySelectionScreen.addDirectory',
+      );
 
       setState(() {
         _directories =
@@ -199,6 +248,11 @@ class _DirectorySelectionScreenState extends State<DirectorySelectionScreen> {
         _hasChanges = true; // Mark that changes were made
         _isLoading = false;
       });
+
+      if (kDebugMode) {
+        print(
+            '✅ DirectorySelectionScreen: Directory added successfully - _hasChanges set to true');
+      }
     } catch (e) {
       setState(() {
         _isLoading = false;
@@ -214,9 +268,14 @@ class _DirectorySelectionScreenState extends State<DirectorySelectionScreen> {
   @override
   Widget build(BuildContext context) {
     return PopScope(
-      canPop: true,
+      canPop: false, // Prevent automatic pop to handle it manually
       onPopInvokedWithResult: (bool didPop, dynamic result) {
         if (!didPop) {
+          // Handle the pop manually and return the _hasChanges value
+          if (kDebugMode) {
+            print(
+                '🔄 DirectorySelectionScreen: Returning to MediaSelectionScreen with _hasChanges: $_hasChanges');
+          }
           Navigator.of(context).pop(_hasChanges);
         }
       },
@@ -226,6 +285,17 @@ class _DirectorySelectionScreenState extends State<DirectorySelectionScreen> {
           backgroundColor: Colors.black,
           foregroundColor: Colors.white,
           title: const Text('Media Directories'),
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back),
+            onPressed: () {
+              // Always return the _hasChanges value when navigating back
+              if (kDebugMode) {
+                print(
+                    '🔄 DirectorySelectionScreen: Manual back button pressed - returning with _hasChanges: $_hasChanges');
+              }
+              Navigator.of(context).pop(_hasChanges);
+            },
+          ),
           actions: [
             IconButton(
               onPressed: _showDirectoryPicker,
@@ -237,7 +307,7 @@ class _DirectorySelectionScreenState extends State<DirectorySelectionScreen> {
         body: _isLoading
             ? const Center(
                 child: CircularProgressIndicator(
-                  color: Color(0xFFFF0080),
+                  color: Color(0xFFFF0055),
                 ),
               )
             : Column(
@@ -260,7 +330,7 @@ class _DirectorySelectionScreenState extends State<DirectorySelectionScreen> {
                           children: [
                             Icon(
                               Icons.folder_open,
-                              color: Color(0xFFFF0080),
+                              color: Color(0xFFFF0055),
                               size: 20,
                             ),
                             SizedBox(width: 8),
@@ -291,7 +361,7 @@ class _DirectorySelectionScreenState extends State<DirectorySelectionScreen> {
                               fontSize: 12,
                             ),
                           ),
-                          activeColor: const Color(0xFFFF0080),
+                          activeColor: const Color(0xFFFF0055),
                           contentPadding: EdgeInsets.zero,
                         ),
                       ],
@@ -392,12 +462,12 @@ class _DirectorySelectionScreenState extends State<DirectorySelectionScreen> {
       margin: const EdgeInsets.only(bottom: 8),
       decoration: BoxDecoration(
         color: directory.isEnabled
-            ? const Color(0xFFFF0080).withValues(alpha: 0.1)
+            ? const Color(0xFFFF0055).withValues(alpha: 0.1)
             : Colors.white.withValues(alpha: 0.05),
         borderRadius: BorderRadius.circular(8),
         border: Border.all(
           color: directory.isEnabled
-              ? const Color(0xFFFF0080).withValues(alpha: 0.3)
+              ? const Color(0xFFFF0055).withValues(alpha: 0.3)
               : Colors.white.withValues(alpha: 0.1),
         ),
       ),
@@ -405,7 +475,7 @@ class _DirectorySelectionScreenState extends State<DirectorySelectionScreen> {
         leading: Icon(
           directory.isDefault ? Icons.folder_special : Icons.folder,
           color: directory.isEnabled
-              ? const Color(0xFFFF0080)
+              ? const Color(0xFFFF0055)
               : Colors.white.withValues(alpha: 0.4),
         ),
         title: Text(
@@ -434,7 +504,7 @@ class _DirectorySelectionScreenState extends State<DirectorySelectionScreen> {
             Switch(
               value: directory.isEnabled,
               onChanged: (enabled) => _toggleDirectory(directory.id, enabled),
-              activeColor: const Color(0xFFFF0080),
+              activeColor: const Color(0xFFFF0055),
               materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
             ),
             if (!directory.isDefault) ...[
@@ -462,7 +532,7 @@ class _DirectorySelectionScreenState extends State<DirectorySelectionScreen> {
         color: Colors.white.withValues(alpha: 0.05),
         borderRadius: BorderRadius.circular(12),
         border: Border.all(
-          color: const Color(0xFFFF0080).withValues(alpha: 0.3),
+          color: const Color(0xFFFF0055).withValues(alpha: 0.3),
           width: 1.5,
         ),
       ),
@@ -476,7 +546,7 @@ class _DirectorySelectionScreenState extends State<DirectorySelectionScreen> {
               children: [
                 const Icon(
                   Icons.add_circle_outline,
-                  color: Color(0xFFFF0080),
+                  color: Color(0xFFFF0055),
                   size: 24,
                 ),
                 const SizedBox(width: 12),
@@ -517,10 +587,10 @@ class _DirectorySelectionScreenState extends State<DirectorySelectionScreen> {
                     label: const Text('Browse Folders'),
                     style: ElevatedButton.styleFrom(
                       backgroundColor:
-                          const Color(0xFFFF0080).withValues(alpha: 0.1),
-                      foregroundColor: const Color(0xFFFF0080),
+                          const Color(0xFFFF0055).withValues(alpha: 0.1),
+                      foregroundColor: const Color(0xFFFF0055),
                       side: BorderSide(
-                        color: const Color(0xFFFF0080).withValues(alpha: 0.3),
+                        color: const Color(0xFFFF0055).withValues(alpha: 0.3),
                       ),
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(8),

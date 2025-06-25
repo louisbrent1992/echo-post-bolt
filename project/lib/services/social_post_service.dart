@@ -321,7 +321,7 @@ class SocialPostService {
       // FIXED: Restructure to avoid null-aware operator issues
       final shouldPostAsPage = facebookData?.postAsPage == true;
       final pageId = facebookData?.pageId;
-      
+
       if (shouldPostAsPage && pageId != null && pageId.isNotEmpty) {
         // Post to Facebook page
         endpoint = 'https://graph.facebook.com/v18.0/$pageId/feed';

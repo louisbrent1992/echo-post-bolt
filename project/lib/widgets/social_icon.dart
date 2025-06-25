@@ -66,11 +66,13 @@ class _SocialIconState extends State<SocialIcon> with TickerProviderStateMixin {
       child: Stack(
         alignment: Alignment.center,
         children: [
-          // Ripple effect when selected
+          // Beautiful ripple effect when selected - reusing Unified Action Button animation
           if (widget.isSelected)
-            RippleCircle(
+            SocialIconRipple(
               color: widget.platform.color,
-              amplitude: 1.0,
+              size: widget.size,
+              rippleCount: 3,
+              isActive: widget.isSelected,
             ),
 
           // Icon container
@@ -159,11 +161,13 @@ class SocialIconsRow extends StatelessWidget {
         child: Stack(
           alignment: Alignment.center,
           children: [
-            // Radiating ripple effect when selected - the "echo" animation
+            // Beautiful ripple effect when selected - reusing Unified Action Button animation
             if (isSelected)
-              RippleCircle(
+              SocialIconRipple(
                 color: color,
-                amplitude: 1.0,
+                size: maxHeight * 0.8,
+                rippleCount: 3,
+                isActive: isSelected,
               ),
 
             // Circular icon container
@@ -359,6 +363,184 @@ class TitleHeader extends StatelessWidget {
         ),
       ),
       slot6: rightAction,
+    );
+  }
+}
+
+/// Seven-icon header for Command Screen with evenly distributed icons
+class SevenIconHeader extends StatelessWidget {
+  final List<String> selectedPlatforms;
+  final Function(String)? onPlatformToggle;
+  final Widget? leftAction;
+  final Widget? rightAction;
+  final double height;
+  final bool enableInteraction;
+
+  const SevenIconHeader({
+    super.key,
+    required this.selectedPlatforms,
+    this.onPlatformToggle,
+    this.leftAction,
+    this.rightAction,
+    this.height = 54,
+    this.enableInteraction = true,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: height,
+      padding: const EdgeInsets.symmetric(horizontal: 20),
+      child: Row(
+        children: [
+          // Icon 1: Reset button (exactly 1/7 width, no extra padding)
+          Expanded(
+            child: Center(
+              child: _buildEquallySpacedActionIcon(
+                leftAction,
+                height * 0.8, // Match social media icon size exactly
+              ),
+            ),
+          ),
+
+          // Icons 2-6: Social media platforms (exactly 1/7 width each)
+          ...SocialPlatforms.all.map((platform) {
+            final isSelected = selectedPlatforms.contains(platform);
+            final color = SocialPlatforms.getColor(platform);
+            final icon = SocialPlatforms.getIcon(platform);
+
+            return Expanded(
+              child: Center(
+                child: _buildEvenlySpacedSocialIcon(
+                  platform,
+                  icon,
+                  color,
+                  isSelected,
+                  height * 0.8, // Consistent sizing
+                ),
+              ),
+            );
+          }).toList(),
+
+          // Icon 7: History button (exactly 1/7 width, no extra padding)
+          Expanded(
+            child: Center(
+              child: _buildEquallySpacedActionIcon(
+                rightAction,
+                height * 0.8, // Match social media icon size exactly
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Wraps action widgets (reset/history) to match social media icon sizing exactly
+  Widget _buildEquallySpacedActionIcon(Widget? actionWidget, double size) {
+    if (actionWidget == null) {
+      return const SizedBox.shrink();
+    }
+
+    // Extract the actual icon and onPressed from IconButton if that's what we have
+    if (actionWidget is IconButton) {
+      return Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: actionWidget.onPressed,
+          borderRadius: BorderRadius.circular(size / 2),
+          child: Container(
+            width: size,
+            height: size,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: Colors.white.withValues(alpha: 0.1),
+              border: Border.all(
+                color: Colors.white.withValues(alpha: 0.3),
+                width: 1.5,
+              ),
+            ),
+            child: Center(
+              child: actionWidget.icon != null
+                  ? Icon(
+                      (actionWidget.icon as Icon).icon,
+                      color: Colors.white.withValues(alpha: 0.8),
+                      size: size * 0.35, // Match social media icon proportions
+                    )
+                  : actionWidget.icon,
+            ),
+          ),
+        ),
+      );
+    }
+
+    // For non-IconButton widgets, wrap in a sized container
+    return SizedBox(
+      width: size,
+      height: size,
+      child: actionWidget,
+    );
+  }
+
+  Widget _buildEvenlySpacedSocialIcon(
+    String platform,
+    IconData icon,
+    Color color,
+    bool isSelected,
+    double size,
+  ) {
+    return Stack(
+      alignment: Alignment.center,
+      children: [
+        // Beautiful ripple effect when selected
+        if (isSelected)
+          SocialIconRipple(
+            color: color,
+            size: size,
+            rippleCount: 3,
+            isActive: isSelected,
+          ),
+
+        // Circular icon container
+        Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: enableInteraction && onPlatformToggle != null
+                ? () => onPlatformToggle!(platform)
+                : null,
+            borderRadius: BorderRadius.circular(size / 2),
+            child: Container(
+              width: size,
+              height: size,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: isSelected
+                    ? color.withValues(alpha: 0.2)
+                    : Colors.white.withValues(alpha: 0.1),
+                border: Border.all(
+                  color:
+                      isSelected ? color : Colors.white.withValues(alpha: 0.3),
+                  width: isSelected ? 2.0 : 1.5,
+                ),
+                boxShadow: isSelected
+                    ? [
+                        BoxShadow(
+                          color: color.withValues(alpha: 0.3),
+                          blurRadius: 8,
+                          spreadRadius: 1,
+                        ),
+                      ]
+                    : null,
+              ),
+              child: Icon(
+                icon,
+                color: isSelected ? color : Colors.white.withValues(alpha: 0.8),
+                size: size * 0.5, // Increase icon size to make it larger
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

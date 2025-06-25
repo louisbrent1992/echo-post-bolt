@@ -92,10 +92,10 @@ class UnifiedActionButton extends StatelessWidget {
 
   Color _getButtonColor(SocialActionPostCoordinator coordinator) {
     if (coordinator.isProcessing) return Colors.orange;
-    if (coordinator.isRecording) return const Color(0xFFFF0080);
+    if (coordinator.isRecording) return const Color(0xFFFF0055);
     if (coordinator.needsMediaSelection) return Colors.blue;
-    if (coordinator.isReadyForExecution) return const Color(0xFFFF0080);
-    return const Color(0xFFFF0080);
+    if (coordinator.isReadyForExecution) return const Color(0xFFFF0055);
+    return const Color(0xFFFF0055);
   }
 
   IconData _getButtonIcon(SocialActionPostCoordinator coordinator) {

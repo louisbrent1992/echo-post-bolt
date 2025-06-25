@@ -21,7 +21,7 @@ class StatusMessage {
       case StatusMessageType.success:
         return const Color(0xFF4CAF50);
       case StatusMessageType.recording:
-        return const Color(0xFFFF0080);
+        return const Color(0xFFFF0055);
       case StatusMessageType.processing:
         return Colors.orange;
       case StatusMessageType.info:

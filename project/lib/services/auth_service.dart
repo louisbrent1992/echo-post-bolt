@@ -498,14 +498,20 @@ class AuthService extends ChangeNotifier {
 
   // Sign out method following Firebase documentation
   Future<void> signOut() async {
+    bool firebaseSignOutSucceeded = false;
+    bool googleSignOutSucceeded = false;
+
     try {
-      // Sign out from Firebase first
+      // Sign out from Firebase first - this is the critical operation
       await _auth.signOut();
+      firebaseSignOutSucceeded = true;
 
       // Then sign out from Google to clear the cached account
       await _googleSignIn.signOut();
+      googleSignOutSucceeded = true;
 
       // Also disconnect to fully clear the Google auth state
+      // This can fail due to network issues but shouldn't prevent successful sign-out
       await _googleSignIn.disconnect();
 
       notifyListeners();
@@ -513,15 +519,27 @@ class AuthService extends ChangeNotifier {
       if (kDebugMode) {
         print('Sign out error: $e');
       }
-      // Even if there's an error, try to clear the state
-      try {
-        await _googleSignIn.signOut();
-        await _googleSignIn.disconnect();
-      } catch (e2) {
-        if (kDebugMode) {
-          print('Failed to clear Google auth state: $e2');
+
+      // If Firebase sign-out succeeded, try to clean up Google state silently
+      if (firebaseSignOutSucceeded) {
+        try {
+          if (!googleSignOutSucceeded) {
+            await _googleSignIn.signOut();
+          }
+          await _googleSignIn.disconnect();
+        } catch (e2) {
+          if (kDebugMode) {
+            print('Failed to clear Google auth state (non-critical): $e2');
+          }
+          // Don't throw - Google cleanup failure is not critical if Firebase sign-out succeeded
         }
+
+        // Firebase sign-out succeeded, so notify listeners and return successfully
+        notifyListeners();
+        return;
       }
+
+      // Only throw if Firebase sign-out itself failed
       throw Exception('Sign out failed: $e');
     }
   }

@@ -37,12 +37,7 @@ class PostContentBox extends StatelessWidget {
           padding: const EdgeInsets.all(20),
           decoration: BoxDecoration(
             color: Colors.black.withValues(alpha: 0.7),
-            borderRadius: const BorderRadius.only(
-              topLeft: Radius.circular(16),
-              topRight: Radius.circular(16),
-              bottomLeft: Radius.circular(0),
-              bottomRight: Radius.circular(0),
-            ),
+            borderRadius: BorderRadius.circular(12),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -65,31 +60,18 @@ class PostContentBox extends StatelessWidget {
                     ),
                   ),
                   const Spacer(),
-                  // Voice dictation button
-                  if (onVoiceEdit != null)
-                    IconButton(
-                      onPressed: onVoiceEdit,
-                      icon: Icon(
-                        coordinator.getVoiceDictationIcon(),
-                        color: coordinator.getVoiceDictationColor(),
-                        size: 18,
-                      ),
-                      tooltip:
-                          isRecording ? 'Stop recording' : 'Voice dictation',
-                    ),
                   // Text edit button
-                  if (onEditText != null)
-                    IconButton(
-                      onPressed:
-                          (isRecording || isProcessing) ? null : onEditText,
-                      icon: Icon(
-                        Icons.edit,
-                        color: Colors.white.withValues(
-                            alpha: isRecording || isProcessing ? 0.3 : 0.7),
-                        size: 18,
-                      ),
-                      tooltip: 'Edit post text',
+                  IconButton(
+                    onPressed:
+                        (isRecording || isProcessing) ? null : onEditText,
+                    icon: Icon(
+                      Icons.edit,
+                      color: Colors.white.withValues(
+                          alpha: isRecording || isProcessing ? 0.3 : 0.7),
+                      size: 18,
                     ),
+                    tooltip: 'Edit post text',
+                  ),
                   // Schedule button (THIRD)
                   if (onEditSchedule != null)
                     IconButton(
@@ -335,7 +317,7 @@ class PostContentBox extends StatelessWidget {
                     isScheduled ? Icons.access_time : Icons.flash_on,
                     color: isScheduled
                         ? Colors.orange.withValues(alpha: 0.8)
-                        : const Color(0xFFFF0080).withValues(alpha: 0.8),
+                        : const Color(0xFFFF0055).withValues(alpha: 0.8),
                     size: 16,
                   ),
                   const SizedBox(width: 8),

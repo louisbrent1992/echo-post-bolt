@@ -259,7 +259,7 @@ class _ServiceInitializationWrapperState
                     width: 80,
                     height: 80,
                     decoration: const BoxDecoration(
-                      color: Color(0xFFFF0080),
+                      color: Color(0xFFFF0055),
                       shape: BoxShape.circle,
                     ),
                     child: const Icon(
@@ -284,7 +284,7 @@ class _ServiceInitializationWrapperState
                   // Loading indicator
                   const CircularProgressIndicator(
                     valueColor:
-                        AlwaysStoppedAnimation<Color>(Color(0xFFFF0080)),
+                        AlwaysStoppedAnimation<Color>(Color(0xFFFF0055)),
                   ),
                   const SizedBox(height: 24),
 

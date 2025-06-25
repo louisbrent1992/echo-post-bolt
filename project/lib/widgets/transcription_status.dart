@@ -14,15 +14,22 @@ class TranscriptionStatus extends StatelessWidget {
         final color = coordinator.getStatusColor();
         final isRecording = coordinator.isRecording;
 
-        return Text(
-          message,
-          style: TextStyle(
-            color: color,
-            fontSize: AppTypography.small,
-            fontWeight: isRecording ? FontWeight.bold : FontWeight.normal,
+        return Container(
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: 0.7),
+            borderRadius: BorderRadius.circular(12),
           ),
-          maxLines: 2,
-          overflow: TextOverflow.ellipsis,
+          child: Text(
+            message,
+            style: TextStyle(
+              color: color,
+              fontSize: AppTypography.small,
+              fontWeight: isRecording ? FontWeight.bold : FontWeight.normal,
+            ),
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+          ),
         );
       },
     );

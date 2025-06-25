@@ -30,7 +30,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           if (!settingsService.isInitialized) {
             return const Center(
               child: CircularProgressIndicator(
-                valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFFF0080)),
+                valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFFF0055)),
               ),
             );
           }
@@ -105,7 +105,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   min: 30,
                   max: 600,
                   divisions: 19, // 30s intervals
-                  activeColor: const Color(0xFFFF0080),
+                  activeColor: const Color(0xFFFF0055),
                   inactiveColor: Colors.white.withValues(alpha: 0.3),
                   onChanged: (value) async {
                     await settingsService
@@ -118,13 +118,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 padding:
                     const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                 decoration: BoxDecoration(
-                  color: const Color(0xFFFF0080).withValues(alpha: 0.2),
+                  color: const Color(0xFFFF0055).withValues(alpha: 0.2),
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Text(
                   '${_formatDuration(settingsService.voiceTranscriptionTimeout)}',
                   style: const TextStyle(
-                    color: Color(0xFFFF0080),
+                    color: Color(0xFFFF0055),
                     fontWeight: FontWeight.bold,
                   ),
                   textAlign: TextAlign.center,
@@ -171,7 +171,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           Switch(
             value: settingsService.aiMediaContextEnabled,
-            activeColor: const Color(0xFFFF0080),
+            activeColor: const Color(0xFFFF0055),
             onChanged: (value) async {
               await settingsService.setAiMediaContextEnabled(value);
             },
@@ -216,7 +216,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   min: 10,
                   max: 500,
                   divisions: 49, // 10-unit intervals
-                  activeColor: const Color(0xFFFF0080),
+                  activeColor: const Color(0xFFFF0055),
                   inactiveColor: Colors.white.withValues(alpha: 0.3),
                   onChanged: settingsService.aiMediaContextEnabled
                       ? (value) async {
@@ -231,13 +231,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 padding:
                     const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                 decoration: BoxDecoration(
-                  color: const Color(0xFFFF0080).withValues(alpha: 0.2),
+                  color: const Color(0xFFFF0055).withValues(alpha: 0.2),
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Text(
                   '${settingsService.aiMediaContextLimit}',
                   style: const TextStyle(
-                    color: Color(0xFFFF0080),
+                    color: Color(0xFFFF0055),
                     fontWeight: FontWeight.bold,
                   ),
                   textAlign: TextAlign.center,
@@ -279,7 +279,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   onPressed: () => Navigator.pop(context, true),
                   child: const Text(
                     'RESET',
-                    style: TextStyle(color: Color(0xFFFF0080)),
+                    style: TextStyle(color: Color(0xFFFF0055)),
                   ),
                 ),
               ],
@@ -292,7 +292,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(
                   content: Text('Settings reset to defaults'),
-                  backgroundColor: Color(0xFFFF0080),
+                  backgroundColor: Color(0xFFFF0055),
                 ),
               );
             }

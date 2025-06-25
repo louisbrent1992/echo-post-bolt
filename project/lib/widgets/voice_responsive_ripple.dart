@@ -8,7 +8,7 @@ class VoiceResponsiveRipple extends StatefulWidget {
 
   const VoiceResponsiveRipple({
     super.key,
-    this.color = const Color(0xFFFF0080),
+    this.color = const Color(0xFFFF0055),
     this.size = 80.0,
     required this.amplitude,
     this.rippleCount = 3,

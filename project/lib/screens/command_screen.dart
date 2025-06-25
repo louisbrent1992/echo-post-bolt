@@ -18,13 +18,14 @@ import '../services/app_settings_service.dart';
 import '../widgets/social_icon.dart';
 import '../widgets/post_content_box.dart';
 import '../widgets/transcription_status.dart';
-import '../widgets/unified_action_button.dart';
 import '../widgets/unified_media_buttons.dart';
 import '../widgets/enhanced_media_preview.dart';
 import '../screens/media_selection_screen.dart';
 import '../screens/history_screen.dart';
 import '../screens/directory_selection_screen.dart';
+import '../screens/profile_screen.dart';
 import '../constants/typography.dart';
+import '../widgets/triple_action_button_system.dart';
 
 /// EchoPost Voice-to-Post Pipeline
 ///
@@ -71,6 +72,12 @@ class _CommandScreenState extends State<CommandScreen>
   late AnimationController _backgroundController;
   late Animation<double> _backgroundAnimation;
 
+  // Triple Action Button System animation controllers
+  late AnimationController _leftButtonController;
+  late AnimationController _rightButtonController;
+  late Animation<double> _leftButtonAnimation;
+  late Animation<double> _rightButtonAnimation;
+
   Timer? _recordingTimer;
   Timer? _amplitudeTimer;
 
@@ -111,6 +118,8 @@ class _CommandScreenState extends State<CommandScreen>
   @override
   void dispose() {
     _backgroundController.dispose();
+    _leftButtonController.dispose();
+    _rightButtonController.dispose();
     _recordingTimer?.cancel();
     _amplitudeTimer?.cancel();
     _record.dispose();
@@ -133,6 +142,33 @@ class _CommandScreenState extends State<CommandScreen>
     ));
 
     _backgroundController.repeat(reverse: true);
+
+    // Initialize Triple Action Button System animations
+    _leftButtonController = AnimationController(
+      duration: const Duration(milliseconds: 300),
+      vsync: this,
+    );
+
+    _rightButtonController = AnimationController(
+      duration: const Duration(milliseconds: 300),
+      vsync: this,
+    );
+
+    _leftButtonAnimation = Tween<double>(
+      begin: 0.0,
+      end: 1.0,
+    ).animate(CurvedAnimation(
+      parent: _leftButtonController,
+      curve: Curves.elasticOut,
+    ));
+
+    _rightButtonAnimation = Tween<double>(
+      begin: 0.0,
+      end: 1.0,
+    ).animate(CurvedAnimation(
+      parent: _rightButtonController,
+      curve: Curves.elasticOut,
+    ));
   }
 
   double get normalizedAmplitude {
@@ -402,30 +438,37 @@ class _CommandScreenState extends State<CommandScreen>
           print('⚠️ No speech detected during recording, resetting state');
         }
         _resetAudioRecordingVariables();
+        _postCoordinator!.clearRecordingModeContext();
         _postCoordinator!.setError('No speech detected. Please try again.');
         return;
       }
 
-      // Transcribe and process through coordinator with proper state management
-      final transcription = await _transcribeWithWhisper(pathToProcess);
-      if (transcription.isEmpty) {
-        throw Exception('Whisper returned empty transcription');
-      }
-
-      // CRITICAL: Use coordinator's processing state management with timeout
-      await _postCoordinator!.executeWithProcessingStateAndTimeout(
-        () => _postCoordinator!.processVoiceTranscription(transcription),
+      // NEW: Start processing immediately with timeout
+      _postCoordinator!.startProcessing(
         timeout:
             Duration(seconds: _appSettingsService.voiceTranscriptionTimeout),
       );
+
+      // Process in background without Future wrapper
+      _processTranscriptionInBackground(pathToProcess);
     } catch (e) {
       if (kDebugMode) {
         print('❌ Failed to stop recording: $e');
       }
 
+      // CRITICAL: Comprehensive cleanup on recording stop failure
+      _resetAudioRecordingVariables();
+
       // Reset recording state through coordinator
       _postCoordinator!.resetRecordingState();
+
+      // Clear recording mode context
+      _postCoordinator!.clearRecordingModeContext();
+
       _postCoordinator!.setError(e.toString());
+
+      // Ensure processing state is reset in case it was started earlier
+      _postCoordinator!.completeProcessing(success: false, error: e.toString());
 
       if (mounted) {
         _postCoordinator?.requestStatusUpdate(
@@ -433,6 +476,44 @@ class _CommandScreenState extends State<CommandScreen>
           StatusMessageType.error,
           duration: const Duration(seconds: 5),
         );
+      }
+    }
+  }
+
+  /// NEW: Background transcription processing without blocking UI
+  void _processTranscriptionInBackground(String audioPath) async {
+    try {
+      final transcription = await _transcribeWithWhisper(audioPath);
+      if (transcription.isEmpty) {
+        throw Exception('Whisper returned empty transcription');
+      }
+
+      await _postCoordinator!.processVoiceTranscription(transcription);
+
+      // Signal success
+      _postCoordinator!.completeProcessing(success: true);
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ Background transcription processing failed: $e');
+      }
+
+      // CRITICAL: Reset recording state on ANY failure (including Whisper quota errors)
+      // This ensures the UI can recover and allow new recordings
+      _resetAudioRecordingVariables();
+
+      // CRITICAL: Also reset coordinator recording state
+      _postCoordinator!.resetRecordingState();
+
+      // CRITICAL: Clear recording mode context in MediaCoordinator
+      _postCoordinator!.clearRecordingModeContext();
+
+      // Signal failure with proper error message
+      _postCoordinator!.completeProcessing(
+          success: false, error: 'Failed to process recording: $e');
+
+      if (kDebugMode) {
+        print('✅ Recording state reset after transcription failure');
+        print('   Ready for new recording attempts');
       }
     }
   }
@@ -763,6 +844,9 @@ class _CommandScreenState extends State<CommandScreen>
         // Update coordinator with new media - use replaceMedia to allow overriding pre-selected images
         await _postCoordinator?.replaceMedia(updatedAction.content.media);
 
+        // Ensure coordinator is in idle state after returning from media selection
+        _postCoordinator?.resetProcessing();
+
         // Clear the needsMediaSelection flag since media has been selected
         _postCoordinator?.clearNeedsMediaSelection();
 
@@ -785,11 +869,11 @@ class _CommandScreenState extends State<CommandScreen>
     }
   }
 
-  void _navigateToHistory() {
+  void _navigateToProfile() {
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (context) => const HistoryScreen(),
+        builder: (context) => const ProfileScreen(),
       ),
     );
   }
@@ -902,7 +986,7 @@ class _CommandScreenState extends State<CommandScreen>
         color: Colors.black.withValues(alpha: 0.5),
         child: Center(
           child: Container(
-            width: MediaQuery.of(overlayContext).size.width * 0.9,
+            width: double.infinity,
             constraints: const BoxConstraints(maxWidth: 400),
             child: AlertDialog(
               backgroundColor: Colors.black.withValues(alpha: 0.9),
@@ -927,7 +1011,7 @@ class _CommandScreenState extends State<CommandScreen>
                           color: Colors.white.withValues(alpha: 0.3)),
                     ),
                     focusedBorder: const OutlineInputBorder(
-                      borderSide: BorderSide(color: Color(0xFFFF0080)),
+                      borderSide: BorderSide(color: Color(0xFFFF0055)),
                     ),
                     filled: true,
                     fillColor: Colors.white.withValues(alpha: 0.1),
@@ -963,7 +1047,7 @@ class _CommandScreenState extends State<CommandScreen>
                   },
                   child: const Text(
                     'SAVE',
-                    style: TextStyle(color: Color(0xFFFF0080)),
+                    style: TextStyle(color: Color(0xFFFF0055)),
                   ),
                 ),
               ],
@@ -1216,7 +1300,7 @@ class _CommandScreenState extends State<CommandScreen>
                   Navigator.pop(dialogContext); // Close the dialog
                 },
                 child: const Text('OK',
-                    style: TextStyle(color: Color(0xFFFF0080))),
+                    style: TextStyle(color: Color(0xFFFF0055))),
               ),
             ],
           ),
@@ -1281,9 +1365,15 @@ class _CommandScreenState extends State<CommandScreen>
           // Set the coordinator reference for use in other methods
           _postCoordinator = coordinator;
 
+          // Update button visibility based on coordinator state
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            _updateButtonVisibility(coordinator);
+          });
+
           return Scaffold(
             body: AnimatedBuilder(
               animation: _backgroundAnimation,
+              // Build gradient container only; pass heavy child via AnimatedBuilder's child parameter
               builder: (context, child) {
                 return Container(
                   decoration: BoxDecoration(
@@ -1300,11 +1390,13 @@ class _CommandScreenState extends State<CommandScreen>
                       ],
                     ),
                   ),
-                  child: SafeArea(
-                    child: _buildReviewStyleLayout(coordinator),
-                  ),
+                  child: child, // Use prebuilt child
                 );
               },
+              // Build once per coordinator change, not every animation tick
+              child: SafeArea(
+                child: _buildReviewStyleLayout(coordinator),
+              ),
             ),
           );
         },
@@ -1323,22 +1415,20 @@ class _CommandScreenState extends State<CommandScreen>
       children: [
         Container(
           height: 60,
-          padding: const EdgeInsets.symmetric(horizontal: 20),
-          child: CommandHeader(
+          child: SevenIconHeader(
             selectedPlatforms: coordinator.currentPost.platforms,
             onPlatformToggle: _togglePlatform,
-            leftAction: coordinator.hasContent || coordinator.hasMedia
-                ? IconButton(
-                    onPressed: isProcessing ? null : _showResetConfirmation,
-                    icon: const Icon(Icons.refresh,
-                        color: Colors.white, size: 24),
-                    tooltip: 'Reset current post',
-                  )
-                : null,
-            rightAction: IconButton(
-              onPressed: isProcessing ? null : _navigateToHistory,
-              icon: const Icon(Icons.history, color: Colors.white, size: 28),
+            leftAction: IconButton(
+              onPressed: isProcessing ? null : _showResetConfirmation,
+              icon: const Icon(Icons.refresh, color: Colors.white, size: 24),
+              tooltip: 'Reset current post',
             ),
+            rightAction: IconButton(
+              onPressed: isProcessing ? null : _navigateToProfile,
+              icon: const Icon(Icons.person, color: Colors.white, size: 28),
+              tooltip: 'Profile',
+            ),
+            enableInteraction: !isProcessing,
           ),
         ),
         Expanded(
@@ -1382,17 +1472,14 @@ class _CommandScreenState extends State<CommandScreen>
                 child: SafeArea(
                   minimum: const EdgeInsets.only(bottom: 16),
                   child: Center(
-                    child: SizedBox(
-                      width: 120,
-                      height: 120,
-                      child: UnifiedActionButton(
-                        onRecordStart:
-                            coordinator.isProcessing ? null : _startRecording,
-                        onRecordStop:
-                            coordinator.isProcessing ? null : _stopRecording,
-                        onConfirmPost: _confirmAndPost,
-                        onAddMedia: _navigateToMediaSelection,
-                      ),
+                    child: TripleActionButtonSystem(
+                      leftButtonController: _leftButtonController,
+                      rightButtonController: _rightButtonController,
+                      onRecordStart: _startRecording,
+                      onRecordStop: _stopRecording,
+                      onConfirmPost: _confirmAndPost,
+                      onAddMedia: _navigateToMediaSelection,
+                      onSavePost: _savePost,
                     ),
                   ),
                 ),
@@ -1494,10 +1581,10 @@ class _CommandScreenState extends State<CommandScreen>
             Color(0xFF1F1F1F), // Slightly darker for subtle gradient
           ],
         ),
-        border: Border.all(
-          color: Colors.white.withValues(alpha: 0.15),
-          width: 1,
-        ),
+        // border: Border.all(
+        //   color: Colors.white.withValues(alpha: 0.15),
+        //   width: 1,
+        // ),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.2),
@@ -1537,6 +1624,48 @@ class _CommandScreenState extends State<CommandScreen>
     );
   }
 
+  /// Handle save post action for the Triple Action Button System
+  Future<void> _savePost() async {
+    if (_postCoordinator == null) {
+      if (kDebugMode) {
+        print('❌ Cannot save post: coordinator not available');
+      }
+      return;
+    }
+
+    try {
+      await _postCoordinator!.savePostAsDraft();
+      if (kDebugMode) {
+        print('✅ Post saved successfully via Triple Action Button');
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ Failed to save post: $e');
+      }
+    }
+  }
+
+  /// Update button visibility based on coordinator state
+  void _updateButtonVisibility(SocialActionPostCoordinator coordinator) {
+    // Left button (save) visibility
+    if (coordinator.shouldShowLeftButton &&
+        _leftButtonController.value == 0.0) {
+      _leftButtonController.forward();
+    } else if (!coordinator.shouldShowLeftButton &&
+        _leftButtonController.value == 1.0) {
+      _leftButtonController.reverse();
+    }
+
+    // Right button (media/confirm) visibility
+    if (coordinator.shouldShowRightButton &&
+        _rightButtonController.value == 0.0) {
+      _rightButtonController.forward();
+    } else if (!coordinator.shouldShowRightButton &&
+        _rightButtonController.value == 1.0) {
+      _rightButtonController.reverse();
+    }
+  }
+
   void _showResetConfirmation() async {
     if (!mounted) return;
 
@@ -1568,7 +1697,7 @@ class _CommandScreenState extends State<CommandScreen>
             onPressed: () => Navigator.pop(dialogContext, true),
             child: const Text(
               'RESET',
-              style: TextStyle(color: Color(0xFFFF0080)),
+              style: TextStyle(color: Color(0xFFFF0055)),
             ),
           ),
         ],
@@ -1601,6 +1730,23 @@ class _CommandScreenState extends State<CommandScreen>
       if (kDebugMode) {
         print('✅ Complete reset sequence finished - ready for new recordings');
       }
+    }
+  }
+
+  /// NEW: User-initiated retry capability
+  void _handleRetryProcessing() {
+    _postCoordinator?.resetProcessing();
+
+    if (kDebugMode) {
+      print('🔄 User initiated processing retry');
+    }
+
+    if (mounted) {
+      _postCoordinator?.requestStatusUpdate(
+        'Ready to record again! 🎤',
+        StatusMessageType.success,
+        duration: const Duration(seconds: 2),
+      );
     }
   }
 

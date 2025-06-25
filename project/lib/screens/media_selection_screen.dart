@@ -56,6 +56,8 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
   @override
   void dispose() {
     _searchController.dispose();
+    _selectedMedia = null;
+    _mediaCandidates = [];
     super.dispose();
   }
 
@@ -65,7 +67,6 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
     });
 
     try {
-      // Only log initialization details occasionally to prevent spam
       final now = DateTime.now();
       final shouldLogInit =
           _lastInitLog == null || now.difference(_lastInitLog!).inMinutes > 5;
@@ -73,21 +74,12 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
       if (kDebugMode && shouldLogInit) {
         print(
             '🔄 MediaSelectionScreen: Starting initialization with directory compliance enforcement');
-        print(
-            '   Custom directories enabled: ${_mediaCoordinator.isCustomDirectoriesEnabled}');
-        if (_mediaCoordinator.isCustomDirectoriesEnabled) {
-          final enabledDirs = _mediaCoordinator.enabledDirectories;
-          print(
-              '   Enabled directories: ${enabledDirs.map((d) => d.displayName).join(', ')}');
-        }
         _lastInitLog = now;
       }
 
-      // CRITICAL: Force complete cache invalidation before ANY media operations
-      await _mediaCoordinator.refreshMediaData();
-
-      // Add a small delay to ensure cache invalidation is complete
-      await Future.delayed(const Duration(milliseconds: 100));
+      // ========== PHASE 3: USE CONSOLIDATED DIRECTORY SCANNING ==========
+      // Use MediaCoordinator's unified directory refresh instead of individual refresh calls
+      await _mediaCoordinator.refreshDirectoryData(forceFullScan: true);
 
       // Initialize filters from MediaSearchQuery if available
       if (widget.action.mediaQuery != null) {
@@ -105,34 +97,42 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
             _mediaType = query.mediaTypes.first.toLowerCase();
           }
         });
+      } else {
+        // Clear any existing filters
+        setState(() {
+          _searchTerms = [];
+          _searchController.clear();
+          _dateRange = null;
+          _mediaType = null;
+        });
       }
 
-      // Check if we have an explicit file URI and validate it
+      // Get fresh media candidates with directory compliance
+      List<Map<String, dynamic>> candidates;
+
       if (widget.action.content.media.isNotEmpty &&
           widget.action.content.media.first.fileUri.isNotEmpty) {
         final mediaItem = widget.action.content.media.first;
 
-        // Double validation: both URI and directory compliance
-        final isUriValid =
-            await _mediaCoordinator.validateMediaURI(mediaItem.fileUri);
-        final isInAllowedDirectory =
-            _mediaCoordinator.isCustomDirectoriesEnabled
-                ? await _mediaCoordinator
-                    .isFileInEnabledDirectory(mediaItem.fileUri)
-                : true;
+        // Validate both URI and directory compliance
+        final validationResult =
+            await _mediaCoordinator.validateAndRecoverMediaURI(
+          mediaItem.fileUri,
+          config: MediaValidationConfig.production,
+        );
 
-        if (isUriValid && isInAllowedDirectory) {
-          // Get fresh media candidates (this will enforce directory compliance)
-          final additionalCandidates = await _mediaCoordinator.getMediaForQuery(
+        if (validationResult.isValid) {
+          // Get fresh media candidates
+          candidates = await _mediaCoordinator.getMediaForQuery(
             '', // Empty search to get recent media
             dateRange: null,
             mediaTypes: null,
           );
 
-          // Create existing media candidate with full validation
+          // Create existing media candidate
           final existingMediaAsCandidate = {
             'id': 'current',
-            'file_uri': mediaItem.fileUri,
+            'file_uri': validationResult.effectiveUri,
             'mime_type': mediaItem.mimeType,
             'device_metadata': {
               'creation_time': mediaItem.deviceMetadata.creationTime,
@@ -144,104 +144,39 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
             }
           };
 
-          // Deduplicate and validate all candidates
-          final existingUri = mediaItem.fileUri;
-          final deduplicatedCandidates = additionalCandidates
-              .where((candidate) => candidate['file_uri'] != existingUri)
-              .where((candidate) =>
-                  !_mediaCoordinator.isCustomDirectoriesEnabled ||
-                  _mediaCoordinator.enabledDirectories.any((dir) =>
-                      (candidate['file_uri'] as String).startsWith(dir.path)))
-              .toList();
+          // Deduplicate candidates
+          candidates = [
+            existingMediaAsCandidate,
+            ...candidates
+                .where((c) => c['file_uri'] != validationResult.effectiveUri)
+          ];
 
-          setState(() {
-            _mediaCandidates = [
-              existingMediaAsCandidate,
-              ...deduplicatedCandidates
-            ];
-            _selectedMedia = existingMediaAsCandidate;
-            _isLoading = false;
-          });
-
-          if (kDebugMode && shouldLogInit) {
-            print(
-                '✅ MediaSelectionScreen: Loaded ${_mediaCandidates.length} candidates (existing media retained)');
-          }
-          return;
+          _selectedMedia = existingMediaAsCandidate;
         } else {
-          if (kDebugMode) {
-            print(
-                '🚫 MediaSelectionScreen: Existing media no longer allowed (URI valid: $isUriValid, Directory allowed: $isInAllowedDirectory)');
-          }
+          candidates = await _mediaCoordinator.getMediaForQuery('');
         }
-      }
-
-      // Handle initial candidates with strict validation
-      if (widget.initialCandidates != null &&
-          widget.initialCandidates!.isNotEmpty) {
-        final validatedCandidates = <Map<String, dynamic>>[];
-        int excludedCount = 0;
-
-        for (final candidate in widget.initialCandidates!) {
-          final fileUri = candidate['file_uri'] as String;
-
-          // Double validation: both URI and directory compliance
-          final isUriValid = await _mediaCoordinator.validateMediaURI(fileUri);
-          final isInAllowedDirectory =
-              _mediaCoordinator.isCustomDirectoriesEnabled
-                  ? await _mediaCoordinator.isFileInEnabledDirectory(fileUri)
-                  : true;
-
-          if (isUriValid && isInAllowedDirectory) {
-            validatedCandidates.add(candidate);
-          } else {
-            excludedCount++;
-          }
-        }
-
-        if (validatedCandidates.isNotEmpty) {
-          setState(() {
-            _mediaCandidates = validatedCandidates;
-            _selectedMedia = null;
-            _isLoading = false;
-          });
-
-          if (kDebugMode && shouldLogInit && excludedCount > 0) {
-            print(
-                '🚫 MediaSelectionScreen: Excluded $excludedCount initial candidates from disabled directories');
-          }
-          return;
-        }
-      }
-
-      // Fallback: Get latest media with strict directory compliance
-      final latestMedia = await _mediaCoordinator.getMediaForQuery(
-        '',
-        mediaTypes: ['image', 'video'],
-        directory: widget.action.mediaQuery?.directoryPath,
-      );
-
-      if (latestMedia.isNotEmpty) {
-        setState(() {
-          _mediaCandidates = latestMedia;
-          _selectedMedia = null;
-          _isLoading = false;
-        });
+      } else if (widget.initialCandidates?.isNotEmpty == true) {
+        // Handle initial candidates with validation
+        candidates = await _validateAndFilterMedia(widget.initialCandidates!);
       } else {
-        // If no media found, apply filters to search for any media
-        await _applyFilters();
+        // Get fresh candidates
+        candidates = await _mediaCoordinator.getMediaForQuery('');
       }
+
+      // Final validation pass
+      final validatedCandidates = await _validateAndFilterMedia(candidates);
+
+      setState(() {
+        _mediaCandidates = validatedCandidates;
+        _isLoading = false;
+      });
     } catch (e) {
       if (kDebugMode) {
-        print('❌ MediaSelectionScreen initialization error: $e');
-      }
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to initialize screen: $e')),
-        );
+        print('❌ MediaSelectionScreen: Initialization failed: $e');
       }
       setState(() {
         _isLoading = false;
+        _mediaCandidates = [];
       });
     }
   }
@@ -278,13 +213,14 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
               ],
             ),
             duration: Duration(seconds: 2),
-            backgroundColor: Color(0xFFFF0080),
+            backgroundColor: Color(0xFFFF0055),
           ),
         );
       }
 
-      // Comprehensive refresh that clears all PhotoManager caches
-      await _mediaCoordinator.refreshMediaData();
+      // ========== PHASE 3: USE CONSOLIDATED REFRESH SYSTEM ==========
+      // Use MediaCoordinator's unified refresh instead of individual service calls
+      await _mediaCoordinator.refreshMediaData(forceFullScan: true);
 
       // Re-apply current filters to get the latest data with fresh cache
       await _applyFilters();
@@ -380,69 +316,12 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
   ) async {
     if (candidates.isEmpty) return candidates;
 
-    final validatedCandidates = <Map<String, dynamic>>[];
-    final config = MediaValidationConfig.production;
-
-    // Process in small batches to avoid overwhelming the system
-    const batchSize = 10;
-    for (int i = 0; i < candidates.length; i += batchSize) {
-      final batch = candidates.skip(i).take(batchSize);
-
-      final batchResults = await Future.wait(
-        batch.map((candidate) async {
-          final fileUri = candidate['file_uri'] as String;
-
-          try {
-            final validationResult =
-                await _mediaCoordinator.validateAndRecoverMediaURI(
-              fileUri,
-              config: config,
-            );
-
-            if (validationResult.isValid) {
-              // Update candidate with recovered URI if needed
-              if (validationResult.wasRecovered) {
-                candidate = Map<String, dynamic>.from(candidate);
-                candidate['file_uri'] = validationResult.effectiveUri;
-                candidate['_recovered'] = true;
-              }
-              return candidate;
-            }
-          } catch (e) {
-            // Skip broken media silently
-          }
-
-          return null;
-        }),
-      );
-
-      // Add valid candidates to the list
-      for (final result in batchResults) {
-        if (result != null) {
-          validatedCandidates.add(result);
-        }
-      }
-    }
-
-    // Purge stale references from the excluded media
-    final excludedCount = candidates.length - validatedCandidates.length;
-    if (excludedCount > 0) {
-      final brokenUris = candidates
-          .where((c) =>
-              !validatedCandidates.any((v) => v['file_uri'] == c['file_uri']))
-          .map((c) => c['file_uri'] as String)
-          .toList();
-
-      // Purge stale references in background
-      _mediaCoordinator.purgeStaleReferences(specificUris: brokenUris);
-
-      if (kDebugMode) {
-        print(
-            '🧹 MediaSelectionScreen: Excluded $excludedCount broken media items');
-      }
-    }
-
-    return validatedCandidates;
+    // ========== PHASE 3: USE UNIFIED VALIDATION SYSTEM ==========
+    // Use MediaCoordinator's consolidated validation instead of manual validation
+    return await _mediaCoordinator.validateAndFilterMediaCandidates(
+      candidates,
+      showProgress: false,
+    );
   }
 
   Future<void> _fetchMedia() async {
@@ -571,22 +450,15 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
       ),
       body: Container(
         decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [
-              Colors.black,
-              Color(0xFF1A1A1A),
-            ],
-          ),
+          color: Colors.black, // Set to solid color
         ),
         child: SafeArea(
           child: _isLoading
               ? const Center(
-                  child: CircularProgressIndicator(color: Color(0xFFFF0080)))
+                  child: CircularProgressIndicator(color: Color(0xFFFF0055)))
               : RefreshIndicator(
                   onRefresh: _refreshMedia,
-                  color: const Color(0xFFFF0080),
+                  color: const Color(0xFFFF0055),
                   backgroundColor: Colors.black,
                   child: CustomScrollView(
                     physics: const AlwaysScrollableScrollPhysics(),
@@ -610,13 +482,13 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
                                 children: [
                                   const Icon(
                                     Icons.search,
-                                    color: Color(0xFFFF0080),
+                                    color: Color(0xFFFF0055),
                                     size: 18,
                                   ),
                                   const SizedBox(width: 8),
                                   Expanded(
                                     child: Text(
-                                      'Found ${_mediaCandidates.length} result${_mediaCandidates.length == 1 ? '' : 's'} for "${_searchTerms.join(', ')}"',
+                                      'Found \\${_mediaCandidates.length} result\\${_mediaCandidates.length == 1 ? '' : 's'} for "\\${_searchTerms.join(', ')}"',
                                       style: const TextStyle(
                                         fontWeight: FontWeight.bold,
                                         color: Colors.white,
@@ -650,14 +522,14 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
                                           MainAxisAlignment.center,
                                       children: [
                                         Icon(
-                                          Icons.photo_library_outlined,
+                                          Icons.search_off,
                                           size: 64,
                                           color: Colors.white
                                               .withValues(alpha: 0.6),
                                         ),
                                         const SizedBox(height: 16),
                                         const Text(
-                                          'No media available',
+                                          'No media found',
                                           style: TextStyle(
                                             color: Colors.white,
                                             fontSize: 18,
@@ -666,13 +538,12 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
                                         ),
                                         const SizedBox(height: 8),
                                         Text(
-                                          'Pull down to refresh and scan for new files',
+                                          'Try adjusting your search or filters',
                                           style: TextStyle(
                                             color: Colors.white
                                                 .withValues(alpha: 0.7),
                                             fontSize: 14,
                                           ),
-                                          textAlign: TextAlign.center,
                                         ),
                                       ],
                                     ),
@@ -691,7 +562,7 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
                                     ? _confirmSelection
                                     : null,
                                 style: ElevatedButton.styleFrom(
-                                  backgroundColor: const Color(0xFFFF0080),
+                                  backgroundColor: const Color(0xFFFF0055),
                                   foregroundColor: Colors.white,
                                   padding:
                                       const EdgeInsets.symmetric(vertical: 16),
@@ -730,12 +601,12 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         decoration: BoxDecoration(
           color: isCustomEnabled
-              ? const Color(0xFFFF0080).withValues(alpha: 0.1)
+              ? const Color(0xFFFF0055).withValues(alpha: 0.1)
               : Colors.grey.withValues(alpha: 0.1),
           borderRadius: BorderRadius.circular(20),
           border: Border.all(
             color: isCustomEnabled
-                ? const Color(0xFFFF0080).withValues(alpha: 0.3)
+                ? const Color(0xFFFF0055).withValues(alpha: 0.3)
                 : Colors.grey.withValues(alpha: 0.3),
           ),
         ),
@@ -745,7 +616,7 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
             Icon(
               isCustomEnabled ? Icons.folder_open : Icons.photo_library,
               size: 16,
-              color: isCustomEnabled ? const Color(0xFFFF0080) : Colors.white,
+              color: isCustomEnabled ? const Color(0xFFFF0055) : Colors.white,
             ),
             const SizedBox(width: 8),
             Text(
@@ -753,7 +624,7 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
                   ? 'Searching $enabledCount custom director${enabledCount == 1 ? 'y' : 'ies'}'
                   : 'Searching photo albums',
               style: TextStyle(
-                color: isCustomEnabled ? const Color(0xFFFF0080) : Colors.white,
+                color: isCustomEnabled ? const Color(0xFFFF0055) : Colors.white,
                 fontSize: 12,
                 fontWeight: FontWeight.w500,
               ),
@@ -762,7 +633,7 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
             Icon(
               Icons.edit,
               size: 14,
-              color: isCustomEnabled ? const Color(0xFFFF0080) : Colors.white,
+              color: isCustomEnabled ? const Color(0xFFFF0055) : Colors.white,
             ),
           ],
         ),
@@ -773,6 +644,10 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
   /// Navigate to directory selection screen and refresh media when returning
   Future<void> _navigateToDirectorySelection() async {
     try {
+      if (kDebugMode) {
+        print('🔄 MediaSelectionScreen: Navigating to directory selection...');
+      }
+
       final result = await Navigator.push<bool>(
         context,
         MaterialPageRoute(
@@ -780,12 +655,41 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
         ),
       );
 
+      if (kDebugMode) {
+        print(
+            '🔄 MediaSelectionScreen: Returned from directory selection with result: $result');
+      }
+
       // If directories were changed, refresh the media grid
       // Note: result will be true if changes were made, false if no changes, or null if cancelled
       if (result == true) {
         if (kDebugMode) {
           print(
-              '🔄 MediaSelectionScreen: Refreshing media after directory changes');
+              '🔄 MediaSelectionScreen: Directory changes detected - refreshing media automatically');
+        }
+
+        // Show immediate feedback to user
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Row(
+                children: [
+                  SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                    ),
+                  ),
+                  SizedBox(width: 12),
+                  Text('Directory settings updated - refreshing media...'),
+                ],
+              ),
+              duration: Duration(seconds: 2),
+              backgroundColor: Color(0xFFFF0055),
+            ),
+          );
         }
 
         // Clear current media and reload with full refresh
@@ -800,7 +704,7 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
       } else {
         if (kDebugMode) {
           print(
-              '🔄 MediaSelectionScreen: No directory changes detected, keeping current media');
+              '🔄 MediaSelectionScreen: No directory changes detected (result: $result) - keeping current media');
         }
       }
     } catch (e) {
@@ -841,7 +745,7 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
               const Icon(
                 Icons.search,
                 size: 18,
-                color: Color(0xFFFF0080),
+                color: Color(0xFFFF0055),
               ),
               const SizedBox(width: 8),
               const Text(
@@ -873,7 +777,7 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
                     ),
                     focusedBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(8),
-                      borderSide: const BorderSide(color: Color(0xFFFF0080)),
+                      borderSide: const BorderSide(color: Color(0xFFFF0055)),
                     ),
                     filled: true,
                     fillColor: Colors.white.withValues(alpha: 0.1),
@@ -887,12 +791,12 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
                             height: 16,
                             child: CircularProgressIndicator(
                               strokeWidth: 2,
-                              color: Color(0xFFFF0080),
+                              color: Color(0xFFFF0055),
                             ),
                           )
                         : IconButton(
                             icon: const Icon(Icons.search,
-                                color: Color(0xFFFF0080)),
+                                color: Color(0xFFFF0055)),
                             onPressed: () {
                               setState(() {
                                 _searchTerms = _searchController.text
@@ -936,7 +840,7 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
               const Icon(
                 Icons.calendar_today,
                 size: 18,
-                color: Color(0xFFFF0080),
+                color: Color(0xFFFF0055),
               ),
               const SizedBox(width: 8),
               const Text(
@@ -966,7 +870,7 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
                   _dateRange != null
                       ? '${_dateRange!.start.toString().split(' ')[0]} - ${_dateRange!.end.toString().split(' ')[0]}'
                       : 'Select dates',
-                  style: const TextStyle(color: Color(0xFFFF0080)),
+                  style: const TextStyle(color: Color(0xFFFF0055)),
                 ),
               ),
               if (_dateRange != null)
@@ -987,7 +891,7 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
               const Icon(
                 Icons.perm_media,
                 size: 18,
-                color: Color(0xFFFF0080),
+                color: Color(0xFFFF0055),
               ),
               const SizedBox(width: 8),
               const Text(
@@ -1007,7 +911,7 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
                       : Colors.white.withValues(alpha: 0.7),
                 ),
                 selected: _mediaType == 'photo',
-                selectedColor: const Color(0xFFFF0080),
+                selectedColor: const Color(0xFFFF0055),
                 backgroundColor: Colors.white.withValues(alpha: 0.1),
                 side: BorderSide(color: Colors.white.withValues(alpha: 0.3)),
                 onSelected: (selected) {
@@ -1025,7 +929,7 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
                       : Colors.white.withValues(alpha: 0.7),
                 ),
                 selected: _mediaType == 'video',
-                selectedColor: const Color(0xFFFF0080),
+                selectedColor: const Color(0xFFFF0055),
                 backgroundColor: Colors.white.withValues(alpha: 0.1),
                 side: BorderSide(color: Colors.white.withValues(alpha: 0.3)),
                 onSelected: (selected) {
@@ -1044,7 +948,7 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
             child: ElevatedButton(
               onPressed: _applyFilters,
               style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFFFF0080),
+                backgroundColor: const Color(0xFFFF0055),
                 foregroundColor: Colors.white,
                 padding: const EdgeInsets.symmetric(vertical: 12),
                 shape: RoundedRectangleBorder(
@@ -1077,7 +981,7 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
             margin: const EdgeInsets.all(16),
             decoration: BoxDecoration(
               color: Colors.black.withValues(alpha: 0.8),
-              borderRadius: BorderRadius.circular(16),
+              // Remove borderRadius to make corners square
               border: Border.all(
                 color: Colors.white.withValues(alpha: 0.2),
                 width: 1,
@@ -1097,10 +1001,7 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
                 Expanded(
                   flex: 3, // Takes up 3/4 of the available space
                   child: ClipRRect(
-                    borderRadius: const BorderRadius.only(
-                      topLeft: Radius.circular(16),
-                      topRight: Radius.circular(16),
-                    ),
+                    // Remove borderRadius to make corners square
                     child: Stack(
                       fit: StackFit.expand,
                       children: [
@@ -1161,98 +1062,38 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
                 // Post content area (text and hashtags)
                 Expanded(
                   flex: 1, // Takes up 1/4 of the available space
-                  child: Padding(
-                    padding: const EdgeInsets.all(16),
+                  child: Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.bottomCenter,
+                        end: Alignment.topCenter,
+                        colors: [
+                          Colors.black.withValues(alpha: 0.8),
+                          Colors.transparent,
+                        ],
+                      ),
+                    ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        // Post text
-                        if (widget.action.content.text.isNotEmpty) ...[
-                          Expanded(
-                            child: SingleChildScrollView(
-                              child: Text(
-                                widget.action.content.text,
-                                style: const TextStyle(
-                                  fontSize: 16,
-                                  height: 1.4,
-                                  color: Colors.white,
-                                ),
-                              ),
-                            ),
+                        Text(
+                          _getFormatDisplayName(
+                              media['mime_type'] ?? 'image/jpeg'),
+                          style: const TextStyle(
+                            color: Colors.white70,
+                            fontSize: 10,
                           ),
-                          if (widget.action.content.hashtags.isNotEmpty)
-                            const SizedBox(height: 12),
-                        ],
-
-                        // Hashtags
-                        if (widget.action.content.hashtags.isNotEmpty) ...[
-                          Wrap(
-                            spacing: 6,
-                            runSpacing: 6,
-                            children: widget.action.content.hashtags.map((tag) {
-                              return Container(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 8, vertical: 4),
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFFFF0080)
-                                      .withValues(alpha: 0.2),
-                                  borderRadius: BorderRadius.circular(12),
-                                  border: Border.all(
-                                    color: const Color(0xFFFF0080)
-                                        .withValues(alpha: 0.5),
-                                  ),
-                                ),
-                                child: Text(
-                                  '#$tag',
-                                  style: const TextStyle(
-                                    color: Color(0xFFFF0080),
-                                    fontSize: 14,
-                                    fontWeight: FontWeight.w500,
-                                  ),
-                                ),
-                              );
-                            }).toList(),
+                        ),
+                        const Spacer(),
+                        Text(
+                          _formatDate(media['device_metadata']?['creation_time']
+                              as String?),
+                          style: const TextStyle(
+                            color: Colors.white70,
+                            fontSize: 9,
                           ),
-                        ],
-
-                        // If no content, show placeholder
-                        if (widget.action.content.text.isEmpty &&
-                            widget.action.content.hashtags.isEmpty) ...[
-                          Expanded(
-                            child: Center(
-                              child: Container(
-                                padding: const EdgeInsets.all(16),
-                                decoration: BoxDecoration(
-                                  color: Colors.orange.withValues(alpha: 0.2),
-                                  borderRadius: BorderRadius.circular(8),
-                                  border: Border.all(
-                                    color: Colors.orange.withValues(alpha: 0.5),
-                                  ),
-                                ),
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Icon(
-                                      Icons.edit,
-                                      color: Colors.orange.shade300,
-                                      size: 20,
-                                    ),
-                                    const SizedBox(width: 8),
-                                    Flexible(
-                                      child: Text(
-                                        'Add caption on review page',
-                                        style: TextStyle(
-                                          color: Colors.orange.shade300,
-                                          fontSize: 14,
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ),
-                          ),
-                        ],
+                        ),
                       ],
                     ),
                   ),
@@ -1301,12 +1142,12 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
     }
 
     return SliverPadding(
-      padding: const EdgeInsets.all(8),
+      padding: EdgeInsets.zero, // Remove padding
       sliver: SliverGrid(
         gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
           crossAxisCount: 2, // Changed to 2 columns for better video preview
-          crossAxisSpacing: 8,
-          mainAxisSpacing: 8,
+          crossAxisSpacing: 0, // Remove spacing
+          mainAxisSpacing: 0, // Remove spacing
           childAspectRatio: 0.8, // Adjusted for video info display
         ),
         delegate: SliverChildBuilderDelegate(
@@ -1354,166 +1195,37 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
       },
       child: Container(
         decoration: BoxDecoration(
-          border: Border.all(
-            color: isSelected
-                ? const Color(0xFFFF0080)
-                : Colors.white.withValues(alpha: 0.3),
-            width: isSelected ? 3 : 1,
-          ),
-          borderRadius: BorderRadius.circular(8),
-        ),
+            // Remove border to make it sleeker
+            ),
         child: Stack(
           fit: StackFit.expand,
           children: [
             // Enhanced image thumbnail with validation
             ClipRRect(
-              borderRadius: BorderRadius.circular(8),
+              // Remove borderRadius to make corners square
               child: FutureBuilder<MediaValidationResult>(
                 future: _mediaCoordinator.validateAndRecoverMediaURI(
                   media['file_uri'] as String,
                   config: MediaValidationConfig.production,
                 ),
-                builder: (context, validationSnapshot) {
-                  if (validationSnapshot.connectionState ==
-                      ConnectionState.waiting) {
-                    return Container(
-                      color: const Color(0xFF2A2A2A),
-                      child: const Center(
-                        child: SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: Color(0xFFFF0080),
-                          ),
-                        ),
-                      ),
+                builder: (context, snapshot) {
+                  if (snapshot.connectionState == ConnectionState.waiting) {
+                    return const Center(
+                      child: CircularProgressIndicator(),
                     );
                   }
 
-                  final validationResult = validationSnapshot.data;
-
-                  if (validationResult == null || !validationResult.isValid) {
-                    // Hide broken images instead of showing broken icon
-                    // This effectively excludes stale references from display
-                    return Container(
-                      color: const Color(0xFF2A2A2A),
-                      child: const SizedBox.shrink(),
+                  if (!snapshot.hasData || !snapshot.data!.isValid) {
+                    return const Center(
+                      child: Icon(Icons.error, color: Colors.red),
                     );
                   }
 
-                  // Use the effective URI (recovered or original)
-                  final effectiveUri = validationResult.effectiveUri;
-
-                  return Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      Image.file(
-                        File(Uri.parse(effectiveUri).path),
-                        fit: BoxFit.cover,
-                        errorBuilder: (context, error, stackTrace) {
-                          // Final fallback - hide completely if still broken
-                          return const SizedBox.shrink();
-                        },
-                      ),
-                      // Show recovery indicator if media was recovered
-                      if (validationResult.wasRecovered)
-                        Positioned(
-                          top: 4,
-                          left: 4,
-                          child: Container(
-                            padding: const EdgeInsets.all(2),
-                            decoration: BoxDecoration(
-                              color: Colors.green.withValues(alpha: 0.8),
-                              shape: BoxShape.circle,
-                              border: Border.all(color: Colors.white, width: 1),
-                            ),
-                            child: const Icon(
-                              Icons.refresh,
-                              color: Colors.white,
-                              size: 8,
-                            ),
-                          ),
-                        ),
-                    ],
+                  return Image.file(
+                    File(Uri.parse(snapshot.data!.effectiveUri).path),
+                    fit: BoxFit.cover,
                   );
                 },
-              ),
-            ),
-
-            // Image info overlay
-            Positioned(
-              bottom: 0,
-              left: 0,
-              right: 0,
-              child: Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  borderRadius: const BorderRadius.only(
-                    bottomLeft: Radius.circular(8),
-                    bottomRight: Radius.circular(8),
-                  ),
-                  gradient: LinearGradient(
-                    begin: Alignment.bottomCenter,
-                    end: Alignment.topCenter,
-                    colors: [
-                      Colors.black.withValues(alpha: 0.8),
-                      Colors.transparent,
-                    ],
-                  ),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    // Resolution and file size
-                    Row(
-                      children: [
-                        Text(
-                          '${media['device_metadata']?['width'] ?? 0}×${media['device_metadata']?['height'] ?? 0}',
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 11,
-                          ),
-                        ),
-                        const Spacer(),
-                        Text(
-                          _formatFileSize(media['device_metadata']
-                                  ?['file_size_bytes'] ??
-                              0),
-                          style: const TextStyle(
-                            color: Colors.white70,
-                            fontSize: 10,
-                          ),
-                        ),
-                      ],
-                    ),
-
-                    // Format and date
-                    const SizedBox(height: 2),
-                    Row(
-                      children: [
-                        Text(
-                          _getFormatDisplayName(
-                              media['mime_type'] ?? 'image/jpeg'),
-                          style: const TextStyle(
-                            color: Colors.white70,
-                            fontSize: 10,
-                          ),
-                        ),
-                        const Spacer(),
-                        Text(
-                          _formatDate(media['device_metadata']?['creation_time']
-                              as String?),
-                          style: const TextStyle(
-                            color: Colors.white70,
-                            fontSize: 9,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
               ),
             ),
 
@@ -1524,7 +1236,7 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
                 left: 8,
                 child: Icon(
                   Icons.check_circle,
-                  color: Color(0xFFFF0080),
+                  color: Color(0xFFFF0055),
                   size: 24,
                 ),
               ),
@@ -1548,7 +1260,7 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
         barrierDismissible: false,
         builder: (context) => const Center(
           child: CircularProgressIndicator(
-            valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFFF0080)),
+            valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFFF0055)),
           ),
         ),
       );

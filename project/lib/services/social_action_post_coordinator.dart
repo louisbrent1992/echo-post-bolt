@@ -77,6 +77,10 @@ class SocialActionPostCoordinator extends ChangeNotifier {
   StatusMessage? _temporaryStatus;
   Timer? _statusTimer;
   StatusPriority _currentStatusPriority = StatusPriority.low;
+  Timer? _processingWatchdog;
+  // Automatically clears error state after a short delay
+  Timer? _error_clear_timer;
+  static const Duration _defaultProcessingTimeout = Duration(seconds: 45);
 
   SocialActionPostCoordinator({
     required MediaCoordinator mediaCoordinator,
@@ -173,6 +177,11 @@ class SocialActionPostCoordinator extends ChangeNotifier {
   double get currentAmplitude => _currentAmplitude;
   bool get hasSpeechDetected => _hasSpeechDetected;
   String? get currentRecordingPath => _currentRecordingPath;
+
+  // Triple Action Button System visibility getters
+  bool get shouldShowLeftButton =>
+      (hasContent || hasMedia) && !isRecording && !isProcessing;
+  bool get shouldShowRightButton => needsMediaSelection || isReadyForExecution;
 
   /// Check if media requirement is met based on selected platforms
   bool get _isMediaRequirementMet {
@@ -300,6 +309,7 @@ class SocialActionPostCoordinator extends ChangeNotifier {
     // NOTE: _isProcessing is managed by parent scope
     _isVoiceDictating = false;
     _recordingDuration = 0;
+    _isTransitioning = false; // Ensure transitions are reset
 
     // Reset voice monitoring
     _currentAmplitude = -160.0;
@@ -314,9 +324,20 @@ class SocialActionPostCoordinator extends ChangeNotifier {
       _errorMessage = null;
       _temporaryStatus = null;
       _statusTimer?.cancel();
+      _error_clear_timer?.cancel();
     }
 
     _safeNotifyListeners();
+  }
+
+  /// Clear recording mode context in MediaCoordinator
+  /// This is a public method to allow CommandScreen to clear the context on errors
+  void clearRecordingModeContext() {
+    _mediaCoordinator.setRecordingModeContext(false);
+
+    if (kDebugMode) {
+      print('🔄 Recording mode context cleared in MediaCoordinator');
+    }
   }
 
   /// Get normalized amplitude for UI
@@ -356,6 +377,77 @@ class SocialActionPostCoordinator extends ChangeNotifier {
     }
   }
 
+  /// NEW: Start processing state with optional watchdog timer
+  void startProcessing({Duration? timeout}) {
+    // Guard against double-calls
+    if (_isProcessing) {
+      if (kDebugMode) {
+        print(
+            '⚠️ startProcessing() called while already processing - ignoring');
+      }
+      return;
+    }
+
+    _isProcessing = true;
+    _hasError = false;
+    _errorMessage = null;
+
+    // Start watchdog timer
+    _processingWatchdog?.cancel();
+    _processingWatchdog = Timer(timeout ?? _defaultProcessingTimeout, () {
+      if (_isProcessing) {
+        if (kDebugMode) {
+          print(
+              '⏰ Processing watchdog timeout - forcing completion with failure');
+        }
+        completeProcessing(success: false, error: 'Processing timed out');
+      }
+    });
+
+    _safeNotifyListeners();
+
+    if (kDebugMode) {
+      print(
+          '🔄 Processing started with ${timeout?.inSeconds ?? _defaultProcessingTimeout.inSeconds}s timeout');
+    }
+  }
+
+  /// NEW: Complete processing state with explicit success/failure
+  void completeProcessing({required bool success, String? error}) {
+    _processingWatchdog?.cancel();
+    _processingWatchdog = null;
+    _isProcessing = false;
+
+    if (!success && error != null) {
+      setError(error);
+    }
+
+    _safeNotifyListeners();
+
+    if (kDebugMode) {
+      print('✅ Processing completed: ${success ? 'SUCCESS' : 'FAILURE'}');
+      if (error != null) print('   Error: $error');
+    }
+  }
+
+  /// NEW: Allow manual processing reset (for user-initiated retry)
+  void resetProcessing() {
+    _processingWatchdog?.cancel();
+    _processingWatchdog = null;
+    _isProcessing = false;
+    _hasError = false;
+    _errorMessage = null;
+    _safeNotifyListeners();
+
+    if (kDebugMode) {
+      print('🔄 Processing manually reset');
+    }
+  }
+
+  /// DEPRECATED: Use startProcessing() and completeProcessing() instead
+  /// This method will be removed in a future version
+  @Deprecated(
+      'Use startProcessing() and completeProcessing() for better state control')
   Future<void> executeWithProcessingState<T>(
       Future<T> Function() operation) async {
     setProcessingState(true);
@@ -366,6 +458,10 @@ class SocialActionPostCoordinator extends ChangeNotifier {
     }
   }
 
+  /// DEPRECATED: Use startProcessing() and completeProcessing() instead
+  /// This method will be removed in a future version
+  @Deprecated(
+      'Use startProcessing() and completeProcessing() for better state control with timeout')
   Future<void> executeWithProcessingStateAndTimeout<T>(
       Future<T> Function() operation,
       {Duration timeout = const Duration(seconds: 30)}) async {
@@ -565,8 +661,10 @@ class SocialActionPostCoordinator extends ChangeNotifier {
 
     // CRITICAL: Cancel any pending timers
     _statusTimer?.cancel();
+    _processingWatchdog?.cancel();
     _temporaryStatus = null;
     _stateTransitionDebouncer?.cancel();
+    _error_clear_timer?.cancel();
 
     _safeNotifyListeners();
 
@@ -1333,6 +1431,40 @@ class SocialActionPostCoordinator extends ChangeNotifier {
     }
   }
 
+  /// Save current post as draft to Firestore
+  /// This leverages the same persistence mechanism as uploadFinalizedPost but is specifically
+  /// for draft saving without requiring social media posting confirmation
+  Future<void> savePostAsDraft() async {
+    try {
+      // Ensure media is synced before saving
+      _syncMediaStates();
+
+      // Save current post state to Firestore as draft
+      await _firestoreService.saveAction(_currentPost.toJson());
+
+      if (kDebugMode) {
+        print('✅ Post saved as draft: ${_currentPost.actionId}');
+        print('   Content: "${_currentPost.content.text}"');
+        print('   Platforms: ${_currentPost.platforms}');
+        print('   Media count: ${_currentPost.content.media.length}');
+      }
+
+      // Provide user feedback
+      requestStatusUpdate(
+        'Post saved as draft! 💾',
+        StatusMessageType.success,
+        duration: const Duration(seconds: 2),
+        priority: StatusPriority.medium,
+      );
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ Failed to save post as draft: $e');
+      }
+      setError('Failed to save post: $e');
+      rethrow;
+    }
+  }
+
   /// Execute post across all selected social media platforms
   Future<Map<String, bool>> executePostToSocialMedia() async {
     try {
@@ -1515,12 +1647,14 @@ class SocialActionPostCoordinator extends ChangeNotifier {
     _isDisposed = true;
     _stateTransitionDebouncer?.cancel();
     _endTextEditingSession();
+    _statusTimer?.cancel();
+    _processingWatchdog?.cancel();
+    _error_clear_timer?.cancel();
 
     if (kDebugMode) {
       print('🗑️ SocialActionPostCoordinator: Disposal complete');
     }
 
-    _statusTimer?.cancel();
     super.dispose();
   }
 
@@ -1565,12 +1699,28 @@ class SocialActionPostCoordinator extends ChangeNotifier {
     }
   }
 
-  /// Set error state
-  void setError(String message) {
+  /// Set an error message that auto-dismisses after [duration].
+  /// Defaults to 3 seconds.
+  void setError(String message,
+      {Duration duration = const Duration(seconds: 3)}) {
     _hasError = true;
     _errorMessage = message;
-    requestStatusUpdate(message, StatusMessageType.error,
-        priority: StatusPriority.high);
+
+    // Push the message to the status system with the same duration
+    requestStatusUpdate(
+      message,
+      StatusMessageType.error,
+      duration: duration,
+      priority: StatusPriority.high,
+    );
+
+    // Restart the auto-clear timer
+    _error_clear_timer?.cancel();
+    _error_clear_timer = Timer(duration, () {
+      _hasError = false;
+      _errorMessage = null;
+      _safeNotifyListeners();
+    });
   }
 
   /// Stop recording state
@@ -1634,10 +1784,10 @@ class SocialActionPostCoordinator extends ChangeNotifier {
 
   // Semantic Visual State - App-wide UI consistency
   Color getActionButtonColor() {
-    if (_isRecording) return const Color(0xFFFF0080);
+    if (_isRecording) return const Color(0xFFFF0055);
     if (_isProcessing) return Colors.orange;
     if (_needsMediaSelection) return Colors.blue;
-    if (_hasContent) return const Color(0xFFFF0080);
+    if (_hasContent) return const Color(0xFFFF0055);
     return Colors.white.withValues(alpha: 0.2);
   }
 
@@ -1650,7 +1800,7 @@ class SocialActionPostCoordinator extends ChangeNotifier {
   }
 
   Color getVoiceDictationColor() {
-    if (_isRecording && _isVoiceDictating) return const Color(0xFFFF0080);
+    if (_isRecording && _isVoiceDictating) return const Color(0xFFFF0055);
     if (_isProcessing) return Colors.orange;
     return Colors.white.withValues(alpha: 0.9);
   }
@@ -1707,12 +1857,23 @@ class SocialActionPostCoordinator extends ChangeNotifier {
       }
       return;
     } else if (_hasContent) {
-      // CRITICAL: Use processing state management for post execution
-      await executeWithProcessingState(() async {
-        await finalizeAndExecutePost();
-      });
+      // NEW: Start processing for post execution
+      startProcessing(timeout: Duration(seconds: 30));
+
+      // Execute in background without blocking
+      _executePostInBackground();
     } else {
       await startRecordingWithMode(isVoiceDictation: false);
+    }
+  }
+
+  /// NEW: Background post execution without Future wrapper
+  void _executePostInBackground() async {
+    try {
+      await finalizeAndExecutePost();
+      completeProcessing(success: true);
+    } catch (e) {
+      completeProcessing(success: false, error: e.toString());
     }
   }
 
