@@ -38,21 +38,25 @@ class TripleActionButtonSystem extends StatelessWidget {
         return Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            // Left Save Button (animated visibility)
-            AnimatedBuilder(
-              animation: leftButtonController,
-              builder: (context, child) {
-                return Transform.scale(
-                  scale: leftButtonController.value,
-                  child: Opacity(
-                    opacity: leftButtonController.value,
-                    child: _LeftSaveButton(
-                      coordinator: coordinator,
-                      onSavePost: onSavePost,
+            // Left Save Button (animated visibility) - Fixed width container
+            SizedBox(
+              width: 72, // Fixed width to prevent shifting
+              height: 72,
+              child: AnimatedBuilder(
+                animation: leftButtonController,
+                builder: (context, child) {
+                  return Transform.scale(
+                    scale: leftButtonController.value,
+                    child: Opacity(
+                      opacity: leftButtonController.value,
+                      child: _LeftSaveButton(
+                        coordinator: coordinator,
+                        onSavePost: onSavePost,
+                      ),
                     ),
-                  ),
-                );
-              },
+                  );
+                },
+              ),
             ),
 
             const SizedBox(width: 20),
@@ -66,22 +70,26 @@ class TripleActionButtonSystem extends StatelessWidget {
 
             const SizedBox(width: 20),
 
-            // Right Action Button (animated visibility)
-            AnimatedBuilder(
-              animation: rightButtonController,
-              builder: (context, child) {
-                return Transform.scale(
-                  scale: rightButtonController.value,
-                  child: Opacity(
-                    opacity: rightButtonController.value,
-                    child: _RightActionButton(
-                      coordinator: coordinator,
-                      onConfirmPost: onConfirmPost,
-                      onAddMedia: onAddMedia,
+            // Right Action Button (animated visibility) - Fixed width container
+            SizedBox(
+              width: 72, // Fixed width to prevent shifting
+              height: 72,
+              child: AnimatedBuilder(
+                animation: rightButtonController,
+                builder: (context, child) {
+                  return Transform.scale(
+                    scale: rightButtonController.value,
+                    child: Opacity(
+                      opacity: rightButtonController.value,
+                      child: _RightActionButton(
+                        coordinator: coordinator,
+                        onConfirmPost: onConfirmPost,
+                        onAddMedia: onAddMedia,
+                      ),
                     ),
-                  ),
-                );
-              },
+                  );
+                },
+              ),
             ),
           ],
         );
@@ -194,10 +202,8 @@ class _RightActionButton extends StatelessWidget {
   Widget build(BuildContext context) {
     // Only show if needed
     if (!coordinator.needsMediaSelection && !coordinator.isReadyForExecution) {
-      return const SizedBox(width: 72, height: 72);
+      return const SizedBox.shrink();
     }
-
-    final buttonColor = _getButtonColor();
 
     return GestureDetector(
       onTap: () {
@@ -214,30 +220,21 @@ class _RightActionButton extends StatelessWidget {
         height: 72,
         decoration: BoxDecoration(
           shape: BoxShape.circle,
-          color: buttonColor,
-          boxShadow: [
-            BoxShadow(
-              color: buttonColor.withValues(alpha: 0.3),
-              blurRadius: 8,
-              spreadRadius: 2,
-            ),
-          ],
+          color: const Color(0xFFFF0080).withOpacity(0.1), // Translucent pink
+          border: Border.all(
+            color: const Color(0xFFFF0080).withOpacity(0.3), // Pink border
+            width: 2.0,
+          ),
         ),
         child: Center(
           child: Icon(
             _getButtonIcon(),
-            color: Colors.white,
+            color: const Color(0xFFFF0080), // Pink icon
             size: 24,
           ),
         ),
       ),
     );
-  }
-
-  Color _getButtonColor() {
-    if (coordinator.needsMediaSelection) return Colors.blue;
-    if (coordinator.isReadyForExecution) return Colors.green;
-    return Colors.transparent;
   }
 
   IconData _getButtonIcon() {
@@ -261,10 +258,8 @@ class _LeftSaveButton extends StatelessWidget {
   Widget build(BuildContext context) {
     // Only show if there's content to save
     if (!_canSavePost()) {
-      return const SizedBox(width: 72, height: 72);
+      return const SizedBox.shrink();
     }
-
-    final buttonColor = Colors.grey.shade600;
 
     return GestureDetector(
       onTap: () {
@@ -276,19 +271,16 @@ class _LeftSaveButton extends StatelessWidget {
         height: 72,
         decoration: BoxDecoration(
           shape: BoxShape.circle,
-          color: buttonColor,
-          boxShadow: [
-            BoxShadow(
-              color: buttonColor.withValues(alpha: 0.3),
-              blurRadius: 8,
-              spreadRadius: 2,
-            ),
-          ],
+          color: const Color(0xFFFF0080).withOpacity(0.1), // Translucent pink
+          border: Border.all(
+            color: const Color(0xFFFF0080).withOpacity(0.3), // Pink border
+            width: 2.0,
+          ),
         ),
         child: const Center(
-          child: const Icon(
+          child: Icon(
             Icons.save,
-            color: Colors.white,
+            color: Color(0xFFFF0080), // Pink icon
             size: 24,
           ),
         ),

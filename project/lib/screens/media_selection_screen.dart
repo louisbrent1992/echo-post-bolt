@@ -989,7 +989,7 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
             margin: const EdgeInsets.all(16),
             decoration: BoxDecoration(
               color: Colors.black.withValues(alpha: 0.8),
-              borderRadius: BorderRadius.circular(16),
+              // Remove borderRadius to make corners square
               border: Border.all(
                 color: Colors.white.withValues(alpha: 0.2),
                 width: 1,
@@ -1009,10 +1009,7 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
                 Expanded(
                   flex: 3, // Takes up 3/4 of the available space
                   child: ClipRRect(
-                    borderRadius: const BorderRadius.only(
-                      topLeft: Radius.circular(16),
-                      topRight: Radius.circular(16),
-                    ),
+                    // Remove borderRadius to make corners square
                     child: Stack(
                       fit: StackFit.expand,
                       children: [
@@ -1073,98 +1070,38 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
                 // Post content area (text and hashtags)
                 Expanded(
                   flex: 1, // Takes up 1/4 of the available space
-                  child: Padding(
-                    padding: const EdgeInsets.all(16),
+                  child: Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.bottomCenter,
+                        end: Alignment.topCenter,
+                        colors: [
+                          Colors.black.withValues(alpha: 0.8),
+                          Colors.transparent,
+                        ],
+                      ),
+                    ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        // Post text
-                        if (widget.action.content.text.isNotEmpty) ...[
-                          Expanded(
-                            child: SingleChildScrollView(
-                              child: Text(
-                                widget.action.content.text,
-                                style: const TextStyle(
-                                  fontSize: 16,
-                                  height: 1.4,
-                                  color: Colors.white,
-                                ),
-                              ),
-                            ),
+                        Text(
+                          _getFormatDisplayName(
+                              media['mime_type'] ?? 'image/jpeg'),
+                          style: const TextStyle(
+                            color: Colors.white70,
+                            fontSize: 10,
                           ),
-                          if (widget.action.content.hashtags.isNotEmpty)
-                            const SizedBox(height: 12),
-                        ],
-
-                        // Hashtags
-                        if (widget.action.content.hashtags.isNotEmpty) ...[
-                          Wrap(
-                            spacing: 6,
-                            runSpacing: 6,
-                            children: widget.action.content.hashtags.map((tag) {
-                              return Container(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 8, vertical: 4),
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFFFF0080)
-                                      .withValues(alpha: 0.2),
-                                  borderRadius: BorderRadius.circular(12),
-                                  border: Border.all(
-                                    color: const Color(0xFFFF0080)
-                                        .withValues(alpha: 0.5),
-                                  ),
-                                ),
-                                child: Text(
-                                  '#$tag',
-                                  style: const TextStyle(
-                                    color: Color(0xFFFF0080),
-                                    fontSize: 14,
-                                    fontWeight: FontWeight.w500,
-                                  ),
-                                ),
-                              );
-                            }).toList(),
+                        ),
+                        const Spacer(),
+                        Text(
+                          _formatDate(media['device_metadata']?['creation_time']
+                              as String?),
+                          style: const TextStyle(
+                            color: Colors.white70,
+                            fontSize: 9,
                           ),
-                        ],
-
-                        // If no content, show placeholder
-                        if (widget.action.content.text.isEmpty &&
-                            widget.action.content.hashtags.isEmpty) ...[
-                          Expanded(
-                            child: Center(
-                              child: Container(
-                                padding: const EdgeInsets.all(16),
-                                decoration: BoxDecoration(
-                                  color: Colors.orange.withValues(alpha: 0.2),
-                                  borderRadius: BorderRadius.circular(8),
-                                  border: Border.all(
-                                    color: Colors.orange.withValues(alpha: 0.5),
-                                  ),
-                                ),
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Icon(
-                                      Icons.edit,
-                                      color: Colors.orange.shade300,
-                                      size: 20,
-                                    ),
-                                    const SizedBox(width: 8),
-                                    Flexible(
-                                      child: Text(
-                                        'Add caption on review page',
-                                        style: TextStyle(
-                                          color: Colors.orange.shade300,
-                                          fontSize: 14,
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ),
-                          ),
-                        ],
+                        ),
                       ],
                     ),
                   ),
@@ -1213,12 +1150,12 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
     }
 
     return SliverPadding(
-      padding: const EdgeInsets.all(8),
+      padding: EdgeInsets.zero, // Remove padding
       sliver: SliverGrid(
         gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
           crossAxisCount: 2, // Changed to 2 columns for better video preview
-          crossAxisSpacing: 8,
-          mainAxisSpacing: 8,
+          crossAxisSpacing: 0, // Remove spacing
+          mainAxisSpacing: 0, // Remove spacing
           childAspectRatio: 0.8, // Adjusted for video info display
         ),
         delegate: SliverChildBuilderDelegate(
@@ -1266,166 +1203,37 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
       },
       child: Container(
         decoration: BoxDecoration(
-          border: Border.all(
-            color: isSelected
-                ? const Color(0xFFFF0080)
-                : Colors.white.withValues(alpha: 0.3),
-            width: isSelected ? 3 : 1,
-          ),
-          borderRadius: BorderRadius.circular(8),
-        ),
+            // Remove border to make it sleeker
+            ),
         child: Stack(
           fit: StackFit.expand,
           children: [
             // Enhanced image thumbnail with validation
             ClipRRect(
-              borderRadius: BorderRadius.circular(8),
+              // Remove borderRadius to make corners square
               child: FutureBuilder<MediaValidationResult>(
                 future: _mediaCoordinator.validateAndRecoverMediaURI(
                   media['file_uri'] as String,
                   config: MediaValidationConfig.production,
                 ),
-                builder: (context, validationSnapshot) {
-                  if (validationSnapshot.connectionState ==
-                      ConnectionState.waiting) {
-                    return Container(
-                      color: const Color(0xFF2A2A2A),
-                      child: const Center(
-                        child: SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: Color(0xFFFF0080),
-                          ),
-                        ),
-                      ),
+                builder: (context, snapshot) {
+                  if (snapshot.connectionState == ConnectionState.waiting) {
+                    return const Center(
+                      child: CircularProgressIndicator(),
                     );
                   }
 
-                  final validationResult = validationSnapshot.data;
-
-                  if (validationResult == null || !validationResult.isValid) {
-                    // Hide broken images instead of showing broken icon
-                    // This effectively excludes stale references from display
-                    return Container(
-                      color: const Color(0xFF2A2A2A),
-                      child: const SizedBox.shrink(),
+                  if (!snapshot.hasData || !snapshot.data!.isValid) {
+                    return const Center(
+                      child: Icon(Icons.error, color: Colors.red),
                     );
                   }
 
-                  // Use the effective URI (recovered or original)
-                  final effectiveUri = validationResult.effectiveUri;
-
-                  return Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      Image.file(
-                        File(Uri.parse(effectiveUri).path),
-                        fit: BoxFit.cover,
-                        errorBuilder: (context, error, stackTrace) {
-                          // Final fallback - hide completely if still broken
-                          return const SizedBox.shrink();
-                        },
-                      ),
-                      // Show recovery indicator if media was recovered
-                      if (validationResult.wasRecovered)
-                        Positioned(
-                          top: 4,
-                          left: 4,
-                          child: Container(
-                            padding: const EdgeInsets.all(2),
-                            decoration: BoxDecoration(
-                              color: Colors.green.withValues(alpha: 0.8),
-                              shape: BoxShape.circle,
-                              border: Border.all(color: Colors.white, width: 1),
-                            ),
-                            child: const Icon(
-                              Icons.refresh,
-                              color: Colors.white,
-                              size: 8,
-                            ),
-                          ),
-                        ),
-                    ],
+                  return Image.file(
+                    File(Uri.parse(snapshot.data!.effectiveUri).path),
+                    fit: BoxFit.cover,
                   );
                 },
-              ),
-            ),
-
-            // Image info overlay
-            Positioned(
-              bottom: 0,
-              left: 0,
-              right: 0,
-              child: Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  borderRadius: const BorderRadius.only(
-                    bottomLeft: Radius.circular(8),
-                    bottomRight: Radius.circular(8),
-                  ),
-                  gradient: LinearGradient(
-                    begin: Alignment.bottomCenter,
-                    end: Alignment.topCenter,
-                    colors: [
-                      Colors.black.withValues(alpha: 0.8),
-                      Colors.transparent,
-                    ],
-                  ),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    // Resolution and file size
-                    Row(
-                      children: [
-                        Text(
-                          '${media['device_metadata']?['width'] ?? 0}×${media['device_metadata']?['height'] ?? 0}',
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 11,
-                          ),
-                        ),
-                        const Spacer(),
-                        Text(
-                          _formatFileSize(media['device_metadata']
-                                  ?['file_size_bytes'] ??
-                              0),
-                          style: const TextStyle(
-                            color: Colors.white70,
-                            fontSize: 10,
-                          ),
-                        ),
-                      ],
-                    ),
-
-                    // Format and date
-                    const SizedBox(height: 2),
-                    Row(
-                      children: [
-                        Text(
-                          _getFormatDisplayName(
-                              media['mime_type'] ?? 'image/jpeg'),
-                          style: const TextStyle(
-                            color: Colors.white70,
-                            fontSize: 10,
-                          ),
-                        ),
-                        const Spacer(),
-                        Text(
-                          _formatDate(media['device_metadata']?['creation_time']
-                              as String?),
-                          style: const TextStyle(
-                            color: Colors.white70,
-                            fontSize: 9,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
               ),
             ),
 

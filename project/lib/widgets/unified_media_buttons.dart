@@ -41,7 +41,9 @@ class UnifiedMediaButtons extends StatelessWidget {
               onPressed: onDirectorySelection,
               style: OutlinedButton.styleFrom(
                 foregroundColor: const Color(0xFFFF0080),
-                side: const BorderSide(color: Color(0xFFFF0080)),
+                side:
+                    BorderSide(color: const Color(0xFFFF0080).withOpacity(0.3)),
+                backgroundColor: const Color(0xFFFF0080).withOpacity(0.1),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(spacing2),
                 ),
@@ -65,7 +67,9 @@ class UnifiedMediaButtons extends StatelessWidget {
               onPressed: onMediaSelection,
               style: OutlinedButton.styleFrom(
                 foregroundColor: const Color(0xFFFF0080),
-                side: const BorderSide(color: Color(0xFFFF0080)),
+                side:
+                    BorderSide(color: const Color(0xFFFF0080).withOpacity(0.3)),
+                backgroundColor: const Color(0xFFFF0080).withOpacity(0.1),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(spacing2),
                 ),

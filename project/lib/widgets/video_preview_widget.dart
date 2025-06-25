@@ -243,14 +243,8 @@ class _VideoPreviewWidgetState extends State<VideoPreviewWidget> {
       onTap: widget.onTap,
       child: Container(
         decoration: BoxDecoration(
-          // border: Border.all(
-          //   color: widget.isSelected
-          //       ? const Color(0xFFFF0080)
-          //       : Colors.white.withValues(alpha: 0.3),
-          //   width: widget.isSelected ? 3 : 1,
-          // ),
-          borderRadius: BorderRadius.circular(8),
-        ),
+            // Remove borderRadius to make corners square
+            ),
         child: Stack(
           children: [
             // Video thumbnail/placeholder
@@ -259,7 +253,7 @@ class _VideoPreviewWidgetState extends State<VideoPreviewWidget> {
               height: double.infinity,
               decoration: BoxDecoration(
                 color: const Color(0xFF2A2A2A),
-                borderRadius: BorderRadius.circular(8),
+                // Remove borderRadius to make corners square
               ),
               child: _buildVideoThumbnail(),
             ),
@@ -272,10 +266,7 @@ class _VideoPreviewWidgetState extends State<VideoPreviewWidget> {
               child: Container(
                 padding: const EdgeInsets.all(8),
                 decoration: BoxDecoration(
-                  borderRadius: const BorderRadius.only(
-                    bottomLeft: Radius.circular(8),
-                    bottomRight: Radius.circular(8),
-                  ),
+                  // Remove borderRadius to make corners square
                   gradient: LinearGradient(
                     begin: Alignment.bottomCenter,
                     end: Alignment.topCenter,

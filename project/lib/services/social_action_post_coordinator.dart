@@ -179,7 +179,8 @@ class SocialActionPostCoordinator extends ChangeNotifier {
   String? get currentRecordingPath => _currentRecordingPath;
 
   // Triple Action Button System visibility getters
-  bool get shouldShowLeftButton => hasContent || hasMedia;
+  bool get shouldShowLeftButton =>
+      (hasContent || hasMedia) && !isRecording && !isProcessing;
   bool get shouldShowRightButton => needsMediaSelection || isReadyForExecution;
 
   /// Check if media requirement is met based on selected platforms

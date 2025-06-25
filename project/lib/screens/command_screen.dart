@@ -1372,6 +1372,7 @@ class _CommandScreenState extends State<CommandScreen>
           return Scaffold(
             body: AnimatedBuilder(
               animation: _backgroundAnimation,
+              // Build gradient container only; pass heavy child via AnimatedBuilder's child parameter
               builder: (context, child) {
                 return Container(
                   decoration: BoxDecoration(
@@ -1388,11 +1389,13 @@ class _CommandScreenState extends State<CommandScreen>
                       ],
                     ),
                   ),
-                  child: SafeArea(
-                    child: _buildReviewStyleLayout(coordinator),
-                  ),
+                  child: child, // Use prebuilt child
                 );
               },
+              // Build once per coordinator change, not every animation tick
+              child: SafeArea(
+                child: _buildReviewStyleLayout(coordinator),
+              ),
             ),
           );
         },

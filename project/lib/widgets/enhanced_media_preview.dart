@@ -367,14 +367,12 @@ class _EnhancedMediaPreviewState extends State<EnhancedMediaPreview> {
         height: 250,
         decoration: BoxDecoration(
           color: const Color(0xFF2A2A2A),
-          borderRadius: BorderRadius.circular(8),
         ),
         child: Stack(
           fit: StackFit.expand,
           children: [
             // Media content
             ClipRRect(
-              borderRadius: BorderRadius.circular(8),
               child: isVideo ? _buildVideoDisplay() : _buildImageDisplay(),
             ),
 

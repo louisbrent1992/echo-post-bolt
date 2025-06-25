@@ -274,11 +274,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
       margin: const EdgeInsets.only(bottom: 16),
       decoration: BoxDecoration(
         color: Colors.black.withValues(alpha: 0.6),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: Colors.white.withValues(alpha: 0.1),
-          width: 1,
-        ),
+        borderRadius: BorderRadius.circular(12),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.3),
@@ -290,7 +286,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
       child: InkWell(
         onTap: () =>
             _showActionDetails(context, action, status, errorLog, docId),
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(12),
         child: Padding(
           padding: const EdgeInsets.all(16.0),
           child: Column(
@@ -306,7 +302,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
                     ),
                     decoration: BoxDecoration(
                       color: statusColor.withValues(alpha: 0.2),
-                      borderRadius: BorderRadius.circular(20),
+                      borderRadius: BorderRadius.circular(12),
                       border: Border.all(
                         color: statusColor.withValues(alpha: 0.5),
                         width: 1,
@@ -351,13 +347,10 @@ class _HistoryScreenState extends State<HistoryScreen> {
                 children: [
                   // Media thumbnail
                   if (hasMedia)
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(12),
-                      child: SizedBox(
-                        width: 80,
-                        height: 80,
-                        child: _buildMediaThumbnail(action.content.media.first),
-                      ),
+                    SizedBox(
+                      width: 100,
+                      height: 100,
+                      child: _buildMediaThumbnail(action.content.media.first),
                     ),
                   if (hasMedia) const SizedBox(width: 16),
 
@@ -404,6 +397,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
                                 border: Border.all(
                                   color: _getPlatformColor(platform)
                                       .withValues(alpha: 0.5),
+                                  width: 1,
                                 ),
                               ),
                               child: Row(
@@ -411,16 +405,16 @@ class _HistoryScreenState extends State<HistoryScreen> {
                                 children: [
                                   Icon(
                                     _getPlatformIcon(platform),
-                                    size: 14,
                                     color: _getPlatformColor(platform),
+                                    size: 14,
                                   ),
                                   const SizedBox(width: 4),
                                   Text(
-                                    platform.toUpperCase(),
+                                    _getPlatformDisplayName(platform),
                                     style: TextStyle(
                                       color: _getPlatformColor(platform),
-                                      fontSize: 10,
-                                      fontWeight: FontWeight.bold,
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w500,
                                     ),
                                   ),
                                 ],
@@ -505,7 +499,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
       margin: const EdgeInsets.only(bottom: 16),
       decoration: BoxDecoration(
         color: Colors.red.withValues(alpha: 0.1),
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(12),
         border: Border.all(
           color: Colors.red.withValues(alpha: 0.3),
           width: 1,
@@ -580,8 +574,8 @@ class _HistoryScreenState extends State<HistoryScreen> {
                 width: 80,
                 height: 80,
                 decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(8),
+                  color: const Color.fromARGB(128, 255, 255, 255),
+                  borderRadius: BorderRadius.circular(12),
                 ),
                 child: const Center(
                   child: SizedBox(
@@ -610,20 +604,17 @@ class _HistoryScreenState extends State<HistoryScreen> {
               final file = File(Uri.parse(effectiveUri).path);
               return Stack(
                 children: [
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(8),
-                    child: SizedBox(
-                      width: 80,
-                      height: 80,
-                      child: Image.file(
-                        file,
-                        fit: BoxFit.cover, // Ensure full coverage
-                        width: 80,
-                        height: 80,
-                        errorBuilder: (context, error, stackTrace) {
-                          return _buildCustomMediaPlaceholder();
-                        },
-                      ),
+                  SizedBox(
+                    width: 100,
+                    height: 100,
+                    child: Image.file(
+                      file,
+                      fit: BoxFit.cover,
+                      width: 100,
+                      height: 100,
+                      errorBuilder: (context, error, stackTrace) {
+                        return _buildCustomMediaPlaceholder();
+                      },
                     ),
                   ),
                   // Show recovery indicator if media was recovered
@@ -660,43 +651,21 @@ class _HistoryScreenState extends State<HistoryScreen> {
   /// Custom EchoPost-themed placeholder for unavailable media
   Widget _buildCustomMediaPlaceholder() {
     return Container(
-      width: 80,
-      height: 80,
+      width: 100,
+      height: 100,
       decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [
-            Color(0xFF2A2A2A),
-            Color(0xFF1A1A1A),
-          ],
-        ),
-        borderRadius: BorderRadius.circular(8),
+        color: const Color(0xFF2A2A2A),
         border: Border.all(
-          color: Colors.white.withValues(alpha: 0.1),
-          width: 1,
+          color: const Color(0xFFFF0080).withOpacity(0.3),
+          width: 2,
         ),
       ),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(
-            Icons.mic_none,
-            color: const Color(0xFFFF0080).withValues(alpha: 0.6),
-            size: 24,
-          ),
-          const SizedBox(height: 4),
-          Text(
-            'Media\nUnavailable',
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              color: Colors.white.withValues(alpha: 0.4),
-              fontSize: 8,
-              height: 1.1,
-              fontWeight: FontWeight.w500,
-            ),
-          ),
-        ],
+      child: const Center(
+        child: Icon(
+          Icons.mic, // Match login screen icon
+          color: Color(0xFFFF0080),
+          size: 60,
+        ),
       ),
     );
   }
@@ -827,7 +796,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
                       ),
                       decoration: BoxDecoration(
                         color: _getStatusColor(status).withValues(alpha: 0.2),
-                        borderRadius: BorderRadius.circular(20),
+                        borderRadius: BorderRadius.circular(12),
                         border: Border.all(
                           color: _getStatusColor(status).withValues(alpha: 0.5),
                         ),
@@ -964,7 +933,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
                                       borderRadius: BorderRadius.circular(16),
                                       border: Border.all(
                                         color:
-                                            Colors.white.withValues(alpha: 0.1),
+                                            Color.fromRGBO(255, 255, 255, 0.1),
                                         width: 1,
                                       ),
                                     ),
@@ -1121,7 +1090,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
                           decoration: BoxDecoration(
                             color: _getPlatformColor(platform)
                                 .withValues(alpha: 0.2),
-                            borderRadius: BorderRadius.circular(20),
+                            borderRadius: BorderRadius.circular(12),
                             border: Border.all(
                               color: _getPlatformColor(platform)
                                   .withValues(alpha: 0.5),
@@ -1344,7 +1313,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
     } catch (e) {
       scaffoldMessenger.showSnackBar(
         SnackBar(
-          content: Text('Retry failed: $e'),
+          content: Text('Failed to retry post: $e'),
           backgroundColor: Colors.red,
         ),
       );
@@ -1711,6 +1680,21 @@ class _HistoryScreenState extends State<HistoryScreen> {
     }
   }
 
+  String _getPlatformDisplayName(String platform) {
+    switch (platform) {
+      case 'facebook':
+        return 'Facebook';
+      case 'instagram':
+        return 'Instagram';
+      case 'twitter':
+        return 'Twitter';
+      case 'tiktok':
+        return 'TikTok';
+      default:
+        return platform.toUpperCase();
+    }
+  }
+
   /// Validates and recovers media for all posts in the history
   Future<void> _validateAllPostsMedia(BuildContext context) async {
     final mediaCoordinator =
@@ -1860,7 +1844,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
                 postsUpdated++;
               }
             } catch (e) {
-              // Continue with other posts if one fails to update
+              // Handle update error
             }
           }
         }
@@ -1868,74 +1852,19 @@ class _HistoryScreenState extends State<HistoryScreen> {
 
       Navigator.pop(context); // Close progress dialog
 
-      // Show results
-      final hasResults = recoveredItems > 0 || failedItems > 0;
-      if (hasResults) {
-        showDialog(
-          context: context,
-          builder: (context) => AlertDialog(
-            backgroundColor: const Color(0xFF2A2A2A),
-            title: const Text(
-              'Media Validation Results',
-              style: TextStyle(color: Colors.white),
-            ),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Total media items: $totalMediaItems',
-                  style: TextStyle(color: Colors.white.withValues(alpha: 0.9)),
-                ),
-                const SizedBox(height: 8),
-                if (recoveredItems > 0)
-                  Text(
-                    'Recovered: $recoveredItems',
-                    style: const TextStyle(color: Colors.green),
-                  ),
-                if (failedItems > 0)
-                  Text(
-                    'Failed to recover: $failedItems',
-                    style: const TextStyle(color: Colors.red),
-                  ),
-                if (postsUpdated > 0) ...[
-                  const SizedBox(height: 8),
-                  Text(
-                    'Posts updated: $postsUpdated',
-                    style: const TextStyle(color: Colors.blue),
-                  ),
-                ],
-              ],
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text(
-                  'OK',
-                  style: TextStyle(color: Color(0xFFFF0080)),
-                ),
-              ),
-            ],
+      scaffoldMessenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            'Validation complete: $totalMediaItems items checked, $recoveredItems recovered, $failedItems failed',
           ),
-        );
-      } else {
-        scaffoldMessenger.showSnackBar(
-          const SnackBar(
-            content: Text('All media files are valid - no recovery needed'),
-            backgroundColor: Colors.green,
-          ),
-        );
-      }
-
-      // Refresh the screen to show updated media
-      if (mounted) {
-        setState(() {});
-      }
+          backgroundColor: Colors.green,
+        ),
+      );
     } catch (e) {
       Navigator.pop(context); // Close progress dialog
       scaffoldMessenger.showSnackBar(
         SnackBar(
-          content: Text('Media validation failed: $e'),
+          content: Text('Failed to validate media: $e'),
           backgroundColor: Colors.red,
         ),
       );
