@@ -2561,4 +2561,99 @@ class SocialActionPostCoordinator extends ChangeNotifier {
       );
     }
   }
+
+  /// Load historical post back into coordinator for editing
+  /// This surgically rehydrates coordinator state without breaking existing flows
+  Future<void> loadHistoricalPost(SocialAction historicalAction) async {
+    if (_isDisposed) {
+      throw StateError('Cannot load historical post - coordinator is disposed');
+    }
+
+    try {
+      if (kDebugMode) {
+        print(
+            '🔄 Loading historical post for editing: ${historicalAction.actionId}');
+        print('   Original platforms: ${historicalAction.platforms}');
+        print('   Media count: ${historicalAction.content.media.length}');
+        print('   Text: "${historicalAction.content.text}"');
+        print('   Hashtags: ${historicalAction.content.hashtags}');
+      }
+
+      // Step 1: Validate and recover media URIs if present
+      SocialAction validatedAction = historicalAction;
+      if (historicalAction.content.media.isNotEmpty) {
+        validatedAction = await validateAndRecoverPostMedia(
+          historicalAction,
+          config: kDebugMode
+              ? MediaValidationConfig.debug
+              : MediaValidationConfig.production,
+        );
+
+        if (kDebugMode) {
+          print('📱 Media validation completed');
+          print(
+              '   Original media count: ${historicalAction.content.media.length}');
+          print(
+              '   Validated media count: ${validatedAction.content.media.length}');
+        }
+      }
+
+      // Step 2: Generate new action ID for editing (preserves original as draft)
+      final editingActionId = 'edit_${DateTime.now().millisecondsSinceEpoch}';
+      final editingAction = validatedAction.copyWith(
+        actionId: editingActionId,
+        createdAt: DateTime.now().toIso8601String(),
+      );
+
+      // Step 3: Sync coordinator state with validated action
+      _currentPost = editingAction;
+      _currentTranscription = editingAction.internal.originalTranscription;
+
+      // Step 4: Clear pre-selected media and sync with post media
+      _preSelectedMedia.clear();
+      if (editingAction.content.media.isNotEmpty) {
+        _preSelectedMedia = List.from(editingAction.content.media);
+      }
+
+      // Step 5: Update coordinator state flags
+      _hasContent = editingAction.content.text.isNotEmpty ||
+          editingAction.content.hashtags.isNotEmpty;
+      _hasMedia = editingAction.content.media.isNotEmpty;
+      _needsMediaSelection = false; // Editing existing post
+      _hasError = false;
+      _errorMessage = null;
+      _isRecording = false;
+      _isProcessing = false;
+      _isVoiceDictating = false;
+      _isTransitioning = false;
+
+      // Step 6: Ensure coordinator is in clean editing state
+      _endTextEditingSession();
+      _endHashtagEditingSession();
+      _statusTimer?.cancel();
+      _processingWatchdog?.cancel();
+      _temporaryStatus = null;
+
+      // Step 7: Sync media states for consistency
+      _syncMediaStates();
+
+      // Step 8: Notify listeners for UI update
+      _safeNotifyListeners();
+
+      if (kDebugMode) {
+        print('✅ Historical post loaded successfully');
+        print('   Editing action ID: $editingActionId');
+        print('   hasContent: $_hasContent');
+        print('   hasMedia: $_hasMedia');
+        print('   Current platforms: ${_currentPost.platforms}');
+        print('   Ready for editing on CommandScreen');
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ Failed to load historical post: $e');
+      }
+      setError('Failed to load post for editing: $e');
+      rethrow;
+    }
+  }
 }
