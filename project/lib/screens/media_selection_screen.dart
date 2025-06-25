@@ -213,7 +213,7 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
               ],
             ),
             duration: Duration(seconds: 2),
-            backgroundColor: Color(0xFFFF0080),
+            backgroundColor: Color(0xFFFF0055),
           ),
         );
       }
@@ -450,22 +450,15 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
       ),
       body: Container(
         decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [
-              Colors.black,
-              Color(0xFF1A1A1A),
-            ],
-          ),
+          color: Colors.black, // Set to solid color
         ),
         child: SafeArea(
           child: _isLoading
               ? const Center(
-                  child: CircularProgressIndicator(color: Color(0xFFFF0080)))
+                  child: CircularProgressIndicator(color: Color(0xFFFF0055)))
               : RefreshIndicator(
                   onRefresh: _refreshMedia,
-                  color: const Color(0xFFFF0080),
+                  color: const Color(0xFFFF0055),
                   backgroundColor: Colors.black,
                   child: CustomScrollView(
                     physics: const AlwaysScrollableScrollPhysics(),
@@ -489,13 +482,13 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
                                 children: [
                                   const Icon(
                                     Icons.search,
-                                    color: Color(0xFFFF0080),
+                                    color: Color(0xFFFF0055),
                                     size: 18,
                                   ),
                                   const SizedBox(width: 8),
                                   Expanded(
                                     child: Text(
-                                      'Found ${_mediaCandidates.length} result${_mediaCandidates.length == 1 ? '' : 's'} for "${_searchTerms.join(', ')}"',
+                                      'Found \\${_mediaCandidates.length} result\\${_mediaCandidates.length == 1 ? '' : 's'} for "\\${_searchTerms.join(', ')}"',
                                       style: const TextStyle(
                                         fontWeight: FontWeight.bold,
                                         color: Colors.white,
@@ -529,14 +522,14 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
                                           MainAxisAlignment.center,
                                       children: [
                                         Icon(
-                                          Icons.photo_library_outlined,
+                                          Icons.search_off,
                                           size: 64,
                                           color: Colors.white
                                               .withValues(alpha: 0.6),
                                         ),
                                         const SizedBox(height: 16),
                                         const Text(
-                                          'No media available',
+                                          'No media found',
                                           style: TextStyle(
                                             color: Colors.white,
                                             fontSize: 18,
@@ -545,13 +538,12 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
                                         ),
                                         const SizedBox(height: 8),
                                         Text(
-                                          'Pull down to refresh and scan for new files',
+                                          'Try adjusting your search or filters',
                                           style: TextStyle(
                                             color: Colors.white
                                                 .withValues(alpha: 0.7),
                                             fontSize: 14,
                                           ),
-                                          textAlign: TextAlign.center,
                                         ),
                                       ],
                                     ),
@@ -570,7 +562,7 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
                                     ? _confirmSelection
                                     : null,
                                 style: ElevatedButton.styleFrom(
-                                  backgroundColor: const Color(0xFFFF0080),
+                                  backgroundColor: const Color(0xFFFF0055),
                                   foregroundColor: Colors.white,
                                   padding:
                                       const EdgeInsets.symmetric(vertical: 16),
@@ -609,12 +601,12 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         decoration: BoxDecoration(
           color: isCustomEnabled
-              ? const Color(0xFFFF0080).withValues(alpha: 0.1)
+              ? const Color(0xFFFF0055).withValues(alpha: 0.1)
               : Colors.grey.withValues(alpha: 0.1),
           borderRadius: BorderRadius.circular(20),
           border: Border.all(
             color: isCustomEnabled
-                ? const Color(0xFFFF0080).withValues(alpha: 0.3)
+                ? const Color(0xFFFF0055).withValues(alpha: 0.3)
                 : Colors.grey.withValues(alpha: 0.3),
           ),
         ),
@@ -624,7 +616,7 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
             Icon(
               isCustomEnabled ? Icons.folder_open : Icons.photo_library,
               size: 16,
-              color: isCustomEnabled ? const Color(0xFFFF0080) : Colors.white,
+              color: isCustomEnabled ? const Color(0xFFFF0055) : Colors.white,
             ),
             const SizedBox(width: 8),
             Text(
@@ -632,7 +624,7 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
                   ? 'Searching $enabledCount custom director${enabledCount == 1 ? 'y' : 'ies'}'
                   : 'Searching photo albums',
               style: TextStyle(
-                color: isCustomEnabled ? const Color(0xFFFF0080) : Colors.white,
+                color: isCustomEnabled ? const Color(0xFFFF0055) : Colors.white,
                 fontSize: 12,
                 fontWeight: FontWeight.w500,
               ),
@@ -641,7 +633,7 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
             Icon(
               Icons.edit,
               size: 14,
-              color: isCustomEnabled ? const Color(0xFFFF0080) : Colors.white,
+              color: isCustomEnabled ? const Color(0xFFFF0055) : Colors.white,
             ),
           ],
         ),
@@ -695,7 +687,7 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
                 ],
               ),
               duration: Duration(seconds: 2),
-              backgroundColor: Color(0xFFFF0080),
+              backgroundColor: Color(0xFFFF0055),
             ),
           );
         }
@@ -753,7 +745,7 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
               const Icon(
                 Icons.search,
                 size: 18,
-                color: Color(0xFFFF0080),
+                color: Color(0xFFFF0055),
               ),
               const SizedBox(width: 8),
               const Text(
@@ -785,7 +777,7 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
                     ),
                     focusedBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(8),
-                      borderSide: const BorderSide(color: Color(0xFFFF0080)),
+                      borderSide: const BorderSide(color: Color(0xFFFF0055)),
                     ),
                     filled: true,
                     fillColor: Colors.white.withValues(alpha: 0.1),
@@ -799,12 +791,12 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
                             height: 16,
                             child: CircularProgressIndicator(
                               strokeWidth: 2,
-                              color: Color(0xFFFF0080),
+                              color: Color(0xFFFF0055),
                             ),
                           )
                         : IconButton(
                             icon: const Icon(Icons.search,
-                                color: Color(0xFFFF0080)),
+                                color: Color(0xFFFF0055)),
                             onPressed: () {
                               setState(() {
                                 _searchTerms = _searchController.text
@@ -848,7 +840,7 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
               const Icon(
                 Icons.calendar_today,
                 size: 18,
-                color: Color(0xFFFF0080),
+                color: Color(0xFFFF0055),
               ),
               const SizedBox(width: 8),
               const Text(
@@ -878,7 +870,7 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
                   _dateRange != null
                       ? '${_dateRange!.start.toString().split(' ')[0]} - ${_dateRange!.end.toString().split(' ')[0]}'
                       : 'Select dates',
-                  style: const TextStyle(color: Color(0xFFFF0080)),
+                  style: const TextStyle(color: Color(0xFFFF0055)),
                 ),
               ),
               if (_dateRange != null)
@@ -899,7 +891,7 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
               const Icon(
                 Icons.perm_media,
                 size: 18,
-                color: Color(0xFFFF0080),
+                color: Color(0xFFFF0055),
               ),
               const SizedBox(width: 8),
               const Text(
@@ -919,7 +911,7 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
                       : Colors.white.withValues(alpha: 0.7),
                 ),
                 selected: _mediaType == 'photo',
-                selectedColor: const Color(0xFFFF0080),
+                selectedColor: const Color(0xFFFF0055),
                 backgroundColor: Colors.white.withValues(alpha: 0.1),
                 side: BorderSide(color: Colors.white.withValues(alpha: 0.3)),
                 onSelected: (selected) {
@@ -937,7 +929,7 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
                       : Colors.white.withValues(alpha: 0.7),
                 ),
                 selected: _mediaType == 'video',
-                selectedColor: const Color(0xFFFF0080),
+                selectedColor: const Color(0xFFFF0055),
                 backgroundColor: Colors.white.withValues(alpha: 0.1),
                 side: BorderSide(color: Colors.white.withValues(alpha: 0.3)),
                 onSelected: (selected) {
@@ -956,7 +948,7 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
             child: ElevatedButton(
               onPressed: _applyFilters,
               style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFFFF0080),
+                backgroundColor: const Color(0xFFFF0055),
                 foregroundColor: Colors.white,
                 padding: const EdgeInsets.symmetric(vertical: 12),
                 shape: RoundedRectangleBorder(
@@ -1244,7 +1236,7 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
                 left: 8,
                 child: Icon(
                   Icons.check_circle,
-                  color: Color(0xFFFF0080),
+                  color: Color(0xFFFF0055),
                   size: 24,
                 ),
               ),
@@ -1268,7 +1260,7 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
         barrierDismissible: false,
         builder: (context) => const Center(
           child: CircularProgressIndicator(
-            valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFFF0080)),
+            valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFFF0055)),
           ),
         ),
       );

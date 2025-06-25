@@ -175,8 +175,8 @@ class _CenterRecordButton extends StatelessWidget {
 
   Color _getButtonColor() {
     if (coordinator.isProcessing) return Colors.orange;
-    if (coordinator.isRecording) return const Color(0xFFFF0080);
-    return const Color(0xFFFF0080); // Always pink when ready
+    if (coordinator.isRecording) return const Color(0xFFFF0055);
+    return const Color(0xFFFF0055); // Always pink when ready
   }
 
   IconData _getButtonIcon() {
@@ -220,16 +220,16 @@ class _RightActionButton extends StatelessWidget {
         height: 72,
         decoration: BoxDecoration(
           shape: BoxShape.circle,
-          color: const Color(0xFFFF0080).withOpacity(0.1), // Translucent pink
+          color: const Color(0xFFFF0055).withOpacity(0.1), // Translucent pink
           border: Border.all(
-            color: const Color(0xFFFF0080).withOpacity(0.3), // Pink border
+            color: const Color(0xFFFF0055).withOpacity(0.3), // Pink border
             width: 2.0,
           ),
         ),
         child: Center(
           child: Icon(
             _getButtonIcon(),
-            color: const Color(0xFFFF0080), // Pink icon
+            color: const Color(0xFFFF0055), // Pink icon
             size: 24,
           ),
         ),
@@ -271,16 +271,16 @@ class _LeftSaveButton extends StatelessWidget {
         height: 72,
         decoration: BoxDecoration(
           shape: BoxShape.circle,
-          color: const Color(0xFFFF0080).withOpacity(0.1), // Translucent pink
+          color: const Color(0xFFFF0055).withOpacity(0.1), // Translucent pink
           border: Border.all(
-            color: const Color(0xFFFF0080).withOpacity(0.3), // Pink border
+            color: const Color(0xFFFF0055).withOpacity(0.3), // Pink border
             width: 2.0,
           ),
         ),
         child: const Center(
           child: Icon(
             Icons.save,
-            color: Color(0xFFFF0080), // Pink icon
+            color: Color(0xFFFF0055), // Pink icon
             size: 24,
           ),
         ),

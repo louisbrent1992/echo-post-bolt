@@ -1784,10 +1784,10 @@ class SocialActionPostCoordinator extends ChangeNotifier {
 
   // Semantic Visual State - App-wide UI consistency
   Color getActionButtonColor() {
-    if (_isRecording) return const Color(0xFFFF0080);
+    if (_isRecording) return const Color(0xFFFF0055);
     if (_isProcessing) return Colors.orange;
     if (_needsMediaSelection) return Colors.blue;
-    if (_hasContent) return const Color(0xFFFF0080);
+    if (_hasContent) return const Color(0xFFFF0055);
     return Colors.white.withValues(alpha: 0.2);
   }
 
@@ -1800,7 +1800,7 @@ class SocialActionPostCoordinator extends ChangeNotifier {
   }
 
   Color getVoiceDictationColor() {
-    if (_isRecording && _isVoiceDictating) return const Color(0xFFFF0080);
+    if (_isRecording && _isVoiceDictating) return const Color(0xFFFF0055);
     if (_isProcessing) return Colors.orange;
     return Colors.white.withValues(alpha: 0.9);
   }

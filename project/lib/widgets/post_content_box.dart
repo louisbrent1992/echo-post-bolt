@@ -317,7 +317,7 @@ class PostContentBox extends StatelessWidget {
                     isScheduled ? Icons.access_time : Icons.flash_on,
                     color: isScheduled
                         ? Colors.orange.withValues(alpha: 0.8)
-                        : const Color(0xFFFF0080).withValues(alpha: 0.8),
+                        : const Color(0xFFFF0055).withValues(alpha: 0.8),
                     size: 16,
                   ),
                   const SizedBox(width: 8),

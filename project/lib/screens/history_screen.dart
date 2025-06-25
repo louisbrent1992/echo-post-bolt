@@ -96,14 +96,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
       ),
       body: Container(
         decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [
-              Colors.black,
-              Color(0xFF1A1A1A),
-            ],
-          ),
+          color: Colors.black, // Set to solid color
         ),
         child: SafeArea(
           child: StreamBuilder<QuerySnapshot>(
@@ -111,7 +104,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
             builder: (context, snapshot) {
               if (snapshot.connectionState == ConnectionState.waiting) {
                 return const Center(
-                    child: CircularProgressIndicator(color: Color(0xFFFF0080)));
+                    child: CircularProgressIndicator(color: Color(0xFFFF0055)));
               }
 
               if (snapshot.hasError) {
@@ -146,7 +139,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
                       ElevatedButton(
                         onPressed: () => setState(() {}),
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFFFF0080),
+                          backgroundColor: const Color(0xFFFF0055),
                           foregroundColor: Colors.white,
                         ),
                         child: const Text('Retry'),
@@ -201,7 +194,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
                         icon: const Icon(Icons.add),
                         label: const Text('Create Your First Post'),
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFFFF0080),
+                          backgroundColor: const Color(0xFFFF0055),
                           foregroundColor: Colors.white,
                           padding: const EdgeInsets.symmetric(
                             horizontal: 24,
@@ -273,15 +266,12 @@ class _HistoryScreenState extends State<HistoryScreen> {
     return Container(
       margin: const EdgeInsets.only(bottom: 16),
       decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.6),
+        color: Colors.white.withValues(alpha: 0.05),
         borderRadius: BorderRadius.circular(12),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.3),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
-          ),
-        ],
+        border: Border.all(
+          color: const Color(0xFFFF0055).withValues(alpha: 0.3),
+          width: 1.5,
+        ),
       ),
       child: InkWell(
         onTap: () =>
@@ -452,39 +442,25 @@ class _HistoryScreenState extends State<HistoryScreen> {
                 ),
 
               // Error indicator
-              if (status == 'failed' && errorLog != null && errorLog.isNotEmpty)
+              if (status == 'failed')
                 Padding(
                   padding: const EdgeInsets.only(top: 12.0),
-                  child: Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: Colors.red.withValues(alpha: 0.1),
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(
-                        color: Colors.red.withValues(alpha: 0.3),
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.error,
+                        size: 14,
+                        color: Colors.red.withValues(alpha: 0.8),
                       ),
-                    ),
-                    child: Row(
-                      children: [
-                        Icon(
-                          Icons.error_outline,
-                          size: 16,
+                      const SizedBox(width: 6),
+                      Text(
+                        'Failed to post',
+                        style: TextStyle(
                           color: Colors.red.withValues(alpha: 0.8),
+                          fontSize: 12,
                         ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            'Error: ${(errorLog.last as Map<String, dynamic>)['error'] ?? 'Unknown error'}',
-                            style: TextStyle(
-                              color: Colors.red.withValues(alpha: 0.8),
-                              fontSize: 12,
-                            ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                      ],
-                    ),
+                      ),
+                    ],
                   ),
                 ),
             ],
@@ -583,7 +559,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
                     height: 20,
                     child: CircularProgressIndicator(
                       strokeWidth: 2,
-                      color: Color(0xFFFF0080),
+                      color: Color(0xFFFF0055),
                     ),
                   ),
                 ),
@@ -656,14 +632,14 @@ class _HistoryScreenState extends State<HistoryScreen> {
       decoration: BoxDecoration(
         color: const Color(0xFF2A2A2A),
         border: Border.all(
-          color: const Color(0xFFFF0080).withOpacity(0.3),
+          color: const Color(0xFFFF0055).withOpacity(0.3),
           width: 2,
         ),
       ),
       child: const Center(
         child: Icon(
           Icons.mic, // Match login screen icon
-          color: Color(0xFFFF0080),
+          color: Color(0xFFFF0055),
           size: 60,
         ),
       ),
@@ -695,7 +671,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
         children: [
           Icon(
             Icons.mic_none,
-            color: const Color(0xFFFF0080).withValues(alpha: 0.6),
+            color: const Color(0xFFFF0055).withValues(alpha: 0.6),
             size: 64,
           ),
           const SizedBox(height: 16),
@@ -889,7 +865,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
                       ),
                       const SizedBox(height: 12),
                       ClipRRect(
-                        borderRadius: BorderRadius.circular(16),
+                        borderRadius: BorderRadius.zero,
                         child: Consumer<MediaCoordinator>(
                           builder: (context, mediaCoordinator, child) {
                             return FutureBuilder<MediaValidationResult>(
@@ -907,7 +883,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
                                     color: Colors.white.withValues(alpha: 0.1),
                                     child: const Center(
                                       child: CircularProgressIndicator(
-                                        color: Color(0xFFFF0080),
+                                        color: Color(0xFFFF0055),
                                       ),
                                     ),
                                   );
@@ -944,7 +920,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
                                         Icon(
                                           Icons.mic_none,
                                           size: 64,
-                                          color: const Color(0xFFFF0080)
+                                          color: const Color(0xFFFF0055)
                                               .withValues(alpha: 0.6),
                                         ),
                                         const SizedBox(height: 16),
@@ -1043,11 +1019,11 @@ class _HistoryScreenState extends State<HistoryScreen> {
                                     vertical: 6,
                                   ),
                                   decoration: BoxDecoration(
-                                    color: const Color(0xFFFF0080)
+                                    color: const Color(0xFFFF0055)
                                         .withValues(alpha: 0.2),
                                     borderRadius: BorderRadius.circular(16),
                                     border: Border.all(
-                                      color: const Color(0xFFFF0080)
+                                      color: const Color(0xFFFF0055)
                                           .withValues(alpha: 0.5),
                                     ),
                                   ),
@@ -1055,7 +1031,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
                                     '#$tag',
                                     style: const TextStyle(
                                       fontSize: 12,
-                                      color: Color(0xFFFF0080),
+                                      color: Color(0xFFFF0055),
                                       fontWeight: FontWeight.w500,
                                     ),
                                   ),
@@ -1192,7 +1168,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
                           label: const Text('Retry Post'),
                           onPressed: () => _retryPost(context, action),
                           style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFFFF0080),
+                            backgroundColor: const Color(0xFFFF0055),
                             foregroundColor: Colors.white,
                             padding: const EdgeInsets.symmetric(vertical: 16),
                             shape: RoundedRectangleBorder(
@@ -1284,7 +1260,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
       scaffoldMessenger.showSnackBar(
         const SnackBar(
           content: Text('Retrying post...'),
-          backgroundColor: Color(0xFFFF0080),
+          backgroundColor: Color(0xFFFF0055),
         ),
       );
 
@@ -1347,7 +1323,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
         return Theme(
           data: Theme.of(context).copyWith(
             colorScheme: Theme.of(context).colorScheme.copyWith(
-                  primary: const Color(0xFFFF0080),
+                  primary: const Color(0xFFFF0055),
                 ),
           ),
           child: child!,
@@ -1363,7 +1339,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
           return Theme(
             data: Theme.of(context).copyWith(
               colorScheme: Theme.of(context).colorScheme.copyWith(
-                    primary: const Color(0xFFFF0080),
+                    primary: const Color(0xFFFF0055),
                   ),
             ),
             child: child!,
@@ -1631,7 +1607,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
       case 'failed':
         return Colors.red;
       default:
-        return const Color(0xFFFF0080);
+        return const Color(0xFFFF0055);
     }
   }
 
@@ -1746,7 +1722,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const CircularProgressIndicator(color: Color(0xFFFF0080)),
+            const CircularProgressIndicator(color: Color(0xFFFF0055)),
             const SizedBox(height: 16),
             Text(
               'Validating media files...',

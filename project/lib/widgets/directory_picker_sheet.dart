@@ -28,7 +28,7 @@ class DirectoryPickerSheet extends StatelessWidget {
               children: [
                 const Icon(
                   Icons.folder_open,
-                  color: Color(0xFFFF0080),
+                  color: Color(0xFFFF0055),
                   size: 24,
                 ),
                 const SizedBox(width: 12),
@@ -92,7 +92,7 @@ class DirectoryPickerSheet extends StatelessWidget {
                   return ListTile(
                     leading: const Icon(
                       Icons.folder,
-                      color: Color(0xFFFF0080),
+                      color: Color(0xFFFF0055),
                     ),
                     title: Text(
                       name,
@@ -144,13 +144,13 @@ class DirectoryPickerSheet extends StatelessWidget {
                   label: const Text('Enter Custom Path'),
                   style: ElevatedButton.styleFrom(
                     backgroundColor:
-                        const Color(0xFFFF0080).withAlpha((0.1 * 255).round()),
-                    foregroundColor: const Color(0xFFFF0080),
+                        const Color(0xFFFF0055).withAlpha((0.1 * 255).round()),
+                    foregroundColor: const Color(0xFFFF0055),
                     padding: const EdgeInsets.symmetric(vertical: 12),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(8),
                       side: BorderSide(
-                          color: const Color(0xFFFF0080)
+                          color: const Color(0xFFFF0055)
                               .withAlpha((0.3 * 255).round())),
                     ),
                   ),
@@ -200,7 +200,7 @@ class DirectoryPickerSheet extends StatelessWidget {
                       color: Colors.white.withAlpha((0.3 * 255).round())),
                 ),
                 focusedBorder: const OutlineInputBorder(
-                  borderSide: BorderSide(color: Color(0xFFFF0080)),
+                  borderSide: BorderSide(color: Color(0xFFFF0055)),
                 ),
               ),
             ),
@@ -222,7 +222,7 @@ class DirectoryPickerSheet extends StatelessWidget {
                       color: Colors.white.withAlpha((0.3 * 255).round())),
                 ),
                 focusedBorder: const OutlineInputBorder(
-                  borderSide: BorderSide(color: Color(0xFFFF0080)),
+                  borderSide: BorderSide(color: Color(0xFFFF0055)),
                 ),
               ),
               maxLines: 2,
@@ -247,7 +247,7 @@ class DirectoryPickerSheet extends StatelessWidget {
               }
             },
             style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFFFF0080),
+              backgroundColor: const Color(0xFFFF0055),
               foregroundColor: Colors.white,
             ),
             child: const Text('Add Directory'),

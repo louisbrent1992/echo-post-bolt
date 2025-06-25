@@ -354,7 +354,7 @@ class _VideoPreviewWidgetState extends State<VideoPreviewWidget> {
                   child: CircularProgressIndicator(
                     strokeWidth: 2,
                     valueColor:
-                        AlwaysStoppedAnimation<Color>(Color(0xFFFF0080)),
+                        AlwaysStoppedAnimation<Color>(Color(0xFFFF0055)),
                   ),
                 ),
               ),
@@ -366,7 +366,7 @@ class _VideoPreviewWidgetState extends State<VideoPreviewWidget> {
                 left: 8,
                 child: Icon(
                   Icons.check_circle,
-                  color: Color(0xFFFF0080),
+                  color: Color(0xFFFF0055),
                   size: 24,
                 ),
               ),
@@ -416,7 +416,7 @@ class _VideoPreviewWidgetState extends State<VideoPreviewWidget> {
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             CircularProgressIndicator(
-              valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFFF0080)),
+              valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFFF0055)),
               strokeWidth: 2,
             ),
             SizedBox(height: 8),
@@ -635,7 +635,7 @@ class VideoCompatibilityDialog extends StatelessWidget {
               Text(
                 platform.toUpperCase(),
                 style: const TextStyle(
-                  color: Color(0xFFFF0080),
+                  color: Color(0xFFFF0055),
                   fontWeight: FontWeight.bold,
                 ),
               ),
@@ -662,7 +662,7 @@ class VideoCompatibilityDialog extends StatelessWidget {
           onPressed: () => Navigator.of(context).pop(),
           child: const Text(
             'CLOSE',
-            style: TextStyle(color: Color(0xFFFF0080)),
+            style: TextStyle(color: Color(0xFFFF0055)),
           ),
         ),
       ],

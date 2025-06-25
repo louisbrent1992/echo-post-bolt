@@ -307,7 +307,7 @@ class _DirectorySelectionScreenState extends State<DirectorySelectionScreen> {
         body: _isLoading
             ? const Center(
                 child: CircularProgressIndicator(
-                  color: Color(0xFFFF0080),
+                  color: Color(0xFFFF0055),
                 ),
               )
             : Column(
@@ -330,7 +330,7 @@ class _DirectorySelectionScreenState extends State<DirectorySelectionScreen> {
                           children: [
                             Icon(
                               Icons.folder_open,
-                              color: Color(0xFFFF0080),
+                              color: Color(0xFFFF0055),
                               size: 20,
                             ),
                             SizedBox(width: 8),
@@ -361,7 +361,7 @@ class _DirectorySelectionScreenState extends State<DirectorySelectionScreen> {
                               fontSize: 12,
                             ),
                           ),
-                          activeColor: const Color(0xFFFF0080),
+                          activeColor: const Color(0xFFFF0055),
                           contentPadding: EdgeInsets.zero,
                         ),
                       ],
@@ -462,12 +462,12 @@ class _DirectorySelectionScreenState extends State<DirectorySelectionScreen> {
       margin: const EdgeInsets.only(bottom: 8),
       decoration: BoxDecoration(
         color: directory.isEnabled
-            ? const Color(0xFFFF0080).withValues(alpha: 0.1)
+            ? const Color(0xFFFF0055).withValues(alpha: 0.1)
             : Colors.white.withValues(alpha: 0.05),
         borderRadius: BorderRadius.circular(8),
         border: Border.all(
           color: directory.isEnabled
-              ? const Color(0xFFFF0080).withValues(alpha: 0.3)
+              ? const Color(0xFFFF0055).withValues(alpha: 0.3)
               : Colors.white.withValues(alpha: 0.1),
         ),
       ),
@@ -475,7 +475,7 @@ class _DirectorySelectionScreenState extends State<DirectorySelectionScreen> {
         leading: Icon(
           directory.isDefault ? Icons.folder_special : Icons.folder,
           color: directory.isEnabled
-              ? const Color(0xFFFF0080)
+              ? const Color(0xFFFF0055)
               : Colors.white.withValues(alpha: 0.4),
         ),
         title: Text(
@@ -504,7 +504,7 @@ class _DirectorySelectionScreenState extends State<DirectorySelectionScreen> {
             Switch(
               value: directory.isEnabled,
               onChanged: (enabled) => _toggleDirectory(directory.id, enabled),
-              activeColor: const Color(0xFFFF0080),
+              activeColor: const Color(0xFFFF0055),
               materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
             ),
             if (!directory.isDefault) ...[
@@ -532,7 +532,7 @@ class _DirectorySelectionScreenState extends State<DirectorySelectionScreen> {
         color: Colors.white.withValues(alpha: 0.05),
         borderRadius: BorderRadius.circular(12),
         border: Border.all(
-          color: const Color(0xFFFF0080).withValues(alpha: 0.3),
+          color: const Color(0xFFFF0055).withValues(alpha: 0.3),
           width: 1.5,
         ),
       ),
@@ -546,7 +546,7 @@ class _DirectorySelectionScreenState extends State<DirectorySelectionScreen> {
               children: [
                 const Icon(
                   Icons.add_circle_outline,
-                  color: Color(0xFFFF0080),
+                  color: Color(0xFFFF0055),
                   size: 24,
                 ),
                 const SizedBox(width: 12),
@@ -587,10 +587,10 @@ class _DirectorySelectionScreenState extends State<DirectorySelectionScreen> {
                     label: const Text('Browse Folders'),
                     style: ElevatedButton.styleFrom(
                       backgroundColor:
-                          const Color(0xFFFF0080).withValues(alpha: 0.1),
-                      foregroundColor: const Color(0xFFFF0080),
+                          const Color(0xFFFF0055).withValues(alpha: 0.1),
+                      foregroundColor: const Color(0xFFFF0055),
                       side: BorderSide(
-                        color: const Color(0xFFFF0080).withValues(alpha: 0.3),
+                        color: const Color(0xFFFF0055).withValues(alpha: 0.3),
                       ),
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(8),

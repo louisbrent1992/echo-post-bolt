@@ -535,7 +535,7 @@ class SevenIconHeader extends StatelessWidget {
               child: Icon(
                 icon,
                 color: isSelected ? color : Colors.white.withValues(alpha: 0.8),
-                size: size * 0.35, // Proportional icon size
+                size: size * 0.5, // Increase icon size to make it larger
               ),
             ),
           ),

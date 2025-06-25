@@ -985,7 +985,7 @@ class _CommandScreenState extends State<CommandScreen>
         color: Colors.black.withValues(alpha: 0.5),
         child: Center(
           child: Container(
-            width: MediaQuery.of(overlayContext).size.width * 0.9,
+            width: double.infinity,
             constraints: const BoxConstraints(maxWidth: 400),
             child: AlertDialog(
               backgroundColor: Colors.black.withValues(alpha: 0.9),
@@ -1010,7 +1010,7 @@ class _CommandScreenState extends State<CommandScreen>
                           color: Colors.white.withValues(alpha: 0.3)),
                     ),
                     focusedBorder: const OutlineInputBorder(
-                      borderSide: BorderSide(color: Color(0xFFFF0080)),
+                      borderSide: BorderSide(color: Color(0xFFFF0055)),
                     ),
                     filled: true,
                     fillColor: Colors.white.withValues(alpha: 0.1),
@@ -1046,7 +1046,7 @@ class _CommandScreenState extends State<CommandScreen>
                   },
                   child: const Text(
                     'SAVE',
-                    style: TextStyle(color: Color(0xFFFF0080)),
+                    style: TextStyle(color: Color(0xFFFF0055)),
                   ),
                 ),
               ],
@@ -1299,7 +1299,7 @@ class _CommandScreenState extends State<CommandScreen>
                   Navigator.pop(dialogContext); // Close the dialog
                 },
                 child: const Text('OK',
-                    style: TextStyle(color: Color(0xFFFF0080))),
+                    style: TextStyle(color: Color(0xFFFF0055))),
               ),
             ],
           ),
@@ -1696,7 +1696,7 @@ class _CommandScreenState extends State<CommandScreen>
             onPressed: () => Navigator.pop(dialogContext, true),
             child: const Text(
               'RESET',
-              style: TextStyle(color: Color(0xFFFF0080)),
+              style: TextStyle(color: Color(0xFFFF0055)),
             ),
           ),
         ],

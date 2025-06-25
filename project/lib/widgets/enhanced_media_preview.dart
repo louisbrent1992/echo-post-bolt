@@ -450,7 +450,7 @@ class _EnhancedMediaPreviewState extends State<EnhancedMediaPreview> {
           children: [
             if (_isGeneratingThumbnail || !_isVideoInitialized) ...[
               const CircularProgressIndicator(
-                valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFFF0080)),
+                valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFFF0055)),
                 strokeWidth: 2,
               ),
               const SizedBox(height: 8),
@@ -551,11 +551,11 @@ class _EnhancedMediaPreviewState extends State<EnhancedMediaPreview> {
           ),
         ),
 
-        // Volume control button in top-right
+        // Volume control button in top-left
         if (_isVideoInitialized || _videoThumbnail != null)
           Positioned(
             top: 12,
-            right: 12,
+            left: 12,
             child: GestureDetector(
               onTap: _toggleVolume,
               child: Container(
@@ -596,7 +596,7 @@ class _EnhancedMediaPreviewState extends State<EnhancedMediaPreview> {
                 height: 16,
                 child: CircularProgressIndicator(
                   strokeWidth: 2,
-                  valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFFF0080)),
+                  valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFFF0055)),
                 ),
               ),
             )
@@ -742,7 +742,7 @@ class _EnhancedMediaPreviewState extends State<EnhancedMediaPreview> {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
         decoration: BoxDecoration(
-          color: const Color(0xFFFF0080).withValues(alpha: 0.9),
+          color: const Color(0xFFFF0055).withValues(alpha: 0.9),
           borderRadius: BorderRadius.circular(4),
         ),
         child: const Text(
