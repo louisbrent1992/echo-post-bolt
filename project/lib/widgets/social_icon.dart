@@ -375,6 +375,8 @@ class SevenIconHeader extends StatelessWidget {
   final Widget? rightAction;
   final double height;
   final bool enableInteraction;
+  final List<String>?
+      incompatiblePlatforms; // NEW: List of incompatible platforms
 
   const SevenIconHeader({
     super.key,
@@ -384,6 +386,7 @@ class SevenIconHeader extends StatelessWidget {
     this.rightAction,
     this.height = 54,
     this.enableInteraction = true,
+    this.incompatiblePlatforms, // NEW: Optional incompatible platforms list
   });
 
   @override
@@ -406,6 +409,8 @@ class SevenIconHeader extends StatelessWidget {
           // Icons 2-6: Social media platforms (exactly 1/7 width each)
           ...SocialPlatforms.all.map((platform) {
             final isSelected = selectedPlatforms.contains(platform);
+            final isIncompatible =
+                incompatiblePlatforms?.contains(platform) ?? false;
             final color = SocialPlatforms.getColor(platform);
             final icon = SocialPlatforms.getIcon(platform);
 
@@ -416,6 +421,7 @@ class SevenIconHeader extends StatelessWidget {
                   icon,
                   color,
                   isSelected,
+                  isIncompatible, // NEW: Pass incompatible state
                   height * 0.8, // Consistent sizing
                 ),
               ),
@@ -487,13 +493,14 @@ class SevenIconHeader extends StatelessWidget {
     IconData icon,
     Color color,
     bool isSelected,
+    bool isIncompatible, // NEW: Incompatible state parameter
     double size,
   ) {
     return Stack(
       alignment: Alignment.center,
       children: [
-        // Beautiful ripple effect when selected
-        if (isSelected)
+        // Beautiful ripple effect when selected (but not if incompatible)
+        if (isSelected && !isIncompatible)
           SocialIconRipple(
             color: color,
             size: size,
@@ -505,24 +512,32 @@ class SevenIconHeader extends StatelessWidget {
         Material(
           color: Colors.transparent,
           child: InkWell(
-            onTap: enableInteraction && onPlatformToggle != null
-                ? () => onPlatformToggle!(platform)
-                : null,
+            onTap:
+                enableInteraction && onPlatformToggle != null && !isIncompatible
+                    ? () => onPlatformToggle!(platform)
+                    : null,
             borderRadius: BorderRadius.circular(size / 2),
             child: Container(
               width: size,
               height: size,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                color: isSelected
-                    ? color.withValues(alpha: 0.2)
-                    : Colors.white.withValues(alpha: 0.1),
+                color: isIncompatible
+                    ? Colors.grey
+                        .withValues(alpha: 0.1) // Grayed out for incompatible
+                    : isSelected
+                        ? color.withValues(alpha: 0.2)
+                        : Colors.white.withValues(alpha: 0.1),
                 border: Border.all(
-                  color:
-                      isSelected ? color : Colors.white.withValues(alpha: 0.3),
+                  color: isIncompatible
+                      ? Colors.grey.withValues(
+                          alpha: 0.3) // Gray border for incompatible
+                      : isSelected
+                          ? color
+                          : Colors.white.withValues(alpha: 0.3),
                   width: isSelected ? 2.0 : 1.5,
                 ),
-                boxShadow: isSelected
+                boxShadow: isSelected && !isIncompatible
                     ? [
                         BoxShadow(
                           color: color.withValues(alpha: 0.3),
@@ -534,7 +549,11 @@ class SevenIconHeader extends StatelessWidget {
               ),
               child: Icon(
                 icon,
-                color: isSelected ? color : Colors.white.withValues(alpha: 0.8),
+                color: isIncompatible
+                    ? Colors.grey.withValues(alpha: 0.5) // Grayed out icon
+                    : isSelected
+                        ? color
+                        : Colors.white.withValues(alpha: 0.8),
                 size: size * 0.5, // Increase icon size to make it larger
               ),
             ),

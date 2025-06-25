@@ -15,6 +15,7 @@ import '../services/media_coordinator.dart';
 import '../services/social_action_post_coordinator.dart';
 import '../services/auth_service.dart';
 import '../services/app_settings_service.dart';
+import '../services/permission_manager.dart';
 import '../widgets/social_icon.dart';
 import '../widgets/post_content_box.dart';
 import '../widgets/transcription_status.dart';
@@ -26,6 +27,7 @@ import '../screens/directory_selection_screen.dart';
 import '../screens/profile_screen.dart';
 import '../constants/typography.dart';
 import '../widgets/triple_action_button_system.dart';
+import '../constants/social_platforms.dart';
 
 /// EchoPost Voice-to-Post Pipeline
 ///
@@ -187,20 +189,21 @@ class _CommandScreenState extends State<CommandScreen>
 
   Future<void> _initializeScreen() async {
     try {
-      // Request all permissions through the coordinator
-      final hasPermissions = await _postCoordinator?.requestAllPermissions();
-      if (hasPermissions != true) {
-        if (mounted) {
-          _postCoordinator?.requestStatusUpdate(
-            'Please grant required permissions to use the app',
-            StatusMessageType.error,
-            duration: const Duration(seconds: 4),
-          );
-        }
-        return;
+      // Check permissions through PermissionManager without forcing requests
+      // This allows the app to work even if permissions are denied initially
+      final permissionManager =
+          Provider.of<PermissionManager>(context, listen: false);
+      await permissionManager.checkPermissions();
+
+      if (kDebugMode) {
+        print('📋 Initial permission check completed');
+        print('   Media: ${permissionManager.hasMediaPermission ? '✅' : '❌'}');
+        print(
+            '   Microphone: ${permissionManager.hasMicrophonePermission ? '✅' : '❌'}');
       }
 
-      // Initialize the media coordinator after permissions are granted
+      // Initialize the media coordinator regardless of permission status
+      // Media coordinator will handle permissions when needed
       if (mounted) {
         final mediaCoordinator =
             Provider.of<MediaCoordinator>(context, listen: false);
@@ -272,10 +275,68 @@ class _CommandScreenState extends State<CommandScreen>
     }
 
     try {
-      // Check microphone permission first
-      final hasPermission = await _record.hasPermission();
+      // ALWAYS request microphone permission before recording
+      // This ensures permission is re-requested every time if previously denied
+      final permissionManager =
+          Provider.of<PermissionManager>(context, listen: false);
+      final hasPermission =
+          await permissionManager.requestMicrophonePermission();
+
       if (!hasPermission) {
-        throw Exception('Microphone permission not granted');
+        // Check if permanently denied to provide specific guidance
+        final isPermanentlyDenied =
+            await permissionManager.isMicrophonePermissionPermanentlyDenied();
+
+        String errorMessage;
+        if (isPermanentlyDenied) {
+          errorMessage =
+              'Microphone access permanently denied. Please enable it in device settings to use voice recording.';
+        } else {
+          errorMessage =
+              'Microphone access is required for voice recording. Please allow access and try again.';
+        }
+
+        if (kDebugMode) {
+          print(
+              '❌ Microphone permission denied. Permanently denied: $isPermanentlyDenied');
+        }
+
+        _postCoordinator?.setError(errorMessage);
+
+        if (mounted) {
+          // First show the status update
+          _postCoordinator?.requestStatusUpdate(
+            isPermanentlyDenied
+                ? 'Microphone access permanently denied. Please enable in device settings.'
+                : errorMessage,
+            StatusMessageType.error,
+            duration: const Duration(seconds: 6),
+          );
+
+          // Then show the snackbar if permanently denied
+          if (isPermanentlyDenied && mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: const Text(
+                    'Microphone permission required. Enable in device settings.'),
+                backgroundColor: Colors.red.withValues(alpha: 0.8),
+                duration: const Duration(seconds: 5),
+                action: SnackBarAction(
+                  label: 'Settings',
+                  textColor: Colors.white,
+                  onPressed: () async {
+                    await permissionManager.openDeviceSettings();
+                  },
+                ),
+              ),
+            );
+          }
+        }
+        return;
+      }
+
+      if (kDebugMode) {
+        print('✅ Microphone permission granted, starting recording...');
       }
 
       // Start recording through coordinator
@@ -664,11 +725,31 @@ class _CommandScreenState extends State<CommandScreen>
       }
 
       // Platform is not selected, user wants to select it
-      // First check if they're authenticated for this platform
+      // STEP 1: Check platform compatibility with current content
+      final toggleResult = _postCoordinator?.canTogglePlatform(platform);
+      if (toggleResult != null && !toggleResult.canToggle) {
+        // Show compatibility warning through TranscriptionStatusBox
+        if (mounted) {
+          _postCoordinator?.requestStatusUpdate(
+            toggleResult.message,
+            StatusMessageType.warning,
+            duration: const Duration(seconds: 4),
+            priority: StatusPriority.medium,
+          );
+        }
+
+        if (kDebugMode) {
+          print(
+              '⚠️ Platform $platform not compatible: ${toggleResult.message}');
+        }
+        return;
+      }
+
+      // STEP 2: Check if they're authenticated for this platform
       final isAuthenticated = await authService.isPlatformConnected(platform);
 
       if (isAuthenticated) {
-        // User is authenticated, simply toggle the platform
+        // User is authenticated and platform is compatible, toggle it
         _postCoordinator?.togglePlatform(platform);
 
         if (kDebugMode) {
@@ -765,6 +846,67 @@ class _CommandScreenState extends State<CommandScreen>
 
   Future<void> _navigateToMediaSelection() async {
     try {
+      // ALWAYS request media permission before accessing media
+      // This ensures permission is re-requested every time if previously denied
+      final permissionManager =
+          Provider.of<PermissionManager>(context, listen: false);
+      final hasPermission = await permissionManager.requestMediaPermission();
+
+      if (!hasPermission) {
+        // Check if permanently denied to provide specific guidance
+        final isPermanentlyDenied =
+            await permissionManager.isMediaPermissionPermanentlyDenied();
+
+        String errorMessage;
+        if (isPermanentlyDenied) {
+          errorMessage =
+              'Media access permanently denied. Please enable it in device settings to select photos and videos.';
+        } else {
+          errorMessage =
+              'Media access is required to select photos and videos. Please allow access and try again.';
+        }
+
+        if (kDebugMode) {
+          print(
+              '❌ Media permission denied. Permanently denied: $isPermanentlyDenied');
+        }
+
+        if (mounted) {
+          // First show the status update
+          _postCoordinator?.requestStatusUpdate(
+            isPermanentlyDenied
+                ? 'Media access permanently denied. Please enable in device settings.'
+                : errorMessage,
+            StatusMessageType.error,
+            duration: const Duration(seconds: 6),
+          );
+
+          // Then show the snackbar if permanently denied
+          if (isPermanentlyDenied && mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: const Text(
+                    'Media permission required. Enable in device settings.'),
+                backgroundColor: Colors.red.withValues(alpha: 0.8),
+                duration: const Duration(seconds: 5),
+                action: SnackBarAction(
+                  label: 'Settings',
+                  textColor: Colors.white,
+                  onPressed: () async {
+                    await permissionManager.openDeviceSettings();
+                  },
+                ),
+              ),
+            );
+          }
+        }
+        return;
+      }
+
+      if (kDebugMode) {
+        print('✅ Media permission granted, proceeding to media selection...');
+      }
+
       // Only log navigation attempts occasionally
       final shouldLogNav = kDebugMode &&
           (_lastProcessingLog == null ||
@@ -1411,6 +1553,16 @@ class _CommandScreenState extends State<CommandScreen>
     // Ensure recording state is consistent
     final isProcessing = coordinator.isProcessing == true;
 
+    // Calculate incompatible platforms for current content
+    final contentType = SocialPlatforms.getContentType(
+      hasMedia: coordinator.hasMedia,
+      mediaItems: coordinator.currentPost.content.media,
+    );
+    final incompatiblePlatforms = SocialPlatforms.getIncompatiblePlatforms(
+      SocialPlatforms.all, // Check all platforms
+      contentType,
+    );
+
     return Column(
       children: [
         Container(
@@ -1429,6 +1581,8 @@ class _CommandScreenState extends State<CommandScreen>
               tooltip: 'Profile',
             ),
             enableInteraction: !isProcessing,
+            incompatiblePlatforms:
+                incompatiblePlatforms, // NEW: Pass incompatible platforms
           ),
         ),
         Expanded(

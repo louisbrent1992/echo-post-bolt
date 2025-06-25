@@ -19,6 +19,17 @@ import '../models/status_message.dart';
 /// Status message priority levels to prevent important messages from being overridden
 enum StatusPriority { low, medium, high, critical }
 
+/// Result of platform toggle validation
+class PlatformToggleResult {
+  final bool canToggle;
+  final String message;
+
+  const PlatformToggleResult({
+    required this.canToggle,
+    required this.message,
+  });
+}
+
 /// Manages the persistent state and orchestration of social media posts
 /// across all screens in the EchoPost application.
 class SocialActionPostCoordinator extends ChangeNotifier {
@@ -2370,6 +2381,43 @@ class SocialActionPostCoordinator extends ChangeNotifier {
       }
       setError('Failed to execute post: $e');
       rethrow;
+    }
+  }
+
+  /// Check if a platform can be toggled for current content
+  PlatformToggleResult canTogglePlatform(String platform) {
+    // Determine content type
+    final contentType = SocialPlatforms.getContentType(
+      hasMedia: hasMedia,
+      mediaItems: _currentPost.content.media,
+    );
+
+    final isCompatible =
+        SocialPlatforms.isPlatformCompatible(platform, contentType);
+
+    if (isCompatible) {
+      return PlatformToggleResult(
+        canToggle: true,
+        message: 'Platform is compatible with current content',
+      );
+    } else {
+      // Get specific incompatibility reason
+      final platformName =
+          platform.substring(0, 1).toUpperCase() + platform.substring(1);
+      String message;
+
+      if (contentType == 'text') {
+        message = '$platformName requires media content to post';
+      } else if (contentType == 'image' && platform == 'youtube') {
+        message = '$platformName requires video content, not just images';
+      } else {
+        message = '$platformName is not compatible with current content type';
+      }
+
+      return PlatformToggleResult(
+        canToggle: false,
+        message: message,
+      );
     }
   }
 }

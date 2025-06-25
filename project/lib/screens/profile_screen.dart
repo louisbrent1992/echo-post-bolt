@@ -2,15 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:permission_handler/permission_handler.dart';
-import 'package:photo_manager/photo_manager.dart';
 
 import '../services/auth_service.dart';
-import '../services/firestore_service.dart';
-import '../services/media_coordinator.dart';
-import '../services/social_action_post_coordinator.dart';
 import '../screens/history_screen.dart';
-import '../widgets/social_icon.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
@@ -22,14 +16,11 @@ class ProfileScreen extends StatefulWidget {
 class _ProfileScreenState extends State<ProfileScreen> {
   bool _isLoading = true;
   Map<String, dynamic>? _userData;
-  bool _directoryPermissionGranted = false;
-  bool _microphonePermissionGranted = false;
 
   @override
   void initState() {
     super.initState();
     _loadUserData();
-    _checkPermissions();
   }
 
   Future<void> _loadUserData() async {
@@ -62,114 +53,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
       setState(() {
         _isLoading = false;
       });
-    }
-  }
-
-  Future<void> _checkPermissions() async {
-    try {
-      // Check directory permissions using PhotoManager (same as Command Screen)
-      final directoryPermissionState =
-          await PhotoManager.requestPermissionExtend();
-      final directoryGranted = directoryPermissionState.hasAccess;
-
-      // Check microphone permission (same as Command Screen)
-      final microphoneGranted = await Permission.microphone.status.isGranted;
-
-      setState(() {
-        _directoryPermissionGranted = directoryGranted;
-        _microphonePermissionGranted = microphoneGranted;
-      });
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error checking permissions: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-    }
-  }
-
-  Future<void> _requestDirectoryPermission() async {
-    try {
-      // Request directory permissions using PhotoManager (same as Command Screen)
-      final permissionState = await PhotoManager.requestPermissionExtend();
-      final granted = permissionState.hasAccess;
-
-      setState(() {
-        _directoryPermissionGranted = granted;
-      });
-
-      if (granted && mounted) {
-        // Refresh media coordinator after permission granted (same as Command Screen)
-        final mediaCoordinator =
-            Provider.of<MediaCoordinator>(context, listen: false);
-        await mediaCoordinator.initialize();
-
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-                'Directory access granted! You can now select photos and videos.'),
-            backgroundColor: Colors.green,
-          ),
-        );
-      } else if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content:
-                Text('Directory access is required to select media files.'),
-            backgroundColor: Colors.orange,
-          ),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error requesting directory permission: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-    }
-  }
-
-  Future<void> _requestMicrophonePermission() async {
-    try {
-      // Request microphone permission (same as Command Screen)
-      final status = await Permission.microphone.request();
-      final granted = status.isGranted;
-
-      setState(() {
-        _microphonePermissionGranted = granted;
-      });
-
-      if (granted && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-                'Microphone access granted! You can now record voice commands.'),
-            backgroundColor: Colors.green,
-          ),
-        );
-      } else if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Microphone access is required for voice recording.'),
-            backgroundColor: Colors.orange,
-          ),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error requesting microphone permission: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
     }
   }
 
@@ -415,104 +298,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         size: 16,
                       ),
                       onTap: _navigateToHistory,
-                    ),
-                  ),
-                  const SizedBox(height: 24),
-
-                  // Permissions Section
-                  const Row(
-                    children: [
-                      Icon(
-                        Icons.security,
-                        color: Color(0xFFFF0055),
-                        size: 20,
-                      ),
-                      SizedBox(width: 8),
-                      Text(
-                        'Permissions',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-
-                  // Directory Permission Toggle
-                  Container(
-                    margin: const EdgeInsets.only(bottom: 8),
-                    decoration: BoxDecoration(
-                      color: _directoryPermissionGranted
-                          ? const Color(0xFFFF0055).withValues(alpha: 0.1)
-                          : Colors.white.withValues(alpha: 0.05),
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(
-                        color: _directoryPermissionGranted
-                            ? const Color(0xFFFF0055).withValues(alpha: 0.3)
-                            : Colors.white.withValues(alpha: 0.1),
-                      ),
-                    ),
-                    child: SwitchListTile(
-                      value: _directoryPermissionGranted,
-                      onChanged: _directoryPermissionGranted
-                          ? null
-                          : (value) => _requestDirectoryPermission(),
-                      title: const Text(
-                        'Directory Access',
-                        style: TextStyle(color: Colors.white),
-                      ),
-                      subtitle: Text(
-                        _directoryPermissionGranted
-                            ? 'Access to photos and videos granted'
-                            : 'Allow access to select photos and videos',
-                        style: TextStyle(
-                          color: Colors.white.withValues(alpha: 0.7),
-                          fontSize: 12,
-                        ),
-                      ),
-                      activeColor: const Color(0xFFFF0055),
-                      contentPadding:
-                          const EdgeInsets.symmetric(horizontal: 16),
-                    ),
-                  ),
-
-                  // Microphone Permission Toggle
-                  Container(
-                    margin: const EdgeInsets.only(bottom: 8),
-                    decoration: BoxDecoration(
-                      color: _microphonePermissionGranted
-                          ? const Color(0xFFFF0055).withValues(alpha: 0.1)
-                          : Colors.white.withValues(alpha: 0.05),
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(
-                        color: _microphonePermissionGranted
-                            ? const Color(0xFFFF0055).withValues(alpha: 0.3)
-                            : Colors.white.withValues(alpha: 0.1),
-                      ),
-                    ),
-                    child: SwitchListTile(
-                      value: _microphonePermissionGranted,
-                      onChanged: _microphonePermissionGranted
-                          ? null
-                          : (value) => _requestMicrophonePermission(),
-                      title: const Text(
-                        'Microphone Access',
-                        style: TextStyle(color: Colors.white),
-                      ),
-                      subtitle: Text(
-                        _microphonePermissionGranted
-                            ? 'Microphone access granted'
-                            : 'Allow access for voice recording',
-                        style: TextStyle(
-                          color: Colors.white.withValues(alpha: 0.7),
-                          fontSize: 12,
-                        ),
-                      ),
-                      activeColor: const Color(0xFFFF0055),
-                      contentPadding:
-                          const EdgeInsets.symmetric(horizontal: 16),
                     ),
                   ),
                   const SizedBox(height: 24),

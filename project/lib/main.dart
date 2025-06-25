@@ -13,6 +13,7 @@ import 'services/media_coordinator.dart';
 import 'services/social_action_post_coordinator.dart';
 import 'services/natural_language_parser.dart';
 import 'services/app_settings_service.dart';
+import 'services/permission_manager.dart';
 import 'screens/login_screen.dart';
 import 'screens/command_screen.dart';
 
@@ -105,6 +106,9 @@ Future<void> main() async {
             return coordinator;
           },
           lazy: false,
+        ),
+        ChangeNotifierProvider<PermissionManager>(
+          create: (_) => PermissionManager(),
         ),
       ],
       child: ServiceInitializationWrapper(
