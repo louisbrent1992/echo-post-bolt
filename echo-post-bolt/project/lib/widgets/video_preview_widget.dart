@@ -395,7 +395,8 @@ class _VideoPreviewWidgetState extends State<VideoPreviewWidget> {
   Widget _buildVideoThumbnail() {
     if (_videoThumbnail != null) {
       return ClipRRect(
-        borderRadius: BorderRadius.circular(8),
+        // Remove rounded corners for consistency with image thumbnails
+        borderRadius: BorderRadius.zero,
         child: Image.memory(
           _videoThumbnail!,
           fit: BoxFit.cover,

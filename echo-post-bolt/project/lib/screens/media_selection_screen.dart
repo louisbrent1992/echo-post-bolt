@@ -506,22 +506,25 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
           Colors.transparent, // Make scaffold transparent for gradient
       appBar: PreferredSize(
         preferredSize: const Size.fromHeight(60),
-        child: TitleHeader(
-          title: 'Select Media',
-          leftAction: IconButton(
-            icon: const Icon(Icons.arrow_back, color: Colors.white),
-            onPressed: () => Navigator.pop(context),
-          ),
-          rightAction: IconButton(
-            icon: Icon(
-              _showFilters ? Icons.filter_list_off : Icons.filter_list,
-              color: Colors.white,
+        child: SafeArea(
+          bottom: false,
+          child: TitleHeader(
+            title: 'Select Media',
+            leftAction: IconButton(
+              icon: const Icon(Icons.arrow_back, color: Colors.white),
+              onPressed: () => Navigator.maybePop(context),
             ),
-            onPressed: () {
-              setState(() {
-                _showFilters = !_showFilters;
-              });
-            },
+            rightAction: IconButton(
+              icon: Icon(
+                _showFilters ? Icons.filter_list_off : Icons.filter_list,
+                color: Colors.white,
+              ),
+              onPressed: () {
+                setState(() {
+                  _showFilters = !_showFilters;
+                });
+              },
+            ),
           ),
         ),
       ),

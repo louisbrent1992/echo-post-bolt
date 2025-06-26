@@ -77,10 +77,10 @@ flutter_icons:
   image_path: "assets/icons/logo.png"
   min_sdk_android: 21
   # Android adaptive icon configuration
-  adaptive_icon_background: "#FF0080"
   adaptive_icon_foreground: "assets/icons/logo.png"
+  adaptive_icon_background: "assets/icons/transparent.png"
   # iOS configuration
-  remove_alpha_ios: true
+  remove_alpha_ios: false
 
 # TODO: Add your custom launcher icons
 # 1. Create/download your 1024x1024 icon images
