@@ -3,7 +3,7 @@ description: A social media post scheduler with AI voice commands.
 version: 1.0.0+1
 
 environment:
-  sdk: '>=3.0.0 <4.0.0'
+  sdk: ">=3.0.0 <4.0.0"
 
 dependencies:
   flutter:
@@ -29,6 +29,9 @@ dependencies:
   google_sign_in: ^6.1.6
   tiktok_sdk_v2: ^0.0.2
   oauth2_client: 4.2.0
+
+  # Sharing
+  share_plus: ^7.2.1
 
   # JSON Serialization
   json_annotation: ^4.8.1

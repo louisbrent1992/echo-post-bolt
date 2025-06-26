@@ -1,3 +1,5 @@
+import 'package:echo_post/widgets/voice_responsive_ripple.dart';
+import 'package:echo_post/widgets/voice_level_ring.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'ripple_circle.dart';

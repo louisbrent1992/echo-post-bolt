@@ -5,6 +5,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 
 import '../services/auth_service.dart';
 import '../screens/history_screen.dart';
+import '../constants/social_platforms.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
@@ -16,11 +17,14 @@ class ProfileScreen extends StatefulWidget {
 class _ProfileScreenState extends State<ProfileScreen> {
   bool _isLoading = true;
   Map<String, dynamic>? _userData;
+  Map<String, bool> _platformConnections = {};
+  bool _disconnectingAll = false;
 
   @override
   void initState() {
     super.initState();
     _loadUserData();
+    _loadPlatformConnections();
   }
 
   Future<void> _loadUserData() async {
@@ -53,6 +57,70 @@ class _ProfileScreenState extends State<ProfileScreen> {
       setState(() {
         _isLoading = false;
       });
+    }
+  }
+
+  Future<void> _loadPlatformConnections() async {
+    final authService = Provider.of<AuthService>(context, listen: false);
+    final Map<String, bool> connections = {};
+    for (final platform in SocialPlatforms.all) {
+      connections[platform] = await authService.isPlatformConnected(platform);
+    }
+    if (mounted) {
+      setState(() {
+        _platformConnections = connections;
+      });
+    }
+  }
+
+  Future<void> _disconnectPlatform(String platform) async {
+    final authService = Provider.of<AuthService>(context, listen: false);
+    try {
+      await authService.disconnectPlatform(platform);
+      await _loadPlatformConnections();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+              content: Text(
+                  'Disconnected from ${SocialPlatforms.getDisplayName(platform)}')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+              content: Text('Failed to disconnect: $e'),
+              backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
+
+  Future<void> _disconnectAllPlatforms() async {
+    setState(() => _disconnectingAll = true);
+    final authService = Provider.of<AuthService>(context, listen: false);
+    try {
+      for (final platform in SocialPlatforms.all) {
+        if (_platformConnections[platform] == true) {
+          await authService.disconnectPlatform(platform);
+        }
+      }
+      await _loadPlatformConnections();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Disconnected all platforms')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+              content: Text('Failed to disconnect all: $e'),
+              backgroundColor: Colors.red),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _disconnectingAll = false);
     }
   }
 
@@ -301,6 +369,89 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     ),
                   ),
                   const SizedBox(height: 24),
+
+                  // Manage Connected Accounts Section
+                  const SizedBox(height: 24),
+                  Row(
+                    children: const [
+                      Icon(Icons.link, color: Color(0xFFFF0055), size: 20),
+                      SizedBox(width: 8),
+                      Text(
+                        'Manage Connected Accounts',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.03),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: const Color(0xFFFF0055).withOpacity(0.2),
+                        width: 1.2,
+                      ),
+                    ),
+                    child: Column(
+                      children: [
+                        for (final platform in SocialPlatforms.all)
+                          ListTile(
+                            leading: Icon(
+                              SocialPlatforms.getIcon(platform),
+                              color: _platformConnections[platform] == true
+                                  ? const Color(0xFFFF0055)
+                                  : Colors.white.withOpacity(0.4),
+                            ),
+                            title: Text(
+                              SocialPlatforms.getDisplayName(platform),
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                            subtitle: Text(
+                              _platformConnections[platform] == true
+                                  ? 'Connected'
+                                  : 'Not Connected',
+                              style: TextStyle(
+                                color: _platformConnections[platform] == true
+                                    ? Colors.greenAccent
+                                    : Colors.white.withOpacity(0.5),
+                                fontSize: 12,
+                              ),
+                            ),
+                            trailing: _platformConnections[platform] == true
+                                ? TextButton(
+                                    onPressed: () =>
+                                        _disconnectPlatform(platform),
+                                    style: TextButton.styleFrom(
+                                      foregroundColor: Colors.red,
+                                    ),
+                                    child: const Text('Disconnect'),
+                                  )
+                                : null,
+                          ),
+                        const SizedBox(height: 8),
+                        ElevatedButton.icon(
+                          onPressed: _disconnectingAll
+                              ? null
+                              : _disconnectAllPlatforms,
+                          icon: const Icon(Icons.link_off),
+                          label: const Text('Disconnect All'),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.red,
+                            foregroundColor: Colors.white,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
 
                   // Account Actions Section
                   const Row(

@@ -21,6 +21,7 @@ import '../widgets/post_content_box.dart';
 import '../widgets/transcription_status.dart';
 import '../widgets/unified_media_buttons.dart';
 import '../widgets/enhanced_media_preview.dart';
+import '../widgets/posting_strategy_info.dart';
 import '../screens/media_selection_screen.dart';
 import '../screens/history_screen.dart';
 import '../screens/directory_selection_screen.dart';
@@ -70,9 +71,14 @@ class CommandScreen extends StatefulWidget {
 class _CommandScreenState extends State<CommandScreen>
     with TickerProviderStateMixin {
   final AudioRecorder _record = AudioRecorder();
+  final ScrollController _scrollController = ScrollController();
 
   late AnimationController _backgroundController;
   late Animation<double> _backgroundAnimation;
+
+  // Scroll indicator animation
+  late AnimationController _scrollIndicatorController;
+  late Animation<double> _scrollIndicatorAnimation;
 
   // Triple Action Button System animation controllers
   late AnimationController _leftButtonController;
@@ -94,13 +100,27 @@ class _CommandScreenState extends State<CommandScreen>
   // CRITICAL: Add key to help Flutter track Consumer lifecycle
   final GlobalKey _consumerKey = GlobalKey();
 
+  // Scroll indicator state
+  bool _canScroll = false;
+  bool _isScrolled = false;
+  double _scrollProgress = 0.0;
+
   @override
   void initState() {
     super.initState();
-    _initializeAnimations(); // Initialize animations immediately
+    _initializeAnimations();
+    _setupScrollListener();
+    _scrollIndicatorController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 900),
+    )..repeat(reverse: true);
+    _scrollIndicatorAnimation = Tween<double>(begin: 0, end: 12).animate(
+      CurvedAnimation(
+          parent: _scrollIndicatorController, curve: Curves.easeInOut),
+    );
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      _initializeScreen(); // Handle permissions after first frame
-      _ensureCleanStateForNewSession(); // Ensure coordinator is ready for new recordings
+      _initializeScreen();
+      _ensureCleanStateForNewSession();
     });
   }
 
@@ -125,7 +145,8 @@ class _CommandScreenState extends State<CommandScreen>
     _recordingTimer?.cancel();
     _amplitudeTimer?.cancel();
     _record.dispose();
-
+    _scrollController.dispose();
+    _scrollIndicatorController.dispose();
     super.dispose();
   }
 
@@ -1690,97 +1711,152 @@ class _CommandScreenState extends State<CommandScreen>
     const double gridUnit = 6.0;
     const double spacing4 = gridUnit * 4;
 
-    // Ensure recording state is consistent
     final isProcessing = coordinator.isProcessing == true;
-
-    // Calculate incompatible platforms for current content
     final contentType = SocialPlatforms.getContentType(
       hasMedia: coordinator.hasMedia,
       mediaItems: coordinator.currentPost.content.media,
     );
     final incompatiblePlatforms = SocialPlatforms.getIncompatiblePlatforms(
-      SocialPlatforms.all, // Check all platforms
+      SocialPlatforms.all,
       contentType,
     );
 
-    return Column(
+    return Stack(
       children: [
-        Container(
-          height: 60,
-          child: SevenIconHeader(
-            selectedPlatforms: coordinator.currentPost.platforms,
-            onPlatformToggle: _togglePlatform,
-            leftAction: IconButton(
-              onPressed: isProcessing ? null : _showResetConfirmation,
-              icon: const Icon(Icons.refresh, color: Colors.white, size: 24),
-              tooltip: 'Reset current post',
-            ),
-            rightAction: IconButton(
-              onPressed: isProcessing ? null : _navigateToProfile,
-              icon: const Icon(Icons.person, color: Colors.white, size: 28),
-              tooltip: 'Profile',
-            ),
-            enableInteraction: !isProcessing,
-            incompatiblePlatforms:
-                incompatiblePlatforms, // NEW: Pass incompatible platforms
-          ),
-        ),
-        Expanded(
-          child: SingleChildScrollView(
-            physics: const BouncingScrollPhysics(),
-            child: Column(
-              children: [
-                const SizedBox(height: spacing4),
-                _buildCommandMediaSection(coordinator),
-                PostContentBox(
-                  onVoiceEdit: _startVoiceEditing,
-                  onEditText: _editPostText,
-                  onEditHashtags: _editPostHashtags,
+        Column(
+          children: [
+            Container(
+              height: 60,
+              child: SevenIconHeader(
+                selectedPlatforms: coordinator.currentPost.platforms,
+                onPlatformToggle: _togglePlatform,
+                leftAction: IconButton(
+                  onPressed: isProcessing ? null : _showResetConfirmation,
+                  icon:
+                      const Icon(Icons.refresh, color: Colors.white, size: 24),
+                  tooltip: 'Reset current post',
                 ),
-                const SizedBox(height: 0),
-              ],
+                rightAction: IconButton(
+                  onPressed: isProcessing ? null : _navigateToProfile,
+                  icon: const Icon(Icons.person, color: Colors.white, size: 28),
+                  tooltip: 'Profile',
+                ),
+                enableInteraction: !isProcessing,
+                incompatiblePlatforms: incompatiblePlatforms,
+              ),
             ),
-          ),
-        ),
-        SizedBox(
-          height: 226,
-          child: Column(
-            children: [
-              Expanded(
-                flex: 2,
-                child: Center(
-                  child: Container(
-                    margin: const EdgeInsets.symmetric(horizontal: 20),
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 24, vertical: 16),
-                    decoration: BoxDecoration(
-                      color: Colors.black.withValues(alpha: 0.7),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: const TranscriptionStatus(),
+            Expanded(
+              child: SingleChildScrollView(
+                controller: _scrollController,
+                physics: const BouncingScrollPhysics(),
+                child: Padding(
+                  padding: const EdgeInsets.only(bottom: 226),
+                  child: Column(
+                    children: [
+                      const SizedBox(height: spacing4),
+                      if (coordinator.currentPost.platforms.isNotEmpty)
+                        PostingStrategyInfo(coordinator: coordinator),
+                      if (coordinator.currentPost.platforms.isNotEmpty)
+                        FutureBuilder<List<String>>(
+                          future: coordinator
+                              .getPlatformsRequiringBusinessAccount(),
+                          builder: (context, snapshot) {
+                            if (snapshot.hasData && snapshot.data!.isNotEmpty) {
+                              return BusinessAccountWarning(
+                                platformsRequiringBusiness: snapshot.data!,
+                              );
+                            }
+                            return const SizedBox.shrink();
+                          },
+                        ),
+                      _buildCommandMediaSection(coordinator),
+                      PostContentBox(
+                        onVoiceEdit: _startVoiceEditing,
+                        onEditText: _editPostText,
+                        onEditHashtags: _editPostHashtags,
+                      ),
+                      const SizedBox(height: 12),
+                    ],
                   ),
                 ),
               ),
-              Expanded(
-                flex: 3,
-                child: SafeArea(
-                  minimum: const EdgeInsets.only(bottom: 16),
-                  child: Center(
-                    child: TripleActionButtonSystem(
-                      leftButtonController: _leftButtonController,
-                      rightButtonController: _rightButtonController,
-                      onRecordStart: _startRecording,
-                      onRecordStop: _stopRecording,
-                      onConfirmPost: _confirmAndPost,
-                      onAddMedia: _navigateToMediaSelection,
-                      onSavePost: _savePost,
+            ),
+            SizedBox(
+              height: 226,
+              child: Column(
+                children: [
+                  Expanded(
+                    flex: 2,
+                    child: Center(
+                      child: Container(
+                        margin: const EdgeInsets.symmetric(horizontal: 20),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 24, vertical: 16),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: 0.7),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: const TranscriptionStatus(),
+                      ),
                     ),
                   ),
+                  Expanded(
+                    flex: 3,
+                    child: SafeArea(
+                      minimum: const EdgeInsets.only(bottom: 16),
+                      child: Center(
+                        child: TripleActionButtonSystem(
+                          leftButtonController: _leftButtonController,
+                          rightButtonController: _rightButtonController,
+                          onRecordStart: _startRecording,
+                          onRecordStop: _stopRecording,
+                          onConfirmPost: _confirmAndPost,
+                          onAddMedia: _navigateToMediaSelection,
+                          onSavePost: _savePost,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        // Prominent animated scroll indicator
+        if (_canScroll && !_isScrolled)
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 226 - 56, // Just above the mic area
+            child: IgnorePointer(
+              child: Center(
+                child: AnimatedBuilder(
+                  animation: _scrollIndicatorAnimation,
+                  builder: (context, child) {
+                    return Transform.translate(
+                      offset: Offset(0, _scrollIndicatorAnimation.value),
+                      child: Container(
+                        decoration: BoxDecoration(
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.4),
+                              blurRadius: 12,
+                              spreadRadius: 2,
+                            ),
+                          ],
+                        ),
+                        child: Icon(
+                          Icons.keyboard_arrow_down_rounded,
+                          size: 48,
+                          color: Colors.white,
+                        ),
+                      ),
+                    );
+                  },
                 ),
               ),
-            ],
+            ),
           ),
-        ),
       ],
     );
   }
@@ -2051,5 +2127,26 @@ class _CommandScreenState extends State<CommandScreen>
 
   Future<void> _stopRecording() async {
     await _stopUnifiedRecording();
+  }
+
+  void _setupScrollListener() {
+    _scrollController.addListener(() {
+      final canScroll = _scrollController.position.maxScrollExtent > 0;
+      final isScrolled = _scrollController.offset > 0;
+      final scrollProgress = _scrollController.position.maxScrollExtent > 0
+          ? _scrollController.offset /
+              _scrollController.position.maxScrollExtent
+          : 0.0;
+
+      if (canScroll != _canScroll ||
+          isScrolled != _isScrolled ||
+          scrollProgress != _scrollProgress) {
+        setState(() {
+          _canScroll = canScroll;
+          _isScrolled = isScrolled;
+          _scrollProgress = scrollProgress;
+        });
+      }
+    });
   }
 }

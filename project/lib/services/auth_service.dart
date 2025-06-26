@@ -1014,4 +1014,23 @@ class AuthService extends ChangeNotifier {
 
     return tokenDoc.exists;
   }
+
+  // Disconnect a specific platform (removes its token from Firestore)
+  Future<void> disconnectPlatform(String platform) async {
+    if (_auth.currentUser == null) return;
+    try {
+      await _firestore
+          .collection('users')
+          .doc(_auth.currentUser!.uid)
+          .collection('tokens')
+          .doc(platform)
+          .delete();
+      notifyListeners();
+    } catch (e) {
+      if (kDebugMode) {
+        print('Failed to disconnect $platform: $e');
+      }
+      rethrow;
+    }
+  }
 }

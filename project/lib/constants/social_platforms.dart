@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../services/auth_service.dart';
 
 /// Centralized registry for all supported social media platforms
 /// This serves as the single source of truth for platform definitions,
@@ -74,6 +75,10 @@ class SocialPlatforms {
       requiresMedia: false,
       maxTextLength: 63206,
       maxHashtags: 30,
+      supportsAutomatedPosting: false,
+      requiresBusinessAccount: true,
+      postingRequirements:
+          'Requires Facebook Business or Creator account for automated posting. Personal accounts will use native sharing.',
     ),
     'instagram': PlatformCapabilities(
       supportsText: true,
@@ -82,6 +87,10 @@ class SocialPlatforms {
       requiresMedia: true,
       maxTextLength: 2200,
       maxHashtags: 30,
+      supportsAutomatedPosting: false,
+      requiresBusinessAccount: true,
+      postingRequirements:
+          'Requires Instagram Business or Creator account for automated posting. Personal accounts will use native sharing.',
     ),
     'youtube': PlatformCapabilities(
       supportsText: true,
@@ -90,6 +99,10 @@ class SocialPlatforms {
       requiresMedia: true,
       maxTextLength: 5000,
       maxHashtags: 15,
+      supportsAutomatedPosting: true,
+      requiresBusinessAccount: false,
+      postingRequirements:
+          'Supports automated posting via YouTube Data API v3.',
     ),
     'twitter': PlatformCapabilities(
       supportsText: true,
@@ -98,6 +111,9 @@ class SocialPlatforms {
       requiresMedia: false,
       maxTextLength: 280,
       maxHashtags: 10,
+      supportsAutomatedPosting: true,
+      requiresBusinessAccount: false,
+      postingRequirements: 'Supports automated posting via Twitter API v2.',
     ),
     'tiktok': PlatformCapabilities(
       supportsText: true,
@@ -106,6 +122,9 @@ class SocialPlatforms {
       requiresMedia: true,
       maxTextLength: 2200,
       maxHashtags: 20,
+      supportsAutomatedPosting: true,
+      requiresBusinessAccount: false,
+      postingRequirements: 'Supports automated posting via TikTok API.',
     ),
   };
 
@@ -201,6 +220,56 @@ class SocialPlatforms {
   /// Get hashtag format for a platform
   static HashtagFormat? getHashtagFormat(String platform) {
     return hashtagFormats[platform.toLowerCase()];
+  }
+
+  /// Check if a platform supports automated posting
+  static bool supportsAutomatedPosting(String platform) {
+    return capabilities[platform.toLowerCase()]?.supportsAutomatedPosting ==
+        true;
+  }
+
+  /// Check if a platform requires a business account for automated posting
+  static bool requiresBusinessAccount(String platform) {
+    return capabilities[platform.toLowerCase()]?.requiresBusinessAccount ==
+        true;
+  }
+
+  /// Get platforms that support automated posting
+  static List<String> getAutomatedPostingPlatforms() {
+    return all.where((platform) => supportsAutomatedPosting(platform)).toList();
+  }
+
+  /// Get platforms that require manual sharing (SharePlus)
+  static List<String> getManualSharingPlatforms() {
+    return all
+        .where((platform) => !supportsAutomatedPosting(platform))
+        .toList();
+  }
+
+  /// Get posting requirements for a platform
+  static String? getPostingRequirements(String platform) {
+    return capabilities[platform.toLowerCase()]?.postingRequirements;
+  }
+
+  /// Check if user has business account access for a platform
+  static Future<bool> hasBusinessAccountAccess(String platform,
+      {AuthService? authService}) async {
+    if (!requiresBusinessAccount(platform)) return true;
+
+    if (authService == null) return false;
+
+    // Check if user has business account access
+    // This would typically check the stored account type in Firestore
+    try {
+      final uid = authService.currentUser?.uid;
+      if (uid == null) return false;
+
+      // For now, we'll assume personal accounts by default
+      // In a real implementation, you'd check the account type from Firestore
+      return false;
+    } catch (e) {
+      return false;
+    }
   }
 
   /// Get platforms that support a specific media type
@@ -354,6 +423,9 @@ class PlatformCapabilities {
   final bool requiresMedia;
   final int maxTextLength;
   final int maxHashtags;
+  final bool supportsAutomatedPosting;
+  final bool requiresBusinessAccount;
+  final String? postingRequirements;
 
   const PlatformCapabilities({
     required this.supportsText,
@@ -362,6 +434,9 @@ class PlatformCapabilities {
     required this.requiresMedia,
     required this.maxTextLength,
     required this.maxHashtags,
+    required this.supportsAutomatedPosting,
+    required this.requiresBusinessAccount,
+    required this.postingRequirements,
   });
 }
 

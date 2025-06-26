@@ -2656,4 +2656,80 @@ class SocialActionPostCoordinator extends ChangeNotifier {
       rethrow;
     }
   }
+
+  /// Check which platforms support automated posting vs manual sharing
+  Map<String, String> getPostingStrategyForPlatforms() {
+    final strategies = <String, String>{};
+
+    for (final platform in _currentPost.platforms) {
+      if (SocialPlatforms.supportsAutomatedPosting(platform)) {
+        strategies[platform] = 'automated';
+      } else {
+        strategies[platform] = 'manual';
+      }
+    }
+
+    return strategies;
+  }
+
+  /// Get platforms that will use automated posting
+  List<String> getAutomatedPostingPlatforms() {
+    return _currentPost.platforms
+        .where((platform) => SocialPlatforms.supportsAutomatedPosting(platform))
+        .toList();
+  }
+
+  /// Get platforms that will use manual sharing (SharePlus)
+  List<String> getManualSharingPlatforms() {
+    return _currentPost.platforms
+        .where(
+            (platform) => !SocialPlatforms.supportsAutomatedPosting(platform))
+        .toList();
+  }
+
+  /// Get user-friendly message about posting strategy
+  String getPostingStrategyMessage() {
+    final automatedPlatforms = getAutomatedPostingPlatforms();
+    final manualPlatforms = getManualSharingPlatforms();
+
+    if (automatedPlatforms.isEmpty && manualPlatforms.isEmpty) {
+      return 'No platforms selected';
+    }
+
+    final messages = <String>[];
+
+    if (automatedPlatforms.isNotEmpty) {
+      final platformNames = automatedPlatforms
+          .map((p) => SocialPlatforms.getDisplayName(p))
+          .join(', ');
+      messages.add('$platformNames: Automated posting');
+    }
+
+    if (manualPlatforms.isNotEmpty) {
+      final platformNames = manualPlatforms
+          .map((p) => SocialPlatforms.getDisplayName(p))
+          .join(', ');
+      messages.add('$platformNames: Manual sharing (tap to confirm)');
+    }
+
+    return messages.join('\n');
+  }
+
+  /// Check if any platforms require business accounts for automated posting
+  Future<List<String>> getPlatformsRequiringBusinessAccount() async {
+    final requiringBusiness = <String>[];
+
+    for (final platform in _currentPost.platforms) {
+      if (SocialPlatforms.requiresBusinessAccount(platform)) {
+        final hasAccess = await SocialPlatforms.hasBusinessAccountAccess(
+            platform,
+            authService: _authService);
+        if (!hasAccess) {
+          requiringBusiness.add(platform);
+        }
+      }
+    }
+
+    return requiringBusiness;
+  }
 }

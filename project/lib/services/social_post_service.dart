@@ -2,9 +2,12 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import 'package:share_plus/share_plus.dart';
+import 'package:cross_file/cross_file.dart';
 import 'dart:convert';
 import '../models/social_action.dart';
 import '../services/social_action_post_coordinator.dart';
+import '../constants/social_platforms.dart';
 import 'auth_service.dart';
 
 class SocialPostService {
@@ -168,14 +171,14 @@ class SocialPostService {
           case 'facebook':
             shouldPost = action.platformData.facebook?.postHere ?? false;
             if (shouldPost) {
-              await _postToFacebook(action);
+              await _postToFacebookWithStrategy(action, authService);
               results[platform] = true;
             }
             break;
           case 'instagram':
             shouldPost = action.platformData.instagram?.postHere ?? false;
             if (shouldPost) {
-              await _postToInstagram(action);
+              await _postToInstagramWithStrategy(action, authService);
               results[platform] = true;
             }
             break;
@@ -240,6 +243,133 @@ class SocialPostService {
     }
 
     return results;
+  }
+
+  /// Post to Facebook with strategy-based approach
+  Future<void> _postToFacebookWithStrategy(
+      SocialAction action, AuthService? authService) async {
+    // Check if user has business account access
+    final hasBusinessAccess = await SocialPlatforms.hasBusinessAccountAccess(
+        'facebook',
+        authService: authService);
+
+    if (hasBusinessAccess) {
+      // Use automated posting via Facebook Graph API
+      await _postToFacebook(action);
+    } else {
+      // Fall back to SharePlus for manual sharing
+      await _shareToFacebookViaSharePlus(action);
+    }
+  }
+
+  /// Post to Instagram with strategy-based approach
+  Future<void> _postToInstagramWithStrategy(
+      SocialAction action, AuthService? authService) async {
+    // Check if user has business account access
+    final hasBusinessAccess = await SocialPlatforms.hasBusinessAccountAccess(
+        'instagram',
+        authService: authService);
+
+    if (hasBusinessAccess) {
+      // Use automated posting via Instagram Basic Display API
+      await _postToInstagram(action);
+    } else {
+      // Fall back to SharePlus for manual sharing
+      await _shareToInstagramViaSharePlus(action);
+    }
+  }
+
+  /// Share to Facebook using SharePlus (manual sharing)
+  Future<void> _shareToFacebookViaSharePlus(SocialAction action) async {
+    final formattedContent = _formatPostForPlatform(action, 'facebook');
+
+    if (kDebugMode) {
+      print('📘 Sharing to Facebook via SharePlus...');
+      print('  Formatted content: $formattedContent');
+      print('  Media count: ${action.content.media.length}');
+    }
+
+    try {
+      String shareText = formattedContent;
+
+      // Add media files if present
+      List<XFile> mediaFiles = [];
+      if (action.content.media.isNotEmpty) {
+        for (final mediaItem in action.content.media) {
+          if (mediaItem.fileUri.startsWith('file://')) {
+            mediaFiles.add(XFile(mediaItem.fileUri));
+          }
+        }
+      }
+
+      // Share using SharePlus
+      if (mediaFiles.isNotEmpty) {
+        await Share.shareXFiles(
+          mediaFiles,
+          text: shareText,
+          subject: 'Facebook Post',
+        );
+      } else {
+        await Share.share(
+          shareText,
+          subject: 'Facebook Post',
+        );
+      }
+
+      if (kDebugMode) {
+        print('  ✅ Successfully shared to Facebook via SharePlus');
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        print('  ❌ SharePlus sharing failed: $e');
+      }
+      rethrow;
+    }
+  }
+
+  /// Share to Instagram using SharePlus (manual sharing)
+  Future<void> _shareToInstagramViaSharePlus(SocialAction action) async {
+    final formattedContent = _formatPostForPlatform(action, 'instagram');
+
+    if (kDebugMode) {
+      print('📷 Sharing to Instagram via SharePlus...');
+      print('  Formatted content: $formattedContent');
+      print('  Media count: ${action.content.media.length}');
+    }
+
+    try {
+      String shareText = formattedContent;
+
+      // Instagram requires media, so we need at least one media file
+      List<XFile> mediaFiles = [];
+      if (action.content.media.isNotEmpty) {
+        for (final mediaItem in action.content.media) {
+          if (mediaItem.fileUri.startsWith('file://')) {
+            mediaFiles.add(XFile(mediaItem.fileUri));
+          }
+        }
+      }
+
+      if (mediaFiles.isEmpty) {
+        throw Exception('Instagram requires media content for sharing');
+      }
+
+      // Share using SharePlus with media
+      await Share.shareXFiles(
+        mediaFiles,
+        text: shareText,
+        subject: 'Instagram Post',
+      );
+
+      if (kDebugMode) {
+        print('  ✅ Successfully shared to Instagram via SharePlus');
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        print('  ❌ SharePlus sharing failed: $e');
+      }
+      rethrow;
+    }
   }
 
   /// Post to Facebook with proper API integration
