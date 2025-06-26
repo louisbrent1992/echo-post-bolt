@@ -7,7 +7,6 @@ import 'package:provider/provider.dart';
 import 'package:http/http.dart' as http;
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:record/record.dart';
-import 'package:intl/intl.dart';
 
 import '../models/social_action.dart';
 import '../models/status_message.dart';
@@ -83,8 +82,6 @@ class _CommandScreenState extends State<CommandScreen>
   // Triple Action Button System animation controllers
   late AnimationController _leftButtonController;
   late AnimationController _rightButtonController;
-  late Animation<double> _leftButtonAnimation;
-  late Animation<double> _rightButtonAnimation;
 
   Timer? _recordingTimer;
   Timer? _amplitudeTimer;
@@ -176,22 +173,6 @@ class _CommandScreenState extends State<CommandScreen>
       duration: const Duration(milliseconds: 300),
       vsync: this,
     );
-
-    _leftButtonAnimation = Tween<double>(
-      begin: 0.0,
-      end: 1.0,
-    ).animate(CurvedAnimation(
-      parent: _leftButtonController,
-      curve: Curves.elasticOut,
-    ));
-
-    _rightButtonAnimation = Tween<double>(
-      begin: 0.0,
-      end: 1.0,
-    ).animate(CurvedAnimation(
-      parent: _rightButtonController,
-      curve: Curves.elasticOut,
-    ));
   }
 
   double get normalizedAmplitude {
@@ -992,7 +973,6 @@ class _CommandScreenState extends State<CommandScreen>
           );
 
       final navigator = Navigator.of(context);
-      final scaffoldMessenger = ScaffoldMessenger.of(context);
 
       final updatedAction = await navigator.push<SocialAction>(
         MaterialPageRoute(
@@ -1146,7 +1126,7 @@ class _CommandScreenState extends State<CommandScreen>
 
     overlayEntry = OverlayEntry(
       builder: (overlayContext) => Material(
-        color: Colors.black.withValues(alpha: 0.5),
+        color: Colors.black.withValues(alpha: 102),
         child: Center(
           child: Container(
             width: double.infinity,
@@ -1306,7 +1286,7 @@ class _CommandScreenState extends State<CommandScreen>
 
     overlayEntry = OverlayEntry(
       builder: (overlayContext) => Material(
-        color: Colors.black.withValues(alpha: 0.5),
+        color: Colors.black.withValues(alpha: 102),
         child: Center(
           child: Container(
             width: double.infinity,
@@ -1417,93 +1397,6 @@ class _CommandScreenState extends State<CommandScreen>
     }
 
     return result;
-  }
-
-  Future<void> _editSchedule() async {
-    // CRITICAL: Ensure we're not in recording state when showing dialog
-    if (_postCoordinator?.isRecording == true) {
-      if (kDebugMode) {
-        print(
-            '⚠️ Cannot edit schedule while recording - stopping recording first');
-      }
-      await _stopRecording();
-    }
-
-    if (!mounted) return;
-
-    // CRITICAL: Capture context and coordinator references before async operations
-    final dialogContext = context;
-    final coordinator = _postCoordinator;
-
-    final now = DateTime.now();
-    final currentAction = coordinator?.currentPost;
-    final initialDate = currentAction?.options.schedule == 'now'
-        ? now
-        : DateTime.parse(
-            currentAction?.options.schedule ?? now.toIso8601String());
-
-    if (!dialogContext.mounted) return;
-    final pickedDate = await showDatePicker(
-      context: dialogContext,
-      initialDate: initialDate,
-      firstDate: now,
-      lastDate: now.add(const Duration(days: 365)),
-    );
-
-    // CRITICAL: Check mounted after async operation
-    if (!mounted) return;
-
-    if (pickedDate != null) {
-      if (!dialogContext.mounted) return;
-      final pickedTime = await showTimePicker(
-        context: dialogContext,
-        initialTime: TimeOfDay.fromDateTime(initialDate),
-      );
-
-      // CRITICAL: Check mounted after second async operation
-      if (!mounted) return;
-
-      if (pickedTime != null) {
-        final scheduledDateTime = DateTime(
-          pickedDate.year,
-          pickedDate.month,
-          pickedDate.day,
-          pickedTime.hour,
-          pickedTime.minute,
-        );
-
-        try {
-          // CRITICAL: Update through coordinator for centralized state management
-          await coordinator
-              ?.updatePostSchedule(scheduledDateTime.toIso8601String());
-
-          if (kDebugMode) {
-            print('✅ Schedule updated via coordinator');
-            print('   New schedule: ${scheduledDateTime.toIso8601String()}');
-          }
-
-          if (mounted) {
-            _postCoordinator?.requestStatusUpdate(
-              'Schedule updated to ${DateFormat('MMM d, yyyy \'at\' h:mm a').format(scheduledDateTime)}',
-              StatusMessageType.success,
-              duration: const Duration(seconds: 2),
-            );
-          }
-        } catch (e) {
-          if (kDebugMode) {
-            print('❌ Failed to update schedule via coordinator: $e');
-          }
-
-          if (mounted) {
-            _postCoordinator?.requestStatusUpdate(
-              'Failed to update schedule: $e',
-              StatusMessageType.error,
-              duration: const Duration(seconds: 3),
-            );
-          }
-        }
-      }
-    }
   }
 
   Future<void> _confirmAndPost() async {
@@ -1725,7 +1618,7 @@ class _CommandScreenState extends State<CommandScreen>
       children: [
         Column(
           children: [
-            Container(
+            SizedBox(
               height: 60,
               child: SevenIconHeader(
                 selectedPlatforms: coordinator.currentPost.platforms,
@@ -1839,13 +1732,13 @@ class _CommandScreenState extends State<CommandScreen>
                         decoration: BoxDecoration(
                           boxShadow: [
                             BoxShadow(
-                              color: Colors.black.withOpacity(0.4),
+                              color: Colors.black.withValues(alpha: 102),
                               blurRadius: 12,
                               spreadRadius: 2,
                             ),
                           ],
                         ),
-                        child: Icon(
+                        child: const Icon(
                           Icons.keyboard_arrow_down_rounded,
                           size: 48,
                           color: Colors.white,
@@ -2100,23 +1993,6 @@ class _CommandScreenState extends State<CommandScreen>
       if (kDebugMode) {
         print('✅ Complete reset sequence finished - ready for new recordings');
       }
-    }
-  }
-
-  /// NEW: User-initiated retry capability
-  void _handleRetryProcessing() {
-    _postCoordinator?.resetProcessing();
-
-    if (kDebugMode) {
-      print('🔄 User initiated processing retry');
-    }
-
-    if (mounted) {
-      _postCoordinator?.requestStatusUpdate(
-        'Ready to record again! 🎤',
-        StatusMessageType.success,
-        duration: const Duration(seconds: 2),
-      );
     }
   }
 

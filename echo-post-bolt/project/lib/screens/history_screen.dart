@@ -6,7 +6,6 @@ import 'package:intl/intl.dart';
 import 'package:flutter/foundation.dart';
 import 'package:video_thumbnail/video_thumbnail.dart';
 import 'package:photo_manager/photo_manager.dart';
-import 'dart:typed_data';
 
 import '../models/social_action.dart';
 import '../models/media_validation.dart';
@@ -44,20 +43,20 @@ class _HistoryScreenState extends State<HistoryScreen> {
     final firestoreService = Provider.of<FirestoreService>(context);
 
     return Scaffold(
-      backgroundColor:
-          Colors.transparent, // Make scaffold transparent for gradient
-      appBar: PreferredSize(
-        preferredSize: const Size.fromHeight(60),
-        child: TitleHeader(
-          title: 'Post History',
-          leftAction: IconButton(
-            icon: const Icon(Icons.arrow_back, color: Colors.white),
-            onPressed: () {
-              // Navigate back to the previous screen (Profile or Command Screen)
-              Navigator.pop(context);
-            },
-          ),
-          rightAction: PopupMenuButton<String>(
+      backgroundColor: Colors.black,
+      appBar: AppBar(
+        backgroundColor: Colors.black,
+        foregroundColor: Colors.white,
+        title: const Text('Post History'),
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: () {
+            // Navigate back to the previous screen (Profile or Command Screen)
+            Navigator.pop(context);
+          },
+        ),
+        actions: [
+          PopupMenuButton<String>(
             icon: const Icon(Icons.more_vert, color: Colors.white),
             color: const Color(0xFF2A2A2A),
             onSelected: (value) {
@@ -108,7 +107,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
               ),
             ],
           ),
-        ),
+        ],
       ),
       body: Container(
         decoration: const BoxDecoration(
@@ -307,10 +306,10 @@ class _HistoryScreenState extends State<HistoryScreen> {
                       vertical: 6,
                     ),
                     decoration: BoxDecoration(
-                      color: statusColor.withValues(alpha: 0.2),
-                      borderRadius: BorderRadius.circular(12),
+                      color: statusColor.withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(8),
                       border: Border.all(
-                        color: statusColor.withValues(alpha: 0.5),
+                        color: statusColor.withValues(alpha: 0.3),
                         width: 1,
                       ),
                     ),
@@ -329,7 +328,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
                           style: TextStyle(
                             color: statusColor,
                             fontSize: 12,
-                            fontWeight: FontWeight.bold,
+                            fontWeight: FontWeight.w500,
                           ),
                         ),
                       ],
@@ -339,7 +338,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
                   Text(
                     formattedDate,
                     style: TextStyle(
-                      color: Colors.white.withValues(alpha: 0.6),
+                      color: Colors.white.withValues(alpha: 0.7),
                       fontSize: 12,
                     ),
                   ),
@@ -398,11 +397,11 @@ class _HistoryScreenState extends State<HistoryScreen> {
                               ),
                               decoration: BoxDecoration(
                                 color: _getPlatformColor(platform)
-                                    .withValues(alpha: 0.2),
-                                borderRadius: BorderRadius.circular(12),
+                                    .withValues(alpha: 0.1),
+                                borderRadius: BorderRadius.circular(8),
                                 border: Border.all(
                                   color: _getPlatformColor(platform)
-                                      .withValues(alpha: 0.5),
+                                      .withValues(alpha: 0.3),
                                   width: 1,
                                 ),
                               ),
@@ -661,7 +660,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
       decoration: BoxDecoration(
         color: const Color(0xFF2A2A2A),
         border: Border.all(
-          color: const Color(0xFFFF0055).withOpacity(0.3),
+          color: const Color(0xFFFF0055).withValues(alpha: 77),
           width: 2,
         ),
       ),
@@ -855,7 +854,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
       builder: (context) {
         return Container(
           decoration: const BoxDecoration(
-            color: Color(0xFF1A1A1A),
+            color: Colors.black,
             borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
           ),
           child: DraggableScrollableSheet(
@@ -883,59 +882,89 @@ class _HistoryScreenState extends State<HistoryScreen> {
                     ),
                     const SizedBox(height: 20),
 
-                    // Title and Delete Button
-                    Row(
-                      children: [
-                        Text(
-                          'Post Details',
-                          style: TextStyle(
-                            color: Colors.white.withValues(alpha: 0.9),
-                            fontSize: 24,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        const Spacer(),
-                        IconButton(
-                          onPressed: () => _deletePost(context, action, docId),
-                          icon: Icon(
-                            Icons.delete,
-                            color: Colors.red.withValues(alpha: 0.8),
-                          ),
-                          tooltip: 'Delete Post',
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 16),
-
-                    // Status
+                    // Header Container - following Directory Screen top widget style
                     Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 16,
-                        vertical: 8,
-                      ),
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(16),
                       decoration: BoxDecoration(
-                        color: _getStatusColor(status).withValues(alpha: 0.2),
+                        color: Colors.white.withValues(alpha: 0.1),
                         borderRadius: BorderRadius.circular(12),
                         border: Border.all(
-                          color: _getStatusColor(status).withValues(alpha: 0.5),
+                          color: Colors.white.withValues(alpha: 0.2),
                         ),
                       ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Icon(
-                            _getStatusIcon(status),
-                            color: _getStatusColor(status),
-                            size: 18,
+                          // Title and Delete Button
+                          Row(
+                            children: [
+                              const Icon(
+                                Icons.article,
+                                color: Color(0xFFFF0055),
+                                size: 20,
+                              ),
+                              const SizedBox(width: 8),
+                              const Text(
+                                'Post Details',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                              const Spacer(),
+                              IconButton(
+                                onPressed: () =>
+                                    _deletePost(context, action, docId),
+                                icon: Icon(
+                                  Icons.delete,
+                                  color: Colors.red.withValues(alpha: 0.7),
+                                ),
+                                tooltip: 'Delete Post',
+                                constraints: const BoxConstraints(
+                                  minWidth: 32,
+                                  minHeight: 32,
+                                ),
+                              ),
+                            ],
                           ),
-                          const SizedBox(width: 8),
-                          Text(
-                            status.substring(0, 1).toUpperCase() +
-                                status.substring(1),
-                            style: TextStyle(
-                              color: _getStatusColor(status),
-                              fontWeight: FontWeight.bold,
-                              fontSize: 16,
+                          const SizedBox(height: 12),
+
+                          // Status
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 6,
+                            ),
+                            decoration: BoxDecoration(
+                              color: _getStatusColor(status)
+                                  .withValues(alpha: 0.1),
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(
+                                color: _getStatusColor(status)
+                                    .withValues(alpha: 0.3),
+                              ),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  _getStatusIcon(status),
+                                  color: _getStatusColor(status),
+                                  size: 16,
+                                ),
+                                const SizedBox(width: 6),
+                                Text(
+                                  status.substring(0, 1).toUpperCase() +
+                                      status.substring(1),
+                                  style: TextStyle(
+                                    color: _getStatusColor(status),
+                                    fontWeight: FontWeight.w500,
+                                    fontSize: 14,
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
                         ],
@@ -972,13 +1001,13 @@ class _HistoryScreenState extends State<HistoryScreen> {
                                           horizontal: 8, vertical: 4),
                                       decoration: BoxDecoration(
                                         color:
-                                            Colors.green.withValues(alpha: 0.2),
-                                        borderRadius: BorderRadius.circular(12),
+                                            Colors.green.withValues(alpha: 0.1),
+                                        borderRadius: BorderRadius.circular(8),
                                         border: Border.all(
                                             color: Colors.green
-                                                .withValues(alpha: 0.5)),
+                                                .withValues(alpha: 0.3)),
                                       ),
-                                      child: Row(
+                                      child: const Row(
                                         mainAxisSize: MainAxisSize.min,
                                         children: [
                                           Icon(
@@ -986,13 +1015,13 @@ class _HistoryScreenState extends State<HistoryScreen> {
                                             color: Colors.green,
                                             size: 12,
                                           ),
-                                          const SizedBox(width: 4),
+                                          SizedBox(width: 4),
                                           Text(
                                             'Recovered',
                                             style: TextStyle(
                                               color: Colors.green,
                                               fontSize: 10,
-                                              fontWeight: FontWeight.bold,
+                                              fontWeight: FontWeight.w500,
                                             ),
                                           ),
                                         ],
@@ -1140,10 +1169,10 @@ class _HistoryScreenState extends State<HistoryScreen> {
                       width: double.infinity,
                       padding: const EdgeInsets.all(16),
                       decoration: BoxDecoration(
-                        color: Colors.white.withValues(alpha: 0.05),
+                        color: Colors.white.withValues(alpha: 0.1),
                         borderRadius: BorderRadius.circular(12),
                         border: Border.all(
-                          color: Colors.white.withValues(alpha: 0.1),
+                          color: Colors.white.withValues(alpha: 0.2),
                         ),
                       ),
                       child: Column(
@@ -1176,11 +1205,11 @@ class _HistoryScreenState extends State<HistoryScreen> {
                                   ),
                                   decoration: BoxDecoration(
                                     color: const Color(0xFFFF0055)
-                                        .withValues(alpha: 0.2),
-                                    borderRadius: BorderRadius.circular(16),
+                                        .withValues(alpha: 0.1),
+                                    borderRadius: BorderRadius.circular(8),
                                     border: Border.all(
                                       color: const Color(0xFFFF0055)
-                                          .withValues(alpha: 0.5),
+                                          .withValues(alpha: 0.3),
                                     ),
                                   ),
                                   child: Text(
@@ -1221,11 +1250,11 @@ class _HistoryScreenState extends State<HistoryScreen> {
                           ),
                           decoration: BoxDecoration(
                             color: _getPlatformColor(platform)
-                                .withValues(alpha: 0.2),
-                            borderRadius: BorderRadius.circular(12),
+                                .withValues(alpha: 0.1),
+                            borderRadius: BorderRadius.circular(8),
                             border: Border.all(
                               color: _getPlatformColor(platform)
-                                  .withValues(alpha: 0.5),
+                                  .withValues(alpha: 0.3),
                             ),
                           ),
                           child: Row(
@@ -1242,7 +1271,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
                                     platform.substring(1),
                                 style: TextStyle(
                                   color: _getPlatformColor(platform),
-                                  fontWeight: FontWeight.w600,
+                                  fontWeight: FontWeight.w500,
                                 ),
                               ),
                             ],
@@ -1320,16 +1349,21 @@ class _HistoryScreenState extends State<HistoryScreen> {
                       SizedBox(
                         width: double.infinity,
                         child: ElevatedButton.icon(
-                          icon: const Icon(Icons.refresh),
+                          icon: const Icon(Icons.refresh, size: 18),
                           label: const Text('Retry Post'),
                           onPressed: () => _retryPost(context, action),
                           style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFFFF0055),
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(vertical: 16),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12),
+                            backgroundColor:
+                                const Color(0xFFFF0055).withValues(alpha: 0.1),
+                            foregroundColor: const Color(0xFFFF0055),
+                            side: BorderSide(
+                              color: const Color(0xFFFF0055)
+                                  .withValues(alpha: 0.3),
                             ),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            padding: const EdgeInsets.symmetric(vertical: 12),
                           ),
                         ),
                       ),
@@ -1339,16 +1373,20 @@ class _HistoryScreenState extends State<HistoryScreen> {
                       SizedBox(
                         width: double.infinity,
                         child: ElevatedButton.icon(
-                          icon: const Icon(Icons.schedule),
+                          icon: const Icon(Icons.schedule, size: 18),
                           label: const Text('Reschedule'),
                           onPressed: () => _reschedulePost(context, action),
                           style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.orange,
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(vertical: 16),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12),
+                            backgroundColor:
+                                Colors.orange.withValues(alpha: 0.1),
+                            foregroundColor: Colors.orange,
+                            side: BorderSide(
+                              color: Colors.orange.withValues(alpha: 0.3),
                             ),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            padding: const EdgeInsets.symmetric(vertical: 12),
                           ),
                         ),
                       ),
@@ -1357,34 +1395,39 @@ class _HistoryScreenState extends State<HistoryScreen> {
                     SizedBox(
                       width: double.infinity,
                       child: ElevatedButton.icon(
-                        icon: const Icon(Icons.edit),
+                        icon: const Icon(Icons.edit, size: 18),
                         label: const Text('Edit Post'),
                         onPressed: () => _editPost(context, action),
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFFFF0055),
+                          backgroundColor: Colors.white.withValues(alpha: 0.1),
                           foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(vertical: 16),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
+                          side: BorderSide(
+                            color: Colors.white.withValues(alpha: 0.3),
                           ),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          padding: const EdgeInsets.symmetric(vertical: 12),
                         ),
                       ),
                     ),
                     const SizedBox(height: 12),
                     SizedBox(
                       width: double.infinity,
-                      child: OutlinedButton.icon(
-                        icon: const Icon(Icons.delete),
+                      child: ElevatedButton.icon(
+                        icon: const Icon(Icons.delete, size: 18),
                         label: const Text('Delete Post'),
                         onPressed: () => _deletePost(context, action, docId),
-                        style: OutlinedButton.styleFrom(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.red.withValues(alpha: 0.1),
                           foregroundColor: Colors.red,
                           side: BorderSide(
-                              color: Colors.red.withValues(alpha: 0.5)),
-                          padding: const EdgeInsets.symmetric(vertical: 16),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
+                            color: Colors.red.withValues(alpha: 0.3),
                           ),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          padding: const EdgeInsets.symmetric(vertical: 12),
                         ),
                       ),
                     ),
@@ -1911,6 +1954,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
     try {
       // Get all posts
       final querySnapshot = await firestoreService.getActionsStream().first;
+      if (!mounted) return;
       final posts = <SocialAction>[];
 
       for (final doc in querySnapshot.docs) {
@@ -1927,6 +1971,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
         }
       }
 
+      if (!mounted) return;
       if (posts.isEmpty) {
         Navigator.pop(context); // Close progress dialog
         scaffoldMessenger.showSnackBar(
@@ -1942,7 +1987,6 @@ class _HistoryScreenState extends State<HistoryScreen> {
       int totalMediaItems = 0;
       int recoveredItems = 0;
       int failedItems = 0;
-      int postsUpdated = 0;
 
       for (final post in posts) {
         totalMediaItems += post.content.media.length;
@@ -1990,7 +2034,6 @@ class _HistoryScreenState extends State<HistoryScreen> {
 
                 await firestoreService.updateAction(
                     post.actionId, updatedPost.toJson());
-                postsUpdated++;
               }
             } catch (e) {
               // Handle update error
@@ -1999,6 +2042,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
         }
       }
 
+      if (!mounted) return;
       Navigator.pop(context); // Close progress dialog
 
       scaffoldMessenger.showSnackBar(
@@ -2010,6 +2054,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
         ),
       );
     } catch (e) {
+      if (!mounted) return;
       Navigator.pop(context); // Close progress dialog
       scaffoldMessenger.showSnackBar(
         SnackBar(
@@ -2115,8 +2160,8 @@ class _HistoryScreenState extends State<HistoryScreen> {
           ),
           borderRadius: BorderRadius.circular(12),
           border: Border.all(
-            color: const Color(0xFFFF0055).withOpacity(0.3),
-            width: 1,
+            color: const Color(0xFFFF0055).withValues(alpha: 77),
+            width: 2,
           ),
         ),
         child: const Column(
@@ -2158,8 +2203,8 @@ class _HistoryScreenState extends State<HistoryScreen> {
         ),
         borderRadius: BorderRadius.circular(12),
         border: Border.all(
-          color: const Color(0xFFFF0055).withOpacity(0.3),
-          width: 1,
+          color: const Color(0xFFFF0055).withValues(alpha: 77),
+          width: 2,
         ),
       ),
       child: Column(
@@ -2289,8 +2334,8 @@ class _HistoryScreenState extends State<HistoryScreen> {
             ],
           ),
           border: Border.all(
-            color: const Color(0xFFFF0055).withValues(alpha: 0.3),
-            width: 1,
+            color: const Color(0xFFFF0055).withValues(alpha: 77),
+            width: 2,
           ),
         ),
         child: const Column(
@@ -2331,8 +2376,8 @@ class _HistoryScreenState extends State<HistoryScreen> {
           ],
         ),
         border: Border.all(
-          color: const Color(0xFFFF0055).withValues(alpha: 0.3),
-          width: 1,
+          color: const Color(0xFFFF0055).withValues(alpha: 77),
+          width: 2,
         ),
       ),
       child: Column(

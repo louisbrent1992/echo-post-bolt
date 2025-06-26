@@ -23,11 +23,10 @@ class PostingStrategyInfo extends StatelessWidget {
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Colors.blue.shade50,
+        color: Colors.white.withValues(alpha: 0.1),
         borderRadius: BorderRadius.circular(12),
         border: Border.all(
-          color: Colors.blue.shade200,
-          width: 1,
+          color: Colors.white.withValues(alpha: 0.2),
         ),
       ),
       child: Column(
@@ -35,18 +34,18 @@ class PostingStrategyInfo extends StatelessWidget {
         children: [
           Row(
             children: [
-              Icon(
+              const Icon(
                 Icons.info_outline,
-                color: Colors.blue.shade700,
+                color: Color(0xFFFF0055),
                 size: 20,
               ),
               const SizedBox(width: 8),
-              Text(
+              const Text(
                 'Posting Strategy',
                 style: TextStyle(
                   fontSize: 16,
                   fontWeight: FontWeight.w600,
-                  color: Colors.blue.shade700,
+                  color: Colors.white,
                 ),
               ),
             ],
@@ -75,7 +74,7 @@ class PostingStrategyInfo extends StatelessWidget {
             'Manual sharing will open the native share dialog for you to confirm.',
             style: TextStyle(
               fontSize: 12,
-              color: Colors.blue.shade600,
+              color: Colors.white.withValues(alpha: 0.7),
               fontStyle: FontStyle.italic,
             ),
           ),
@@ -120,10 +119,12 @@ class PostingStrategyInfo extends StatelessWidget {
             return Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
               decoration: BoxDecoration(
-                color: color.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(12),
+                color:
+                    SocialPlatforms.getColor(platform).withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(8),
                 border: Border.all(
-                  color: color.withOpacity(0.3),
+                  color:
+                      SocialPlatforms.getColor(platform).withValues(alpha: 0.3),
                   width: 1,
                 ),
               ),
@@ -132,7 +133,7 @@ class PostingStrategyInfo extends StatelessWidget {
                 children: [
                   Icon(
                     SocialPlatforms.getIcon(platform),
-                    color: color,
+                    color: SocialPlatforms.getColor(platform),
                     size: 14,
                   ),
                   const SizedBox(width: 4),
@@ -141,7 +142,7 @@ class PostingStrategyInfo extends StatelessWidget {
                     style: TextStyle(
                       fontSize: 12,
                       fontWeight: FontWeight.w500,
-                      color: color,
+                      color: SocialPlatforms.getColor(platform),
                     ),
                   ),
                 ],
@@ -172,11 +173,10 @@ class BusinessAccountWarning extends StatelessWidget {
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Colors.orange.shade50,
+        color: Colors.white.withValues(alpha: 0.1),
         borderRadius: BorderRadius.circular(12),
         border: Border.all(
-          color: Colors.orange.shade200,
-          width: 1,
+          color: Colors.white.withValues(alpha: 0.2),
         ),
       ),
       child: Column(
@@ -186,7 +186,7 @@ class BusinessAccountWarning extends StatelessWidget {
             children: [
               Icon(
                 Icons.warning_amber_rounded,
-                color: Colors.orange.shade700,
+                color: Colors.orange.withValues(alpha: 0.8),
                 size: 20,
               ),
               const SizedBox(width: 8),
@@ -195,7 +195,7 @@ class BusinessAccountWarning extends StatelessWidget {
                 style: TextStyle(
                   fontSize: 16,
                   fontWeight: FontWeight.w600,
-                  color: Colors.orange.shade700,
+                  color: Colors.orange.withValues(alpha: 0.9),
                 ),
               ),
             ],
@@ -205,7 +205,7 @@ class BusinessAccountWarning extends StatelessWidget {
             'The following platforms require a Business or Creator account for automated posting:',
             style: TextStyle(
               fontSize: 14,
-              color: Colors.orange.shade700,
+              color: Colors.white.withValues(alpha: 0.9),
             ),
           ),
           const SizedBox(height: 8),
@@ -216,10 +216,12 @@ class BusinessAccountWarning extends StatelessWidget {
               return Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 decoration: BoxDecoration(
-                  color: Colors.orange.shade100,
-                  borderRadius: BorderRadius.circular(12),
+                  color:
+                      SocialPlatforms.getColor(platform).withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(8),
                   border: Border.all(
-                    color: Colors.orange.shade300,
+                    color: SocialPlatforms.getColor(platform)
+                        .withValues(alpha: 0.3),
                     width: 1,
                   ),
                 ),
@@ -228,7 +230,7 @@ class BusinessAccountWarning extends StatelessWidget {
                   children: [
                     Icon(
                       SocialPlatforms.getIcon(platform),
-                      color: Colors.orange.shade700,
+                      color: SocialPlatforms.getColor(platform),
                       size: 14,
                     ),
                     const SizedBox(width: 4),
@@ -237,7 +239,7 @@ class BusinessAccountWarning extends StatelessWidget {
                       style: TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.w500,
-                        color: Colors.orange.shade700,
+                        color: SocialPlatforms.getColor(platform),
                       ),
                     ),
                   ],
@@ -250,7 +252,7 @@ class BusinessAccountWarning extends StatelessWidget {
             'Personal accounts will use manual sharing instead.',
             style: TextStyle(
               fontSize: 12,
-              color: Colors.orange.shade600,
+              color: Colors.white.withValues(alpha: 0.7),
               fontStyle: FontStyle.italic,
             ),
           ),
