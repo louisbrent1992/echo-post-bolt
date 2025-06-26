@@ -19,6 +19,17 @@ import '../models/status_message.dart';
 /// Status message priority levels to prevent important messages from being overridden
 enum StatusPriority { low, medium, high, critical }
 
+/// Result of platform toggle validation
+class PlatformToggleResult {
+  final bool canToggle;
+  final String message;
+
+  const PlatformToggleResult({
+    required this.canToggle,
+    required this.message,
+  });
+}
+
 /// Manages the persistent state and orchestration of social media posts
 /// across all screens in the EchoPost application.
 class SocialActionPostCoordinator extends ChangeNotifier {
@@ -48,6 +59,11 @@ class SocialActionPostCoordinator extends ChangeNotifier {
   TextEditingController? _textEditingController;
   bool _isTextEditing = false;
   String? _editingOriginalText;
+
+  // CRITICAL: Persistent hashtag editing state
+  TextEditingController? _hashtagEditingController;
+  bool _isHashtagEditing = false;
+  List<String>? _editingOriginalHashtags;
 
   // Debouncing for state transitions only (removed auto-save debouncing)
   Timer? _stateTransitionDebouncer;
@@ -1638,6 +1654,141 @@ class SocialActionPostCoordinator extends ChangeNotifier {
     _safeNotifyListeners();
   }
 
+  // CRITICAL: Persistent hashtag editing management
+  // These methods provide coordinator-managed hashtag editing that integrates with AIService
+
+  /// Start hashtag editing session with persistent controller
+  TextEditingController startHashtagEditing() {
+    if (_isDisposed) {
+      throw StateError(
+          'Cannot start hashtag editing - coordinator is disposed');
+    }
+
+    // Dispose existing controller if any
+    _hashtagEditingController?.dispose();
+
+    // Create new controller with current hashtags (space-separated, no # symbols)
+    final currentHashtags = _currentPost.content.hashtags;
+    final hashtagText = currentHashtags.join(' ');
+    _hashtagEditingController = TextEditingController(text: hashtagText);
+    _editingOriginalHashtags = List.from(currentHashtags);
+    _isHashtagEditing = true;
+
+    if (kDebugMode) {
+      print('🏷️ Hashtag editing session started');
+      print('   Original hashtags: $currentHashtags');
+      print('   Controller text: "$hashtagText"');
+    }
+
+    _safeNotifyListeners();
+    return _hashtagEditingController!;
+  }
+
+  /// Commit hashtag editing changes with AI integration
+  Future<void> commitHashtagEdits() async {
+    if (!_isHashtagEditing || _hashtagEditingController == null) {
+      if (kDebugMode) {
+        print('⚠️ No active hashtag editing session to commit');
+      }
+      return;
+    }
+
+    final newHashtagText = _hashtagEditingController!.text.trim();
+
+    // Parse hashtags from text input (space or comma separated)
+    final newHashtags = _parseHashtagInput(newHashtagText);
+    final originalHashtags = _editingOriginalHashtags ?? [];
+
+    // Only process if hashtags actually changed
+    if (!_hashtagListsEqual(newHashtags, originalHashtags)) {
+      if (kDebugMode) {
+        print('🏷️ Hashtag editing - changes detected');
+        print('   Original: $originalHashtags');
+        print('   New: $newHashtags');
+        print('   Applying direct hashtag update...');
+      }
+
+      // FIXED: Use direct hashtag update instead of AI processing to ensure immediate UI update
+      // This preserves the existing text content while only updating hashtags
+      _currentPost = _currentPost.copyWith(
+        content: _currentPost.content.copyWith(hashtags: newHashtags),
+      );
+
+      // Update state flags
+      _hasContent =
+          _currentPost.content.text.isNotEmpty || newHashtags.isNotEmpty;
+      _hasError = false;
+      _errorMessage = null;
+
+      // CRITICAL: Notify listeners immediately so UI updates
+      _safeNotifyListeners();
+
+      if (kDebugMode) {
+        print('✅ Hashtag editing committed via direct update');
+        print('   Final hashtags: ${_currentPost.content.hashtags}');
+        print('   Text preserved: "${_currentPost.content.text}"');
+      }
+    } else {
+      if (kDebugMode) {
+        print('🏷️ Hashtag editing cancelled - no changes made');
+      }
+    }
+
+    _endHashtagEditingSession();
+  }
+
+  /// Cancel hashtag editing without saving changes
+  void cancelHashtagEditing() {
+    if (kDebugMode) {
+      print('❌ Hashtag editing cancelled');
+    }
+    _endHashtagEditingSession();
+  }
+
+  /// Internal method to clean up hashtag editing session
+  void _endHashtagEditingSession() {
+    _hashtagEditingController?.dispose();
+    _hashtagEditingController = null;
+    _editingOriginalHashtags = null;
+    _isHashtagEditing = false;
+    _safeNotifyListeners();
+  }
+
+  /// Parse hashtag input text into normalized list
+  List<String> _parseHashtagInput(String input) {
+    if (input.isEmpty) return [];
+
+    // Split by spaces and commas, clean up each hashtag
+    final parts = input.split(RegExp(r'[,\s]+'));
+    final hashtags = <String>[];
+
+    for (final part in parts) {
+      final cleaned = part.trim();
+      if (cleaned.isNotEmpty) {
+        // Remove # symbol if present, normalize to lowercase
+        final hashtag = cleaned.startsWith('#')
+            ? cleaned.substring(1).toLowerCase()
+            : cleaned.toLowerCase();
+
+        // Only add if it's a valid hashtag (alphanumeric + underscore)
+        if (RegExp(r'^[a-zA-Z0-9_]+$').hasMatch(hashtag)) {
+          hashtags.add(hashtag);
+        }
+      }
+    }
+
+    // Remove duplicates and return
+    return hashtags.toSet().toList();
+  }
+
+  /// Compare two hashtag lists for equality
+  bool _hashtagListsEqual(List<String> list1, List<String> list2) {
+    if (list1.length != list2.length) return false;
+    final set1 = list1.toSet();
+    final set2 = list2.toSet();
+    return set1.containsAll(set2) && set2.containsAll(set1);
+  }
+
   @override
   void dispose() {
     if (kDebugMode) {
@@ -1647,6 +1798,7 @@ class SocialActionPostCoordinator extends ChangeNotifier {
     _isDisposed = true;
     _stateTransitionDebouncer?.cancel();
     _endTextEditingSession();
+    _endHashtagEditingSession();
     _statusTimer?.cancel();
     _processingWatchdog?.cancel();
     _error_clear_timer?.cancel();
@@ -2369,6 +2521,138 @@ class SocialActionPostCoordinator extends ChangeNotifier {
             '❌ SocialActionPostCoordinator: Failed to finalize and execute post: $e');
       }
       setError('Failed to execute post: $e');
+      rethrow;
+    }
+  }
+
+  /// Check if a platform can be toggled for current content
+  PlatformToggleResult canTogglePlatform(String platform) {
+    // Determine content type
+    final contentType = SocialPlatforms.getContentType(
+      hasMedia: hasMedia,
+      mediaItems: _currentPost.content.media,
+    );
+
+    final isCompatible =
+        SocialPlatforms.isPlatformCompatible(platform, contentType);
+
+    if (isCompatible) {
+      return PlatformToggleResult(
+        canToggle: true,
+        message: 'Platform is compatible with current content',
+      );
+    } else {
+      // Get specific incompatibility reason
+      final platformName =
+          platform.substring(0, 1).toUpperCase() + platform.substring(1);
+      String message;
+
+      if (contentType == 'text') {
+        message = '$platformName requires media content to post';
+      } else if (contentType == 'image' && platform == 'youtube') {
+        message = '$platformName requires video content, not just images';
+      } else {
+        message = '$platformName is not compatible with current content type';
+      }
+
+      return PlatformToggleResult(
+        canToggle: false,
+        message: message,
+      );
+    }
+  }
+
+  /// Load historical post back into coordinator for editing
+  /// This surgically rehydrates coordinator state without breaking existing flows
+  Future<void> loadHistoricalPost(SocialAction historicalAction) async {
+    if (_isDisposed) {
+      throw StateError('Cannot load historical post - coordinator is disposed');
+    }
+
+    try {
+      if (kDebugMode) {
+        print(
+            '🔄 Loading historical post for editing: ${historicalAction.actionId}');
+        print('   Original platforms: ${historicalAction.platforms}');
+        print('   Media count: ${historicalAction.content.media.length}');
+        print('   Text: "${historicalAction.content.text}"');
+        print('   Hashtags: ${historicalAction.content.hashtags}');
+      }
+
+      // Step 1: Validate and recover media URIs if present
+      SocialAction validatedAction = historicalAction;
+      if (historicalAction.content.media.isNotEmpty) {
+        validatedAction = await validateAndRecoverPostMedia(
+          historicalAction,
+          config: kDebugMode
+              ? MediaValidationConfig.debug
+              : MediaValidationConfig.production,
+        );
+
+        if (kDebugMode) {
+          print('📱 Media validation completed');
+          print(
+              '   Original media count: ${historicalAction.content.media.length}');
+          print(
+              '   Validated media count: ${validatedAction.content.media.length}');
+        }
+      }
+
+      // Step 2: Generate new action ID for editing (preserves original as draft)
+      final editingActionId = 'edit_${DateTime.now().millisecondsSinceEpoch}';
+      final editingAction = validatedAction.copyWith(
+        actionId: editingActionId,
+        createdAt: DateTime.now().toIso8601String(),
+      );
+
+      // Step 3: Sync coordinator state with validated action
+      _currentPost = editingAction;
+      _currentTranscription = editingAction.internal.originalTranscription;
+
+      // Step 4: Clear pre-selected media and sync with post media
+      _preSelectedMedia.clear();
+      if (editingAction.content.media.isNotEmpty) {
+        _preSelectedMedia = List.from(editingAction.content.media);
+      }
+
+      // Step 5: Update coordinator state flags
+      _hasContent = editingAction.content.text.isNotEmpty ||
+          editingAction.content.hashtags.isNotEmpty;
+      _hasMedia = editingAction.content.media.isNotEmpty;
+      _needsMediaSelection = false; // Editing existing post
+      _hasError = false;
+      _errorMessage = null;
+      _isRecording = false;
+      _isProcessing = false;
+      _isVoiceDictating = false;
+      _isTransitioning = false;
+
+      // Step 6: Ensure coordinator is in clean editing state
+      _endTextEditingSession();
+      _endHashtagEditingSession();
+      _statusTimer?.cancel();
+      _processingWatchdog?.cancel();
+      _temporaryStatus = null;
+
+      // Step 7: Sync media states for consistency
+      _syncMediaStates();
+
+      // Step 8: Notify listeners for UI update
+      _safeNotifyListeners();
+
+      if (kDebugMode) {
+        print('✅ Historical post loaded successfully');
+        print('   Editing action ID: $editingActionId');
+        print('   hasContent: $_hasContent');
+        print('   hasMedia: $_hasMedia');
+        print('   Current platforms: ${_currentPost.platforms}');
+        print('   Ready for editing on CommandScreen');
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ Failed to load historical post: $e');
+      }
+      setError('Failed to load post for editing: $e');
       rethrow;
     }
   }

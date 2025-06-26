@@ -3,6 +3,10 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
+import 'package:flutter/foundation.dart';
+import 'package:video_thumbnail/video_thumbnail.dart';
+import 'package:photo_manager/photo_manager.dart';
+import 'dart:typed_data';
 
 import '../models/social_action.dart';
 import '../models/media_validation.dart';
@@ -10,7 +14,9 @@ import '../services/firestore_service.dart';
 import '../services/social_post_service.dart';
 import '../services/auth_service.dart';
 import '../services/media_coordinator.dart';
+import '../services/social_action_post_coordinator.dart';
 import '../widgets/social_icon.dart';
+import '../screens/command_screen.dart';
 
 class HistoryScreen extends StatefulWidget {
   const HistoryScreen({super.key});
@@ -21,6 +27,17 @@ class HistoryScreen extends StatefulWidget {
 
 class _HistoryScreenState extends State<HistoryScreen> {
   bool _isDeleting = false;
+
+  // Video thumbnail cache
+  final Map<String, Uint8List?> _videoThumbnailCache = {};
+  final Set<String> _generatingThumbnails = {};
+
+  @override
+  void dispose() {
+    _videoThumbnailCache.clear();
+    _generatingThumbnails.clear();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -577,19 +594,32 @@ class _HistoryScreenState extends State<HistoryScreen> {
 
             try {
               final file = File(Uri.parse(effectiveUri).path);
+
+              // Check if this is a video file based on MIME type
+              final isVideo = mediaItem.mimeType.startsWith('video/');
+
+              if (isVideo) {
+                // Route videos directly to enhanced thumbnail generator
+                return _buildVideoThumbnail(file, mediaItem);
+              }
+
+              // Keep existing Image.file logic for images
               return Stack(
                 children: [
                   SizedBox(
                     width: 100,
                     height: 100,
-                    child: Image.file(
-                      file,
-                      fit: BoxFit.cover,
-                      width: 100,
-                      height: 100,
-                      errorBuilder: (context, error, stackTrace) {
-                        return _buildCustomMediaPlaceholder();
-                      },
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(12),
+                      child: Image.file(
+                        file,
+                        fit: BoxFit.cover,
+                        width: 100,
+                        height: 100,
+                        errorBuilder: (context, error, stackTrace) {
+                          return _buildCustomMediaPlaceholder();
+                        },
+                      ),
                     ),
                   ),
                   // Show recovery indicator if media was recovered
@@ -643,6 +673,120 @@ class _HistoryScreenState extends State<HistoryScreen> {
         ),
       ),
     );
+  }
+
+  /// Build video thumbnail with actual thumbnail generation
+  Widget _buildVideoThumbnail(File videoFile, MediaItem mediaItem) {
+    final videoPath = videoFile.path;
+    final cachedThumbnail = _videoThumbnailCache[videoPath];
+    final isGenerating = _generatingThumbnails.contains(videoPath);
+
+    // If we have a cached thumbnail, show it
+    if (cachedThumbnail != null) {
+      return Stack(
+        children: [
+          ClipRRect(
+            borderRadius: BorderRadius.circular(12),
+            child: Image.memory(
+              cachedThumbnail,
+              fit: BoxFit.cover,
+              width: 100,
+              height: 100,
+              errorBuilder: (context, error, stackTrace) {
+                return _buildVideoPlaceholder();
+              },
+            ),
+          ),
+          // Video play indicator overlay
+          Positioned.fill(
+            child: Container(
+              decoration: BoxDecoration(
+                color: Colors.black.withValues(alpha: 0.3),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: const Center(
+                child: Icon(
+                  Icons.play_circle_filled,
+                  color: Colors.white,
+                  size: 32,
+                ),
+              ),
+            ),
+          ),
+        ],
+      );
+    }
+
+    // If not generating and no cache, start generation
+    if (!isGenerating) {
+      _generateVideoThumbnail(videoPath);
+    }
+
+    // Show loading or placeholder while generating
+    return _buildVideoPlaceholder(isGenerating: isGenerating);
+  }
+
+  /// Generate video thumbnail using the same logic as VideoPreviewWidget
+  Future<void> _generateVideoThumbnail(String videoPath) async {
+    if (_generatingThumbnails.contains(videoPath)) return;
+
+    _generatingThumbnails.add(videoPath);
+
+    try {
+      Uint8List? thumbnailData;
+
+      // Method 1: Try PhotoManager first (same as VideoPreviewWidget)
+      final assetEntity = await _findAssetEntityByPath(videoPath);
+      if (assetEntity != null) {
+        thumbnailData = await assetEntity.thumbnailDataWithSize(
+          const ThumbnailSize(300, 300),
+          quality: 75,
+        );
+
+        if (kDebugMode && thumbnailData != null) {
+          print('✅ PostHistory: Generated video thumbnail using PhotoManager');
+        }
+      }
+
+      // Method 2: Fallback to video_thumbnail package
+      if (thumbnailData == null) {
+        final file = File(videoPath);
+        if (await file.exists()) {
+          thumbnailData = await VideoThumbnail.thumbnailData(
+            video: videoPath,
+            imageFormat: ImageFormat.JPEG,
+            maxWidth: 300,
+            maxHeight: 300,
+            quality: 75,
+            timeMs: 1000, // Get thumbnail at 1 second
+          );
+
+          if (kDebugMode && thumbnailData != null) {
+            print(
+                '✅ PostHistory: Generated video thumbnail using video_thumbnail package');
+          }
+        }
+      }
+
+      // Cache the result and update UI
+      if (mounted) {
+        setState(() {
+          _videoThumbnailCache[videoPath] = thumbnailData;
+          _generatingThumbnails.remove(videoPath);
+        });
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ PostHistory: Failed to generate video thumbnail: $e');
+      }
+
+      if (mounted) {
+        setState(() {
+          _videoThumbnailCache[videoPath] = null;
+          _generatingThumbnails.remove(videoPath);
+        });
+      }
+    }
   }
 
   /// Detailed media placeholder for modal view
@@ -1197,6 +1341,23 @@ class _HistoryScreenState extends State<HistoryScreen> {
                       ),
                       const SizedBox(height: 12),
                     ],
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton.icon(
+                        icon: const Icon(Icons.edit),
+                        label: const Text('Edit Post'),
+                        onPressed: () => _editPost(context, action),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFFFF0055),
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 16),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
                     SizedBox(
                       width: double.infinity,
                       child: OutlinedButton.icon(
@@ -1844,5 +2005,169 @@ class _HistoryScreenState extends State<HistoryScreen> {
         ),
       );
     }
+  }
+
+  Future<void> _editPost(BuildContext context, SocialAction action) async {
+    final navigator = Navigator.of(context);
+    final socialActionPostCoordinator =
+        Provider.of<SocialActionPostCoordinator>(context, listen: false);
+    final scaffoldMessenger = ScaffoldMessenger.of(context);
+
+    // Close the overlay first
+    navigator.pop();
+
+    try {
+      if (kDebugMode) {
+        print('🔄 Starting post edit flow for action: ${action.actionId}');
+      }
+
+      // Load historical post into coordinator
+      await socialActionPostCoordinator.loadHistoricalPost(action);
+
+      // Navigate to CommandScreen with rehydrated state
+      if (context.mounted) {
+        await navigator.push(
+          MaterialPageRoute(builder: (context) => const CommandScreen()),
+        );
+      }
+
+      if (kDebugMode) {
+        print('✅ Post edit flow completed');
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ Failed to edit post: $e');
+      }
+
+      scaffoldMessenger.showSnackBar(
+        SnackBar(
+          content: Text('Failed to load post for editing: $e'),
+          backgroundColor: Colors.red,
+          duration: const Duration(seconds: 4),
+        ),
+      );
+    }
+  }
+
+  /// Find AssetEntity by path (same logic as VideoPreviewWidget)
+  Future<AssetEntity?> _findAssetEntityByPath(String videoPath) async {
+    try {
+      // Get all video albums
+      final albums = await PhotoManager.getAssetPathList(
+        type: RequestType.video,
+        filterOption: FilterOptionGroup(
+          videoOption: const FilterOption(
+            sizeConstraint: SizeConstraint(ignoreSize: true),
+          ),
+        ),
+      );
+
+      // Search through albums to find matching asset
+      for (final album in albums) {
+        final assets = await album.getAssetListRange(
+          start: 0,
+          end: await album.assetCountAsync,
+        );
+
+        for (final asset in assets) {
+          final file = await asset.file;
+          if (file != null && file.path == videoPath) {
+            return asset;
+          }
+        }
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ PostHistory: Error finding AssetEntity: $e');
+      }
+    }
+
+    return null;
+  }
+
+  /// Enhanced video placeholder with loading state
+  Widget _buildVideoPlaceholder({bool isGenerating = false}) {
+    if (isGenerating) {
+      return Container(
+        width: 100,
+        height: 100,
+        decoration: BoxDecoration(
+          gradient: const LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [
+              Color(0xFF3A3A3A),
+              Color(0xFF2A2A2A),
+            ],
+          ),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: const Color(0xFFFF0055).withOpacity(0.3),
+            width: 1,
+          ),
+        ),
+        child: const Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            SizedBox(
+              width: 20,
+              height: 20,
+              child: CircularProgressIndicator(
+                valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFFF0055)),
+                strokeWidth: 2,
+              ),
+            ),
+            SizedBox(height: 8),
+            Text(
+              'Loading...',
+              style: TextStyle(
+                color: Colors.white70,
+                fontSize: 8,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return Container(
+      width: 100,
+      height: 100,
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            Color(0xFF3A3A3A),
+            Color(0xFF2A2A2A),
+          ],
+        ),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: const Color(0xFFFF0055).withOpacity(0.3),
+          width: 1,
+        ),
+      ),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const Icon(
+            Icons.videocam,
+            color: Color(0xFFFF0055),
+            size: 40,
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Video',
+            style: TextStyle(
+              color: Colors.white.withValues(alpha: 0.7),
+              fontSize: 10,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }

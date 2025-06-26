@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import '../models/social_action.dart';
 import '../models/media_validation.dart';
 import '../services/media_coordinator.dart';
+import '../services/permission_manager.dart';
 import '../services/video_validation_service.dart';
 import '../screens/directory_selection_screen.dart';
 import '../widgets/social_icon.dart';
@@ -67,6 +68,82 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
     });
 
     try {
+      // ALWAYS request media permission when screen loads
+      // This ensures permission is re-requested every time if previously denied
+      final permissionManager =
+          Provider.of<PermissionManager>(context, listen: false);
+      final hasPermission = await permissionManager.requestMediaPermission();
+
+      if (!hasPermission) {
+        // Check if permanently denied to provide specific guidance
+        final isPermanentlyDenied =
+            await permissionManager.isMediaPermissionPermanentlyDenied();
+
+        String errorMessage;
+        if (isPermanentlyDenied) {
+          errorMessage =
+              'Media access permanently denied. Please enable it in device settings to view photos and videos.';
+        } else {
+          errorMessage =
+              'Media access is required to view photos and videos. Please allow access to continue.';
+        }
+
+        if (kDebugMode) {
+          print(
+              '❌ Media permission denied on MediaSelectionScreen. Permanently denied: $isPermanentlyDenied');
+        }
+
+        setState(() {
+          _isLoading = false;
+          _mediaCandidates = [];
+        });
+
+        if (mounted) {
+          if (isPermanentlyDenied) {
+            // Show snackbar with settings button for permanently denied
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: const Text(
+                    'Media permission required. Enable in device settings.'),
+                backgroundColor: Colors.red.withValues(alpha: 0.8),
+                duration: const Duration(seconds: 6),
+                action: SnackBarAction(
+                  label: 'Settings',
+                  textColor: Colors.white,
+                  onPressed: () async {
+                    await permissionManager.openDeviceSettings();
+                    // After returning from settings, retry initialization
+                    _initializeScreen();
+                  },
+                ),
+              ),
+            );
+          } else {
+            // Show retry option for non-permanently denied
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(errorMessage),
+                backgroundColor: Colors.red.withValues(alpha: 0.8),
+                duration: const Duration(seconds: 4),
+                action: SnackBarAction(
+                  label: 'Retry',
+                  textColor: Colors.white,
+                  onPressed: () {
+                    _initializeScreen(); // Retry initialization
+                  },
+                ),
+              ),
+            );
+          }
+        }
+        return;
+      }
+
+      if (kDebugMode) {
+        print(
+            '✅ Media permission granted on MediaSelectionScreen, proceeding with initialization...');
+      }
+
       final now = DateTime.now();
       final shouldLogInit =
           _lastInitLog == null || now.difference(_lastInitLog!).inMinutes > 5;

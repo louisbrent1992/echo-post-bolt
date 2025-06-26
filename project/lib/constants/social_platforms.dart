@@ -237,6 +237,113 @@ class SocialPlatforms {
     // General media content
     return all;
   }
+
+  /// Check if a platform is compatible with the given content type
+  static bool isPlatformCompatible(String platform, String contentType) {
+    final capability = capabilities[platform.toLowerCase()];
+    if (capability == null) return false;
+
+    switch (contentType.toLowerCase()) {
+      case 'text':
+        return capability.supportsText && !capability.requiresMedia;
+      case 'image':
+        return capability.supportsImages;
+      case 'video':
+        return capability.supportsVideos;
+      default:
+        return false;
+    }
+  }
+
+  /// Get all platforms compatible with the given content type
+  static List<String> getCompatiblePlatforms(String contentType) {
+    return all
+        .where((platform) => isPlatformCompatible(platform, contentType))
+        .toList();
+  }
+
+  /// Get incompatible platforms for the given content type
+  static List<String> getIncompatiblePlatforms(
+      List<String> selectedPlatforms, String contentType) {
+    return selectedPlatforms
+        .where((platform) => !isPlatformCompatible(platform, contentType))
+        .toList();
+  }
+
+  /// Get content type from media list
+  static String getContentType(
+      {bool hasMedia = false, List<dynamic>? mediaItems}) {
+    if (!hasMedia || mediaItems == null || mediaItems.isEmpty) {
+      return 'text';
+    }
+
+    // Check the first media item's MIME type
+    final firstMedia = mediaItems.first;
+    String? mimeType;
+
+    if (firstMedia is Map<String, dynamic>) {
+      mimeType = firstMedia['mime_type'] as String?;
+    } else {
+      // Handle MediaItem objects by checking their mimeType property
+      try {
+        final mediaString = firstMedia.toString();
+        if (mediaString.contains('mimeType:')) {
+          // Extract MIME type from string representation
+          final mimeTypeMatch =
+              RegExp(r'mimeType:\s*([^,\)]+)').firstMatch(mediaString);
+          if (mimeTypeMatch != null) {
+            mimeType = mimeTypeMatch.group(1)?.trim();
+          }
+        }
+
+        // Fallback: check for common patterns
+        if (mimeType == null) {
+          if (mediaString.contains('video/') ||
+              mediaString.toLowerCase().contains('.mp4') ||
+              mediaString.toLowerCase().contains('.mov')) {
+            mimeType = 'video/mp4';
+          } else if (mediaString.contains('image/') ||
+              mediaString.toLowerCase().contains('.jpg') ||
+              mediaString.toLowerCase().contains('.png')) {
+            mimeType = 'image/jpeg';
+          }
+        }
+      } catch (e) {
+        // If we can't parse the media item, assume it's an image
+        mimeType = 'image/jpeg';
+      }
+    }
+
+    if (mimeType == null) return 'text';
+
+    if (mimeType.startsWith('video/')) {
+      return 'video';
+    } else if (mimeType.startsWith('image/')) {
+      return 'image';
+    }
+
+    return 'text';
+  }
+
+  /// Generate user-friendly compatibility message
+  static String getCompatibilityMessage(
+      List<String> incompatiblePlatforms, String contentType) {
+    if (incompatiblePlatforms.isEmpty) return '';
+
+    final platformNames =
+        incompatiblePlatforms.map((p) => getDisplayName(p)).join(', ');
+
+    switch (contentType) {
+      case 'text':
+        return '$platformNames require${incompatiblePlatforms.length == 1 ? 's' : ''} media content';
+      case 'image':
+        return '$platformNames ${incompatiblePlatforms.length == 1 ? 'doesn\'t' : 'don\'t'} support image posts';
+      case 'video':
+        return '$platformNames ${incompatiblePlatforms.length == 1 ? 'doesn\'t' : 'don\'t'} support video posts';
+      default:
+        return '$platformNames ${incompatiblePlatforms.length == 1 ? 'is' : 'are'} not compatible with this content';
+    }
+  }
 }
 
 /// Platform capabilities definition
