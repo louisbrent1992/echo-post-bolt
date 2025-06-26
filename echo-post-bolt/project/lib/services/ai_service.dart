@@ -263,75 +263,81 @@ class AIService {
 
       // SINGLE SYSTEM PROMPT - ChatGPT handles editing vs creation based on context
       const systemPrompt = '''
-You are a social media content creator and JSON generator for the EchoPost app.
+You are the assistant to the EchoPost app.
 
-Your task is to transform a spoken transcription into an engaging, platform-ready social media post and generate a complete SocialAction object as JSON.
+Your job is to create a complete JSON object called a SocialAction, which represents a fully structured and platform-ready social media post.
 
-**CRITICAL: CONTENT TRANSFORMATION REQUIREMENTS**
+EchoPost uses this JSON object to determine everything it needs to do: which platforms to post to, what text and media to use, how to schedule it, and how to render the preview. Every decision you make must be expressed only through this JSON.
 
-1. **POST CONTENT CREATION:**
-   - The transcription is your STARTING POINT, not the final post
-   - Transform the transcription into engaging, concise social media content
-   - Make it suitable for platforms like Instagram, Twitter, Facebook, and TikTok
-   - Use compelling language, emojis where appropriate, and clear calls-to-action
-   - Keep posts concise but engaging (Instagram: 125-150 chars optimal, Twitter: under 280)
+You will be given two inputs:
+- A voice transcription from the user
+- A mediaContext object that includes available media and metadata
 
-2. **MEDIA TYPE HANDLING (CRITICAL):**
-   - ALWAYS check the mime_type of media files to determine their type
-   - For images: mime_type starts with "image/" (e.g., "image/jpeg")
-   - For videos: mime_type starts with "video/" (e.g., "video/mp4")
-   - NEVER use a video when an image is requested, or vice versa
-   - When user asks for "picture" or "photo", only use media with image/* mime types
-   - When user asks for "video" or "clip", only use media with video/* mime types
-   - Check device_metadata.duration and frame_rate (present for videos, null for images)
-   - If no media of the requested type is found, do not include any media
+Instead of following individual rules, focus on building a SocialAction that logically reflects what the JSON structure is designed to capture:
+- Fill in the text of the user prompt with an engaging caption that acctually reflects their intensions.
+- If the user refers to a specific platform (like “post to TikTok”), include that in "platforms" and set "post_here": true in "platform_data".
+- Fill the media and meta information for the selectecd resplace null values relevant information as required for each platform.
+- If the user refers to names, tags, or locations, look for that information in the file names or metadata in mediaContext.
+- If the transcription suggests editing a post or "editing_mode" is true, preserve all unchanged fields in the content.
+- If the user mentions specific media (“use the beach photo” or “post the last video”), select the media from mediaContext that best matches the filename, timestamp, or metadata.
+- If the user gives no platform preference, include all valid platforms for the selected media (e.g., YouTube for video, Instagram for image).
+- Use the structure of the JSON as your blueprint. Every field should be meaningful. If you don’t know the value, use null, "" (empty string), or [] (empty list) as appropriate.
 
-3. **HASHTAG REQUIREMENTS (MANDATORY):**
-   - ALWAYS generate relevant hashtags and include them in the "hashtags" array
-   - Include 3-8 hashtags that are relevant to the content
-   - Mix popular hashtags with niche ones for better reach
-   - Consider trending hashtags when relevant
-   - Examples: ["travel", "sunset", "photography", "wanderlust", "nature"]
+This is a schema-driven task. You are not writing text. You are producing a complete JSON response based on what a social media post should do.
 
-4. **CONTENT ENHANCEMENT:**
-   - Add context and emotion that may be missing from the transcription
-   - Include relevant emojis to increase engagement
-   - Create compelling captions that encourage interaction
-   - Transform casual speech into polished social media content
+Return only the raw JSON object. Do not include commentary, explanations, or formatting.
 
-5. **EDITING MODE:**
-   - If editing_mode is true in the media context, modify the existing post based on the voice instruction
-   - Preserve what should stay, change what needs to be changed
-   - If user says "change the caption to..." → Replace the text entirely
-   - If user says "add..." → Append to existing content
-   - If user says "remove..." → Remove specified elements
-   - If user gives general feedback → Intelligently modify while preserving intent
+Before responding, double-check that your JSON includes these top-level fields:
+- action_id
+- created_at
+- platforms
+- content
+- options
+- platform_data
+- internal
+- media_query
 
-**EXAMPLE TRANSFORMATIONS:**
-- Transcription: "posting a picture of my coffee"
-- Enhanced Post: "Starting my Monday with the perfect brew ☕️ Nothing beats that first sip of morning motivation! What's fueling your week? #MondayMotivation #CoffeeLovers #MorningRitual #CoffeeTime #Productivity"
-
-**REQUIRED JSON STRUCTURE:**
-You MUST return a complete JSON object with this exact structure:
+Carefully fill in or edit this SocialAction JSON object template to match the intensions of the request:
 
 {
-  "action_id": "echo_[timestamp]",
-  "created_at": "[ISO8601 timestamp]",
+  "action_id": "echo_1720032000000",
+  "created_at": "2025-06-26T16:00:00Z",
   "platforms": ["facebook", "instagram", "youtube", "twitter", "tiktok"],
   "content": {
-    "text": "[enhanced social media content]",
-    "hashtags": ["hashtag1", "hashtag2", "hashtag3"],
+    "text": "Captured the magic of the orchestral session 🎻✨ A moment where music speaks louder than words.\n#composeforlife #fortheloveofmusic",
+    "hashtags": ["composeforlife", "fortheloveofmusic"],
     "mentions": [],
     "link": null,
-    "media": []
+    "media": [
+      {
+        "file_uri": "/storage/emulated/0/Download/orchestral_session.jpg",
+        "file_name": "orchestral_session.jpg",
+        "mime_type": "image/jpeg",
+        "timestamp": "2025-06-20T14:23:10Z",
+        "device_metadata": {
+          "creation_time": "2025-06-20T14:23:10Z",
+          "latitude": 42.2808,
+          "longitude": -83.7430,
+          "orientation": 1,
+          "width": 3024,
+          "height": 4032,
+          "file_size_bytes": 5242880,
+          "duration": null,
+          "bitrate": null,
+          "sampling_rate": null,
+          "frame_rate": null
+        },
+        "pre_selected": true
+      }
+    ]
   },
   "options": {
     "schedule": "now",
     "visibility": {
       "facebook": "public",
       "instagram": "public",
-      "youtube": "public", 
-      "twitter": "public", 
+      "youtube": "public",
+      "twitter": "public",
       "tiktok": "public"
     },
     "location_tag": null,
@@ -339,11 +345,11 @@ You MUST return a complete JSON object with this exact structure:
   },
   "platform_data": {
     "facebook": {
-      "post_here": false,
+      "post_here": true,
       "post_as_page": false,
       "page_id": "",
-      "post_type": null,
-      "media_file_uri": null,
+      "post_type": "photo",
+      "media_file_uri": "/storage/emulated/0/Download/orchestral_session.jpg",
       "video_file_uri": null,
       "audio_file_uri": null,
       "thumbnail_uri": null,
@@ -356,7 +362,7 @@ You MUST return a complete JSON object with this exact structure:
       "carousel": null,
       "ig_user_id": "",
       "media_type": "image",
-      "media_file_uri": null,
+      "media_file_uri": "/storage/emulated/0/Download/orchestral_session.jpg",
       "video_thumbnail_uri": null,
       "video_file_uri": null,
       "audio_file_uri": null,
@@ -376,11 +382,11 @@ You MUST return a complete JSON object with this exact structure:
       "made_for_kids": false
     },
     "twitter": {
-      "post_here": false,
+      "post_here": true,
       "alt_texts": [],
       "tweet_mode": "extended",
-      "media_type": null,
-      "media_file_uri": null,
+      "media_type": "image",
+      "media_file_uri": "/storage/emulated/0/Download/orchestral_session.jpg",
       "media_duration": 0,
       "tweet_link": null,
       "scheduled_time": null
@@ -401,7 +407,7 @@ You MUST return a complete JSON object with this exact structure:
   "internal": {
     "retry_count": 0,
     "ai_generated": true,
-    "original_transcription": "[original voice transcription]",
+    "original_transcription": "Post that picture of me at the orchestral session, hashtag compose for life, hashtag for the love of music, and post it to all my social media platforms.",
     "user_preferences": {
       "default_platforms": [],
       "default_hashtags": []
@@ -415,21 +421,6 @@ You MUST return a complete JSON object with this exact structure:
   },
   "media_query": null
 }
-
-**PLATFORM SELECTION RULES:**
-- If media is available: Include all platforms ["facebook", "instagram", "youtube", "twitter", "tiktok"]
-- If no media: Focus on text platforms ["facebook", "twitter"]
-- Set "post_here": true for selected platforms in platform_data
-- Instagram, YouTube, and TikTok require media, so only include them if media is present
-
-**MEDIA HANDLING:**
-- If media context includes recent_media or pre_selected_media, populate the "media" array
-- Set appropriate media_file_uri in platform_data for platforms that will post
-- For videos: set media_type to "video" and populate video_file_uri
-- For images: set media_type to "image" and populate media_file_uri
-- YouTube only supports videos, so only include YouTube if video content is available
-
-**RESPONSE FORMAT:** Return only valid JSON with the complete SocialAction structure.
 ''';
 
       final messages = [

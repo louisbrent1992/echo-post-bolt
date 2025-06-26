@@ -7,6 +7,9 @@ import 'package:flutter/foundation.dart';
 import 'package:geocoding/geocoding.dart';
 import 'package:intl/intl.dart';
 import 'dart:math';
+import 'dart:ui' as ui;
+import 'package:video_thumbnail/video_thumbnail.dart';
+import 'dart:async';
 
 import 'directory_service.dart';
 import 'app_settings_service.dart';
@@ -360,6 +363,20 @@ class MediaMetadataService extends ChangeNotifier {
               metadata['height'] = int.tryParse(height.toString()) ?? 0;
             }
 
+            // Fallback: if EXIF lacks dimension tags, decode the image bytes
+            if ((metadata['width'] as int? ?? 0) == 0 ||
+                (metadata['height'] as int? ?? 0) == 0) {
+              try {
+                final completer = Completer<ui.Image>();
+                ui.decodeImageFromList(bytes, completer.complete);
+                final uiImage = await completer.future;
+                metadata['width'] = uiImage.width;
+                metadata['height'] = uiImage.height;
+              } catch (_) {
+                // Silent – fallback failed, leave as 0×0
+              }
+            }
+
             // Extract creation date from EXIF with enhanced parsing
             final dateTime =
                 exifData['Image DateTime'] ?? exifData['EXIF DateTimeOriginal'];
@@ -389,6 +406,33 @@ class MediaMetadataService extends ChangeNotifier {
         } catch (e) {
           if (kDebugMode) {
             print('⚠️ Failed to extract EXIF data: $e');
+          }
+        }
+      }
+
+      // Extract basic video metadata (width, height) for videos
+      if (mimeType.startsWith('video/')) {
+        try {
+          // Generate a small thumbnail and read its intrinsic size
+          final thumbData = await VideoThumbnail.thumbnailData(
+            video: file.path,
+            imageFormat: ImageFormat.JPEG,
+            maxWidth: 64,
+            maxHeight: 64,
+            quality: 1,
+            timeMs: 1000, // grab frame at 1-second mark to avoid black frames
+          );
+
+          if (thumbData != null) {
+            final completer = Completer<ui.Image>();
+            ui.decodeImageFromList(thumbData, completer.complete);
+            final uiImage = await completer.future;
+            metadata['width'] = uiImage.width;
+            metadata['height'] = uiImage.height;
+          }
+        } catch (e) {
+          if (kDebugMode) {
+            print('⚠️ Failed to extract video dimensions: $e');
           }
         }
       }
@@ -1036,9 +1080,50 @@ class MediaMetadataService extends ChangeNotifier {
             metadata['width'] = int.tryParse(width);
             metadata['height'] = int.tryParse(height);
           }
+
+          // Fallback: decode bytes when EXIF has no dimensions
+          if ((metadata['width'] as int? ?? 0) == 0 ||
+              (metadata['height'] as int? ?? 0) == 0) {
+            try {
+              final completer = Completer<ui.Image>();
+              ui.decodeImageFromList(bytes, completer.complete);
+              final uiImage = await completer.future;
+              metadata['width'] = uiImage.width;
+              metadata['height'] = uiImage.height;
+            } catch (_) {
+              // Ignore – leave defaults
+            }
+          }
         } catch (e) {
           if (kDebugMode) {
             print('⚠️ Failed to extract EXIF data: $e');
+          }
+        }
+      }
+
+      // Extract basic video metadata (width, height) for videos
+      if (mimeType.startsWith('video/')) {
+        try {
+          // Generate a small thumbnail and read its intrinsic size
+          final thumbData = await VideoThumbnail.thumbnailData(
+            video: file.path,
+            imageFormat: ImageFormat.JPEG,
+            maxWidth: 64,
+            maxHeight: 64,
+            quality: 1,
+            timeMs: 1000, // grab frame at 1-second mark to avoid black frames
+          );
+
+          if (thumbData != null) {
+            final completer = Completer<ui.Image>();
+            ui.decodeImageFromList(thumbData, completer.complete);
+            final uiImage = await completer.future;
+            metadata['width'] = uiImage.width;
+            metadata['height'] = uiImage.height;
+          }
+        } catch (e) {
+          if (kDebugMode) {
+            print('⚠️ Failed to extract video dimensions: $e');
           }
         }
       }

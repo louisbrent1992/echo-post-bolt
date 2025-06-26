@@ -5,6 +5,9 @@ import 'package:video_player/video_player.dart';
 import 'package:photo_manager/photo_manager.dart';
 import 'package:video_thumbnail/video_thumbnail.dart';
 import 'package:flutter/rendering.dart';
+import 'dart:ui' as ui;
+import 'dart:async';
+import 'dart:typed_data';
 
 import '../models/social_action.dart';
 import '../services/video_validation_service.dart';
@@ -46,6 +49,10 @@ class _EnhancedMediaPreviewState extends State<EnhancedMediaPreview>
   // Video thumbnail generation
   Uint8List? _videoThumbnail;
   bool _isGeneratingThumbnail = false;
+
+  // Fallback image dimension cache for current media item
+  int? _imageWidth;
+  int? _imageHeight;
 
   @override
   void initState() {
@@ -103,6 +110,10 @@ class _EnhancedMediaPreviewState extends State<EnhancedMediaPreview>
 
     _lastVideoPath = mediaPath;
 
+    // Reset cached dimensions whenever media changes
+    _imageWidth = null;
+    _imageHeight = null;
+
     if (isVideo) {
       // Generate thumbnail first for immediate display
       await _generateVideoThumbnail(mediaPath);
@@ -115,9 +126,21 @@ class _EnhancedMediaPreviewState extends State<EnhancedMediaPreview>
       }
     } else {
       _disposeVideoController();
-      setState(() {
-        _videoThumbnail = null;
-      });
+
+      // Attempt to ensure image dimensions are available
+      if (mediaItem.deviceMetadata.width == 0 ||
+          mediaItem.deviceMetadata.height == 0) {
+        await _decodeImageDimensions(mediaPath);
+      } else {
+        _imageWidth = mediaItem.deviceMetadata.width;
+        _imageHeight = mediaItem.deviceMetadata.height;
+      }
+
+      if (mounted) {
+        setState(() {
+          _videoThumbnail = null;
+        });
+      }
     }
   }
 
@@ -688,7 +711,7 @@ class _EnhancedMediaPreviewState extends State<EnhancedMediaPreview>
               mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
-                  '${mediaItem.deviceMetadata.width} × ${mediaItem.deviceMetadata.height}',
+                  '${(_imageWidth ?? mediaItem.deviceMetadata.width)} × ${(_imageHeight ?? mediaItem.deviceMetadata.height)}',
                   style: const TextStyle(
                     color: Colors.white,
                     fontSize: AppTypography.small,
@@ -844,5 +867,26 @@ class _EnhancedMediaPreviewState extends State<EnhancedMediaPreview>
   void didPopNext() {
     // Returned to this page; we leave it paused (user can tap play)
     super.didPopNext();
+  }
+
+  // Decode image to retrieve intrinsic dimensions as a fallback
+  Future<void> _decodeImageDimensions(String imagePath) async {
+    try {
+      final bytes = await File(imagePath).readAsBytes();
+      final completer = Completer<ui.Image>();
+      ui.decodeImageFromList(bytes, completer.complete);
+      final uiImage = await completer.future;
+
+      if (mounted) {
+        setState(() {
+          _imageWidth = uiImage.width;
+          _imageHeight = uiImage.height;
+        });
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        print('⚠️ EnhancedMediaPreview: Failed to decode image dimensions: $e');
+      }
+    }
   }
 }

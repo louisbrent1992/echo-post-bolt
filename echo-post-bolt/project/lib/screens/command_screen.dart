@@ -7,6 +7,8 @@ import 'package:provider/provider.dart';
 import 'package:http/http.dart' as http;
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:record/record.dart';
+import 'package:video_player/video_player.dart';
+import 'package:video_thumbnail/video_thumbnail.dart';
 
 import '../models/social_action.dart';
 import '../models/status_message.dart';
@@ -75,10 +77,6 @@ class _CommandScreenState extends State<CommandScreen>
   late AnimationController _backgroundController;
   late Animation<double> _backgroundAnimation;
 
-  // Scroll indicator animation
-  late AnimationController _scrollIndicatorController;
-  late Animation<double> _scrollIndicatorAnimation;
-
   // Triple Action Button System animation controllers
   late AnimationController _leftButtonController;
   late AnimationController _rightButtonController;
@@ -97,24 +95,10 @@ class _CommandScreenState extends State<CommandScreen>
   // CRITICAL: Add key to help Flutter track Consumer lifecycle
   final GlobalKey _consumerKey = GlobalKey();
 
-  // Scroll indicator state
-  bool _canScroll = false;
-  bool _isScrolled = false;
-  double _scrollProgress = 0.0;
-
   @override
   void initState() {
     super.initState();
     _initializeAnimations();
-    _setupScrollListener();
-    _scrollIndicatorController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 900),
-    )..repeat(reverse: true);
-    _scrollIndicatorAnimation = Tween<double>(begin: 0, end: 12).animate(
-      CurvedAnimation(
-          parent: _scrollIndicatorController, curve: Curves.easeInOut),
-    );
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _initializeScreen();
       _ensureCleanStateForNewSession();
@@ -143,7 +127,6 @@ class _CommandScreenState extends State<CommandScreen>
     _amplitudeTimer?.cancel();
     _record.dispose();
     _scrollController.dispose();
-    _scrollIndicatorController.dispose();
     super.dispose();
   }
 
@@ -1572,17 +1555,16 @@ class _CommandScreenState extends State<CommandScreen>
               // Build gradient container only; pass heavy child via AnimatedBuilder's child parameter
               builder: (context, child) {
                 return Container(
-                  decoration: BoxDecoration(
+                  decoration: const BoxDecoration(
                     gradient: LinearGradient(
                       begin: Alignment.topCenter,
                       end: Alignment.bottomCenter,
+                      stops: [0.0, 0.4, 0.8, 1.0],
                       colors: [
-                        Colors.black,
-                        Color.lerp(
-                          const Color(0xFF1A1A1A),
-                          const Color(0xFF2A1A2A),
-                          _backgroundAnimation.value * 0.3,
-                        )!,
+                        Color(0xFF000000), // Pure black at top
+                        Color(0xFF1A1A1A), // Dark gray
+                        Color(0xFF2A2A2A), // Medium dark gray
+                        Color(0xFF1A1A1A), // Dark gray at bottom
                       ],
                     ),
                   ),
@@ -1715,41 +1697,6 @@ class _CommandScreenState extends State<CommandScreen>
             ),
           ],
         ),
-        // Prominent animated scroll indicator
-        if (_canScroll && !_isScrolled)
-          Positioned(
-            left: 0,
-            right: 0,
-            bottom: 226 - 56, // Just above the mic area
-            child: IgnorePointer(
-              child: Center(
-                child: AnimatedBuilder(
-                  animation: _scrollIndicatorAnimation,
-                  builder: (context, child) {
-                    return Transform.translate(
-                      offset: Offset(0, _scrollIndicatorAnimation.value),
-                      child: Container(
-                        decoration: BoxDecoration(
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withValues(alpha: 102),
-                              blurRadius: 12,
-                              spreadRadius: 2,
-                            ),
-                          ],
-                        ),
-                        child: const Icon(
-                          Icons.keyboard_arrow_down_rounded,
-                          size: 48,
-                          color: Colors.white,
-                        ),
-                      ),
-                    );
-                  },
-                ),
-              ),
-            ),
-          ),
       ],
     );
   }
@@ -2003,26 +1950,5 @@ class _CommandScreenState extends State<CommandScreen>
 
   Future<void> _stopRecording() async {
     await _stopUnifiedRecording();
-  }
-
-  void _setupScrollListener() {
-    _scrollController.addListener(() {
-      final canScroll = _scrollController.position.maxScrollExtent > 0;
-      final isScrolled = _scrollController.offset > 0;
-      final scrollProgress = _scrollController.position.maxScrollExtent > 0
-          ? _scrollController.offset /
-              _scrollController.position.maxScrollExtent
-          : 0.0;
-
-      if (canScroll != _canScroll ||
-          isScrolled != _isScrolled ||
-          scrollProgress != _scrollProgress) {
-        setState(() {
-          _canScroll = canScroll;
-          _isScrolled = isScrolled;
-          _scrollProgress = scrollProgress;
-        });
-      }
-    });
   }
 }

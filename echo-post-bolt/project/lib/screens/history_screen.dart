@@ -564,9 +564,8 @@ class _HistoryScreenState extends State<HistoryScreen> {
               return Container(
                 width: 80,
                 height: 80,
-                decoration: BoxDecoration(
-                  color: const Color.fromARGB(128, 255, 255, 255),
-                  borderRadius: BorderRadius.circular(12),
+                decoration: const BoxDecoration(
+                  color: Color.fromARGB(128, 255, 255, 255),
                 ),
                 child: const Center(
                   child: SizedBox(
@@ -608,17 +607,14 @@ class _HistoryScreenState extends State<HistoryScreen> {
                   SizedBox(
                     width: 100,
                     height: 100,
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(12),
-                      child: Image.file(
-                        file,
-                        fit: BoxFit.cover,
-                        width: 100,
-                        height: 100,
-                        errorBuilder: (context, error, stackTrace) {
-                          return _buildCustomMediaPlaceholder();
-                        },
-                      ),
+                    child: Image.file(
+                      file,
+                      fit: BoxFit.cover,
+                      width: 100,
+                      height: 100,
+                      errorBuilder: (context, error, stackTrace) {
+                        return _buildCustomMediaPlaceholder();
+                      },
                     ),
                   ),
                   // Show recovery indicator if media was recovered
@@ -684,25 +680,19 @@ class _HistoryScreenState extends State<HistoryScreen> {
     if (cachedThumbnail != null) {
       return Stack(
         children: [
-          ClipRRect(
-            borderRadius: BorderRadius.circular(12),
-            child: Image.memory(
-              cachedThumbnail,
-              fit: BoxFit.cover,
-              width: 100,
-              height: 100,
-              errorBuilder: (context, error, stackTrace) {
-                return _buildVideoPlaceholder();
-              },
-            ),
+          Image.memory(
+            cachedThumbnail,
+            fit: BoxFit.cover,
+            width: 100,
+            height: 100,
+            errorBuilder: (context, error, stackTrace) {
+              return _buildVideoPlaceholder();
+            },
           ),
           // Video play indicator overlay
           Positioned.fill(
             child: Container(
-              decoration: BoxDecoration(
-                color: Colors.black.withValues(alpha: 0.3),
-                borderRadius: BorderRadius.circular(12),
-              ),
+              color: Colors.black.withValues(alpha: 0.3),
               child: const Center(
                 child: Icon(
                   Icons.play_circle_filled,
@@ -2158,7 +2148,6 @@ class _HistoryScreenState extends State<HistoryScreen> {
               Color(0xFF2A2A2A),
             ],
           ),
-          borderRadius: BorderRadius.circular(12),
           border: Border.all(
             color: const Color(0xFFFF0055).withValues(alpha: 77),
             width: 2,
@@ -2201,7 +2190,6 @@ class _HistoryScreenState extends State<HistoryScreen> {
             Color(0xFF2A2A2A),
           ],
         ),
-        borderRadius: BorderRadius.circular(12),
         border: Border.all(
           color: const Color(0xFFFF0055).withValues(alpha: 77),
           width: 2,
