@@ -185,7 +185,6 @@ Map<String, dynamic> _$PlatformDataToJson(PlatformData instance) =>
     };
 
 FacebookData _$FacebookDataFromJson(Map<String, dynamic> json) => FacebookData(
-      postHere: json['post_here'] as bool? ?? false,
       postAsPage: json['post_as_page'] as bool? ?? false,
       pageId: json['page_id'] as String? ?? '',
       postType: json['post_type'] as String?,
@@ -199,7 +198,6 @@ FacebookData _$FacebookDataFromJson(Map<String, dynamic> json) => FacebookData(
 
 Map<String, dynamic> _$FacebookDataToJson(FacebookData instance) =>
     <String, dynamic>{
-      'post_here': instance.postHere,
       'post_as_page': instance.postAsPage,
       'page_id': instance.pageId,
       'post_type': instance.postType,
@@ -213,7 +211,6 @@ Map<String, dynamic> _$FacebookDataToJson(FacebookData instance) =>
 
 InstagramData _$InstagramDataFromJson(Map<String, dynamic> json) =>
     InstagramData(
-      postHere: json['post_here'] as bool? ?? false,
       postType: json['post_type'] as String?,
       carousel: json['carousel'] == null
           ? null
@@ -229,7 +226,6 @@ InstagramData _$InstagramDataFromJson(Map<String, dynamic> json) =>
 
 Map<String, dynamic> _$InstagramDataToJson(InstagramData instance) =>
     <String, dynamic>{
-      'post_here': instance.postHere,
       'post_type': instance.postType,
       'carousel': instance.carousel?.toJson(),
       'ig_user_id': instance.igUserId,
@@ -254,7 +250,6 @@ Map<String, dynamic> _$CarouselToJson(Carousel instance) => <String, dynamic>{
     };
 
 YouTubeData _$YouTubeDataFromJson(Map<String, dynamic> json) => YouTubeData(
-      postHere: json['post_here'] as bool? ?? false,
       channelId: json['channel_id'] as String? ?? '',
       privacy: json['privacy'] as String? ?? 'public',
       videoCategoryId: json['video_category_id'] as String? ?? '22',
@@ -269,7 +264,6 @@ YouTubeData _$YouTubeDataFromJson(Map<String, dynamic> json) => YouTubeData(
 
 Map<String, dynamic> _$YouTubeDataToJson(YouTubeData instance) =>
     <String, dynamic>{
-      'post_here': instance.postHere,
       'channel_id': instance.channelId,
       'privacy': instance.privacy,
       'video_category_id': instance.videoCategoryId,
@@ -283,7 +277,6 @@ Map<String, dynamic> _$YouTubeDataToJson(YouTubeData instance) =>
     };
 
 TwitterData _$TwitterDataFromJson(Map<String, dynamic> json) => TwitterData(
-      postHere: json['post_here'] as bool? ?? false,
       altTexts: (json['alt_texts'] as List<dynamic>?)
               ?.map((e) => e as String)
               .toList() ??
@@ -298,7 +291,6 @@ TwitterData _$TwitterDataFromJson(Map<String, dynamic> json) => TwitterData(
 
 Map<String, dynamic> _$TwitterDataToJson(TwitterData instance) =>
     <String, dynamic>{
-      'post_here': instance.postHere,
       'alt_texts': instance.altTexts,
       'tweet_mode': instance.tweetMode,
       'media_type': instance.mediaType,
@@ -309,7 +301,6 @@ Map<String, dynamic> _$TwitterDataToJson(TwitterData instance) =>
     };
 
 TikTokData _$TikTokDataFromJson(Map<String, dynamic> json) => TikTokData(
-      postHere: json['post_here'] as bool? ?? false,
       privacy: json['privacy'] as String? ?? 'public',
       sound: Sound.fromJson(json['sound'] as Map<String, dynamic>),
       mediaFileUri: json['media_file_uri'] as String?,
@@ -320,7 +311,6 @@ TikTokData _$TikTokDataFromJson(Map<String, dynamic> json) => TikTokData(
 
 Map<String, dynamic> _$TikTokDataToJson(TikTokData instance) =>
     <String, dynamic>{
-      'post_here': instance.postHere,
       'privacy': instance.privacy,
       'sound': instance.sound.toJson(),
       'media_file_uri': instance.mediaFileUri,

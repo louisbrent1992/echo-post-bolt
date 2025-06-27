@@ -564,10 +564,10 @@ class AuthService extends ChangeNotifier {
     try {
       final LoginResult result = await FacebookAuth.instance.login(
         permissions: [
-          'email',
-          'public_profile',
-          'instagram_basic',
-          'pages_show_list'
+          'business_management',
+          'pages_show_list',
+          'pages_read_engagement',
+          'pages_manage_posts',
         ],
       );
 
@@ -1031,6 +1031,420 @@ class AuthService extends ChangeNotifier {
         print('Failed to disconnect $platform: $e');
       }
       rethrow;
+    }
+  }
+
+  // Facebook Pages functionality
+  /// Get list of Facebook Pages that the user manages
+  Future<List<Map<String, dynamic>>> getFacebookPages() async {
+    try {
+      if (_auth.currentUser == null) {
+        throw Exception('User not authenticated');
+      }
+
+      // Get Facebook access token from Firestore
+      final tokenDoc = await _firestore
+          .collection('users')
+          .doc(_auth.currentUser!.uid)
+          .collection('tokens')
+          .doc('facebook')
+          .get();
+
+      if (!tokenDoc.exists) {
+        throw Exception(
+            'Facebook access token not found. Please authenticate with Facebook first.');
+      }
+
+      final tokenData = tokenDoc.data()!;
+      final accessToken = tokenData['access_token'] as String;
+
+      // Check if token is expired
+      final expiresAt = tokenData['expires_at'] as Timestamp?;
+      if (expiresAt != null && expiresAt.toDate().isBefore(DateTime.now())) {
+        throw Exception(
+            'Facebook access token has expired. Please re-authenticate.');
+      }
+
+      // Get user's pages using Facebook Graph API
+      final response = await http.get(
+        Uri.parse(
+            'https://graph.facebook.com/v23.0/me/accounts?access_token=$accessToken'),
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        final pages = data['data'] as List<dynamic>;
+
+        if (kDebugMode) {
+          print('📄 Found ${pages.length} Facebook pages');
+        }
+
+        return pages
+            .map((page) => {
+                  'id': page['id'],
+                  'name': page['name'],
+                  'access_token': page['access_token'],
+                  'category': page['category'],
+                  'tasks': page['tasks'] ?? [],
+                  'permissions': page['perms'] ?? [],
+                })
+            .toList();
+      } else {
+        final errorData = jsonDecode(response.body);
+        final errorMessage =
+            errorData['error']?['message'] ?? 'Unknown Facebook API error';
+        final errorCode = errorData['error']?['code'] ?? 'unknown';
+
+        if (kDebugMode) {
+          print('❌ Facebook API error: $errorMessage (Code: $errorCode)');
+        }
+
+        // Handle specific error cases
+        switch (errorCode) {
+          case '190':
+            throw Exception(
+                'Facebook access token expired or invalid. Please re-authenticate.');
+          case '100':
+            throw Exception(
+                'Facebook API permission error. Check app permissions.');
+          case '200':
+            throw Exception(
+                'Facebook app requires review for pages_show_list permission. Please contact support.');
+          default:
+            throw Exception(
+                'Facebook API error: $errorMessage (Code: $errorCode)');
+        }
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ Error getting Facebook pages: $e');
+      }
+      rethrow;
+    }
+  }
+
+  /// Get Facebook page access token for a specific page
+  /// This is required for posting to Facebook pages
+  Future<String?> getFacebookPageAccessToken(String pageId) async {
+    try {
+      if (_auth.currentUser == null) {
+        throw Exception('User not authenticated');
+      }
+
+      // Get Facebook user access token from Firestore
+      final tokenDoc = await _firestore
+          .collection('users')
+          .doc(_auth.currentUser!.uid)
+          .collection('tokens')
+          .doc('facebook')
+          .get();
+
+      if (!tokenDoc.exists) {
+        throw Exception(
+            'Facebook access token not found. Please authenticate with Facebook first.');
+      }
+
+      final tokenData = tokenDoc.data()!;
+      final userAccessToken = tokenData['access_token'] as String;
+      final userTokenExcerpt = userAccessToken.length > 12
+          ? userAccessToken.substring(0, 6) +
+              '...' +
+              userAccessToken.substring(userAccessToken.length - 6)
+          : userAccessToken;
+      if (kDebugMode) {
+        print('🔑 [DEBUG] User access token retrieved: $userTokenExcerpt');
+      }
+
+      // Check if token is expired
+      final expiresAt = tokenData['expires_at'] as Timestamp?;
+      if (expiresAt != null && expiresAt.toDate().isBefore(DateTime.now())) {
+        throw Exception(
+            'Facebook access token has expired. Please re-authenticate.');
+      }
+
+      // Get page access token using /me/accounts as per Facebook documentation
+      final response = await http.get(
+        Uri.parse(
+            'https://graph.facebook.com/v23.0/me/accounts?access_token=$userAccessToken'),
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        final pages = data['data'] as List<dynamic>;
+        final page = pages.firstWhere(
+          (p) => p['id'] == pageId,
+          orElse: () => null,
+        );
+        if (page == null) {
+          throw Exception('Page not found in user accounts.');
+        }
+        final pageAccessToken = page['access_token'] as String?;
+        if (pageAccessToken == null) {
+          throw Exception('Page access token not found for page $pageId.');
+        }
+        final pageTokenExcerpt = pageAccessToken.length > 12
+            ? pageAccessToken.substring(0, 6) +
+                '...' +
+                pageAccessToken.substring(pageAccessToken.length - 6)
+            : pageAccessToken;
+        if (kDebugMode) {
+          print(
+              '🔑 [DEBUG] Page access token retrieved for page $pageId: $pageTokenExcerpt');
+        }
+
+        // Store the page access token for future use
+        await _firestore
+            .collection('users')
+            .doc(_auth.currentUser!.uid)
+            .collection('tokens')
+            .doc('facebook_pages')
+            .set({
+          'page_tokens.$pageId': {
+            'access_token': pageAccessToken,
+            'expires_at': Timestamp.fromDate(
+                DateTime.now().add(const Duration(days: 60))),
+            'stored_at': FieldValue.serverTimestamp(),
+          },
+          'last_updated': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
+
+        if (kDebugMode) {
+          print(
+              '✅ Successfully obtained and stored page access token for page: $pageId');
+        }
+
+        return pageAccessToken;
+      } else {
+        final errorData = jsonDecode(response.body);
+        final errorMessage =
+            errorData['error']?['message'] ?? 'Unknown Facebook API error';
+        final errorCode = errorData['error']?['code'] ?? 'unknown';
+
+        if (kDebugMode) {
+          print(
+              '❌ Failed to get page access token: $errorMessage (Code: $errorCode)');
+        }
+
+        // Handle specific error cases
+        switch (errorCode) {
+          case '190':
+            throw Exception(
+                'Facebook access token expired or invalid. Please re-authenticate.');
+          case '100':
+            throw Exception(
+                'Facebook API permission error. Check app permissions.');
+          case '200':
+            throw Exception(
+                'Facebook app requires review for pages_manage_posts permission. Please contact support.');
+          case '294':
+            throw Exception(
+                'Facebook app requires review for posting permissions. Please contact support.');
+          default:
+            if (errorMessage.toLowerCase().contains('permission') ||
+                errorMessage.toLowerCase().contains('pages_manage_posts')) {
+              throw Exception(
+                  'Facebook posting requires additional permissions. Please contact support to enable posting permissions.');
+            }
+            throw Exception(
+                'Facebook API error: $errorMessage (Code: $errorCode)');
+        }
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ Error getting page access token: $e');
+      }
+      rethrow;
+    }
+  }
+
+  /// Check if user has permission to post to a specific Facebook page
+  Future<bool> canPostToFacebookPage(String pageId) async {
+    try {
+      final pages = await getFacebookPages();
+
+      // Check if the page exists in user's pages and has posting permissions
+      for (final page in pages) {
+        if (page['id'] == pageId) {
+          final permissions = page['permissions'] as List<dynamic>;
+          final tasks = page['tasks'] as List<dynamic>;
+
+          // Check for posting permissions
+          final hasPostPermission = permissions.contains('ADMINISTER') ||
+              permissions.contains('EDIT_PROFILE') ||
+              permissions.contains('CREATE_CONTENT') ||
+              tasks.contains('MANAGE') ||
+              tasks.contains('CREATE_CONTENT');
+
+          if (kDebugMode) {
+            print(
+                '📄 Page ${page['name']} (${page['id']}) permissions: $permissions');
+            print('📄 Page tasks: $tasks');
+            print('📄 Can post: $hasPostPermission');
+          }
+
+          return hasPostPermission;
+        }
+      }
+
+      return false;
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ Error checking page posting permission: $e');
+      }
+      return false;
+    }
+  }
+
+  /// Store Facebook page information in Firestore for quick access
+  Future<void> storeFacebookPages(List<Map<String, dynamic>> pages) async {
+    try {
+      if (_auth.currentUser == null) return;
+
+      final pagesData = pages
+          .map((page) => {
+                'id': page['id'],
+                'name': page['name'],
+                'category': page['category'],
+                'permissions': page['permissions'],
+                'tasks': page['tasks'],
+                'last_updated': FieldValue.serverTimestamp(),
+              })
+          .toList();
+
+      await _firestore
+          .collection('users')
+          .doc(_auth.currentUser!.uid)
+          .collection('facebook_data')
+          .doc('pages')
+          .set({
+        'pages': pagesData,
+        'last_updated': FieldValue.serverTimestamp(),
+      });
+
+      if (kDebugMode) {
+        print('✅ Stored ${pages.length} Facebook pages in Firestore');
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ Error storing Facebook pages: $e');
+      }
+    }
+  }
+
+  /// Get stored Facebook pages from Firestore
+  Future<List<Map<String, dynamic>>> getStoredFacebookPages() async {
+    try {
+      if (_auth.currentUser == null) return [];
+
+      final doc = await _firestore
+          .collection('users')
+          .doc(_auth.currentUser!.uid)
+          .collection('facebook_data')
+          .doc('pages')
+          .get();
+
+      if (doc.exists) {
+        final data = doc.data()!;
+        final pages = data['pages'] as List<dynamic>;
+
+        if (kDebugMode) {
+          print('📄 Retrieved ${pages.length} stored Facebook pages');
+        }
+
+        return pages.cast<Map<String, dynamic>>();
+      }
+
+      return [];
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ Error getting stored Facebook pages: $e');
+      }
+      return [];
+    }
+  }
+
+  /// Get Facebook posting options for the authenticated user
+  /// Returns a map with user timeline and available pages
+  Future<Map<String, dynamic>> getFacebookPostingOptions() async {
+    try {
+      if (_auth.currentUser == null) {
+        throw Exception('User not authenticated');
+      }
+
+      final result = <String, dynamic>{
+        'user_timeline': {
+          'id': 'me',
+          'name': 'My Timeline',
+          'type': 'user',
+          'can_post': true,
+        },
+        'pages': <Map<String, dynamic>>[],
+      };
+
+      // Get user's Facebook pages
+      try {
+        final pages = await getFacebookPages();
+
+        for (final page in pages) {
+          final permissions = page['permissions'] as List<dynamic>;
+          final tasks = page['tasks'] as List<dynamic>;
+
+          // Check for posting permissions
+          final hasPostPermission = permissions.contains('ADMINISTER') ||
+              permissions.contains('EDIT_PROFILE') ||
+              permissions.contains('CREATE_CONTENT') ||
+              tasks.contains('MANAGE') ||
+              tasks.contains('CREATE_CONTENT');
+
+          if (hasPostPermission) {
+            result['pages'].add({
+              'id': page['id'],
+              'name': page['name'],
+              'type': 'page',
+              'category': page['category'],
+              'can_post': true,
+              'permissions': permissions,
+              'tasks': tasks,
+            });
+          }
+        }
+
+        if (kDebugMode) {
+          print('📄 Found ${result['pages'].length} postable Facebook pages');
+        }
+      } catch (e) {
+        if (kDebugMode) {
+          print('⚠️ Error getting Facebook pages: $e');
+        }
+        // Continue without pages if there's an error
+      }
+
+      return result;
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ Error getting Facebook posting options: $e');
+      }
+      rethrow;
+    }
+  }
+
+  /// Check if user has any Facebook posting options available
+  Future<bool> hasFacebookPostingOptions() async {
+    try {
+      final options = await getFacebookPostingOptions();
+      return options['user_timeline']['can_post'] ||
+          (options['pages'] as List).isNotEmpty;
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ Error checking Facebook posting options: $e');
+      }
+      return false;
     }
   }
 }

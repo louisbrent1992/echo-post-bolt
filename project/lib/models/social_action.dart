@@ -295,8 +295,6 @@ class PlatformData {
 /// include mediaItem.mimeType = 'video/mp4', and pass mediaItem.fileUri to the Graph API endpoint
 @JsonSerializable()
 class FacebookData {
-  @JsonKey(name: 'post_here')
-  final bool postHere;
   @JsonKey(name: 'post_as_page')
   final bool postAsPage;
   @JsonKey(name: 'page_id')
@@ -317,7 +315,6 @@ class FacebookData {
   final Map<String, dynamic>? additionalFields;
 
   FacebookData({
-    this.postHere = false,
     this.postAsPage = false,
     this.pageId = '',
     this.postType,
@@ -339,8 +336,6 @@ class FacebookData {
 /// Supports story vs feed vs reel, carousel (multiple images), and video metadata
 @JsonSerializable(explicitToJson: true)
 class InstagramData {
-  @JsonKey(name: 'post_here')
-  final bool postHere;
   @JsonKey(name: 'post_type')
   final String? postType; // 'feed', 'story', 'reel'
   final Carousel? carousel;
@@ -360,7 +355,6 @@ class InstagramData {
   final String? scheduledTime; // ISO timestamp for scheduled posts
 
   InstagramData({
-    this.postHere = false,
     this.postType,
     this.carousel,
     this.igUserId = '',
@@ -398,8 +392,6 @@ class Carousel {
 /// Supports alt texts for accessibility and different media types
 @JsonSerializable()
 class TwitterData {
-  @JsonKey(name: 'post_here')
-  final bool postHere;
   @JsonKey(name: 'alt_texts')
   final List<String> altTexts;
   @JsonKey(name: 'tweet_mode')
@@ -416,7 +408,6 @@ class TwitterData {
   final String? scheduledTime; // ISO timestamp for scheduled posts
 
   TwitterData({
-    this.postHere = false,
     this.altTexts = const [],
     this.tweetMode = 'extended',
     this.mediaType,
@@ -436,8 +427,6 @@ class TwitterData {
 /// Supports video uploads, privacy settings, and YouTube-specific metadata
 @JsonSerializable(explicitToJson: true)
 class YouTubeData {
-  @JsonKey(name: 'post_here')
-  final bool postHere;
   @JsonKey(name: 'channel_id')
   final String channelId;
   final String privacy; // 'public', 'unlisted', 'private'
@@ -458,7 +447,6 @@ class YouTubeData {
   final bool madeForKids;
 
   YouTubeData({
-    this.postHere = false,
     this.channelId = '',
     this.privacy = 'public',
     this.videoCategoryId = '22', // Default: People & Blogs
@@ -481,8 +469,6 @@ class YouTubeData {
 /// Supports both video posts and audio clips
 @JsonSerializable(explicitToJson: true)
 class TikTokData {
-  @JsonKey(name: 'post_here')
-  final bool postHere;
   final String privacy;
   final Sound sound;
   @JsonKey(name: 'media_file_uri')
@@ -495,7 +481,6 @@ class TikTokData {
   final String? scheduledTime; // ISO timestamp for scheduled posts
 
   TikTokData({
-    this.postHere = false,
     this.privacy = 'public',
     required this.sound,
     this.mediaFileUri,

@@ -1026,21 +1026,11 @@ class SocialActionPostCoordinator extends ChangeNotifier {
   /// Create platform data for selected platforms
   PlatformData _createPlatformData(List<String> platforms) {
     return PlatformData(
-      facebook: platforms.contains('facebook')
-          ? FacebookData(postHere: true)
-          : FacebookData(postHere: false),
-      instagram: platforms.contains('instagram')
-          ? InstagramData(postHere: true, postType: 'feed')
-          : InstagramData(postHere: false, postType: 'feed'),
-      youtube: platforms.contains('youtube')
-          ? YouTubeData(postHere: true)
-          : YouTubeData(postHere: false),
-      twitter: platforms.contains('twitter')
-          ? TwitterData(postHere: true)
-          : TwitterData(postHere: false),
-      tiktok: platforms.contains('tiktok')
-          ? TikTokData(postHere: true, sound: Sound())
-          : TikTokData(postHere: false, sound: Sound()),
+      facebook: FacebookData(postType: 'feed'),
+      instagram: InstagramData(postType: 'feed'),
+      youtube: YouTubeData(),
+      twitter: TwitterData(),
+      tiktok: TikTokData(sound: Sound()),
     );
   }
 
@@ -2731,5 +2721,11 @@ class SocialActionPostCoordinator extends ChangeNotifier {
     }
 
     return requiringBusiness;
+  }
+
+  // Add this method to allow updating platformData from widgets
+  void updatePlatformData(PlatformData newPlatformData) {
+    _currentPost = _currentPost.copyWith(platformData: newPlatformData);
+    _safeNotifyListeners();
   }
 }

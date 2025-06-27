@@ -3,6 +3,8 @@ import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import '../constants/typography.dart';
 import '../services/social_action_post_coordinator.dart';
+import '../services/auth_service.dart';
+import '../models/social_action.dart';
 
 /// Pure presentation widget for post content - no internal state management
 /// All state comes directly from coordinator
@@ -86,6 +88,45 @@ class PostContentBox extends StatelessWidget {
                 ],
               ),
               const SizedBox(height: 12),
+
+              // Add this after the header row, before post text content
+              if (action.platforms.contains('facebook'))
+                FacebookAccountSelector(
+                  facebookData: action.platformData.facebook ?? FacebookData(),
+                  onChanged: (
+                      {required bool postAsPage,
+                      required String pageId,
+                      required String pageName}) {
+                    final coordinator =
+                        Provider.of<SocialActionPostCoordinator>(context,
+                            listen: false);
+                    final current = coordinator.currentPost;
+                    // Construct new FacebookData
+                    final newFacebookData = FacebookData(
+                      postAsPage: postAsPage,
+                      pageId: pageId,
+                      postType: current.platformData.facebook?.postType,
+                      mediaFileUri: current.platformData.facebook?.mediaFileUri,
+                      videoFileUri: current.platformData.facebook?.videoFileUri,
+                      audioFileUri: current.platformData.facebook?.audioFileUri,
+                      thumbnailUri: current.platformData.facebook?.thumbnailUri,
+                      scheduledTime:
+                          current.platformData.facebook?.scheduledTime,
+                      additionalFields:
+                          current.platformData.facebook?.additionalFields,
+                    );
+                    // Construct new PlatformData
+                    final newPlatformData = PlatformData(
+                      facebook: newFacebookData,
+                      instagram: current.platformData.instagram,
+                      youtube: current.platformData.youtube,
+                      twitter: current.platformData.twitter,
+                      tiktok: current.platformData.tiktok,
+                    );
+                    // Use a public method to update the current post's platformData
+                    coordinator.updatePlatformData(newPlatformData);
+                  },
+                ),
 
               // Post text content
               if (caption.isNotEmpty) ...[
@@ -336,6 +377,114 @@ class PostContentBox extends StatelessWidget {
                 ],
               ),
             ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class FacebookAccountSelector extends StatefulWidget {
+  final FacebookData facebookData;
+  final void Function(
+      {required bool postAsPage,
+      required String pageId,
+      required String pageName}) onChanged;
+  const FacebookAccountSelector(
+      {super.key, required this.facebookData, required this.onChanged});
+
+  @override
+  State<FacebookAccountSelector> createState() =>
+      _FacebookAccountSelectorState();
+}
+
+class _FacebookAccountSelectorState extends State<FacebookAccountSelector> {
+  late Future<Map<String, dynamic>> _optionsFuture;
+  String? _selectedId;
+  String? _selectedName;
+  bool _isPage = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _optionsFuture = Provider.of<AuthService>(context, listen: false)
+        .getFacebookPostingOptions();
+    _selectedId =
+        widget.facebookData.postAsPage ? widget.facebookData.pageId : 'me';
+    _isPage = widget.facebookData.postAsPage;
+    _selectedName = null;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<Map<String, dynamic>>(
+      future: _optionsFuture,
+      builder: (context, snapshot) {
+        if (!snapshot.hasData) {
+          return const Padding(
+            padding: EdgeInsets.symmetric(vertical: 8),
+            child: LinearProgressIndicator(),
+          );
+        }
+        final options = snapshot.data!;
+        final pages = options['pages'] as List<dynamic>;
+        final timeline = options['user_timeline'] as Map<String, dynamic>;
+        final items = [
+          DropdownMenuItem<String>(
+            value: 'me',
+            child: Text('My Timeline'),
+          ),
+          ...pages
+              .map<DropdownMenuItem<String>>((page) => DropdownMenuItem<String>(
+                    value: page['id'],
+                    child: Text(page['name']),
+                  )),
+        ];
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Post as:',
+                style: TextStyle(
+                    color: Colors.white, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 6),
+            DropdownButton<String>(
+              value: _selectedId ?? 'me',
+              items: items,
+              onChanged: (value) {
+                setState(() {
+                  _selectedId = value;
+                  if (value == 'me') {
+                    _isPage = false;
+                    _selectedName = timeline['name'];
+                  } else {
+                    _isPage = true;
+                    _selectedName =
+                        pages.firstWhere((p) => p['id'] == value)['name'];
+                  }
+                });
+                widget.onChanged(
+                  postAsPage: _isPage,
+                  pageId: _selectedId ?? '',
+                  pageName: _selectedName ?? '',
+                );
+              },
+              dropdownColor: Colors.black,
+              style: const TextStyle(color: Colors.white),
+              iconEnabledColor: Colors.white,
+            ),
+            if (_isPage && _selectedName != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text('Automated posting as: $_selectedName',
+                    style: const TextStyle(
+                        color: Colors.greenAccent, fontSize: 12)),
+              ),
+            if (!_isPage)
+              const Padding(
+                padding: EdgeInsets.only(top: 4),
+                child: Text('Manual sharing to your timeline',
+                    style: TextStyle(color: Colors.blueAccent, fontSize: 12)),
+              ),
           ],
         );
       },
