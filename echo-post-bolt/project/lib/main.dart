@@ -194,11 +194,11 @@ class _ServiceInitializationWrapperState
           Provider.of<AppSettingsService>(context, listen: false);
       await appSettingsService.initialize();
 
-      // Initialize MediaCoordinator
+      // Capture MediaCoordinator before async operation
       final mediaCoordinator =
           Provider.of<MediaCoordinator>(context, listen: false);
 
-      // Wait a bit to ensure all providers are readyflut
+      // Wait a bit to ensure all providers are ready
       await Future.delayed(const Duration(milliseconds: 100));
 
       if (!mounted) {

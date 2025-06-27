@@ -467,13 +467,11 @@ class SevenIconHeader extends StatelessWidget {
               ),
             ),
             child: Center(
-              child: actionWidget.icon != null
-                  ? Icon(
-                      (actionWidget.icon as Icon).icon,
-                      color: Colors.white.withValues(alpha: 0.8),
-                      size: size * 0.35, // Match social media icon proportions
-                    )
-                  : actionWidget.icon,
+              child: Icon(
+                (actionWidget.icon as Icon).icon,
+                color: Colors.white.withValues(alpha: 0.8),
+                size: size * 0.35, // Match social media icon proportions
+              ),
             ),
           ),
         ),

@@ -242,7 +242,7 @@ class _VideoPreviewWidgetState extends State<VideoPreviewWidget> {
     return GestureDetector(
       onTap: widget.onTap,
       child: Container(
-        decoration: BoxDecoration(
+        decoration: const BoxDecoration(
             // Remove borderRadius to make corners square
             ),
         child: Stack(
@@ -251,8 +251,8 @@ class _VideoPreviewWidgetState extends State<VideoPreviewWidget> {
             Container(
               width: double.infinity,
               height: double.infinity,
-              decoration: BoxDecoration(
-                color: const Color(0xFF2A2A2A),
+              decoration: const BoxDecoration(
+                color: Color(0xFF2A2A2A),
                 // Remove borderRadius to make corners square
               ),
               child: _buildVideoThumbnail(),

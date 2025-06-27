@@ -24,14 +24,18 @@ class MediaBirthprint {
     double score = 0.0;
 
     // File size exact match (40% weight)
-    if (fileSize == other.fileSize) score += 0.4;
+    if (fileSize == other.fileSize) {
+      score += 0.4;
+    }
 
     // Creation time within 1 second (30% weight)
     final timeDiff =
         creationTime.difference(other.creationTime).abs().inSeconds;
-    if (timeDiff <= 1)
+    if (timeDiff <= 1) {
       score += 0.3;
-    else if (timeDiff <= 5) score += 0.15;
+    } else if (timeDiff <= 5) {
+      score += 0.15;
+    }
 
     // Filename similarity (30% weight)
     final filenameSimilarity =
@@ -67,8 +71,12 @@ class MediaBirthprint {
     final matrix =
         List.generate(a.length + 1, (i) => List.filled(b.length + 1, 0));
 
-    for (int i = 0; i <= a.length; i++) matrix[i][0] = i;
-    for (int j = 0; j <= b.length; j++) matrix[0][j] = j;
+    for (int i = 0; i <= a.length; i++) {
+      matrix[i][0] = i;
+    }
+    for (int j = 0; j <= b.length; j++) {
+      matrix[0][j] = j;
+    }
 
     for (int i = 1; i <= a.length; i++) {
       for (int j = 1; j <= b.length; j++) {

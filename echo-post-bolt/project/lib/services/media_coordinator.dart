@@ -388,14 +388,15 @@ class MediaCoordinator extends ChangeNotifier {
   /// OPTIMIZED: Hybrid validation that checks PhotoManager results against file system
   Future<List<Map<String, dynamic>>> _hybridValidateResults(
       List<Map<String, dynamic>> photoManagerResults) async {
-    if (_isValidatingFileSystem)
+    if (_isValidatingFileSystem) {
       return photoManagerResults; // Prevent concurrent validation
+    }
     _isValidatingFileSystem = true;
 
     try {
       final validatedResults = <Map<String, dynamic>>[];
       final staleUris = <String>[];
-      final batchSize = 20; // Process in batches to avoid blocking
+      const batchSize = 20; // Process in batches to avoid blocking
 
       for (int i = 0; i < photoManagerResults.length; i += batchSize) {
         final batch = photoManagerResults.skip(i).take(batchSize);
@@ -513,7 +514,7 @@ class MediaCoordinator extends ChangeNotifier {
 
   /// OPTIMIZED: Batch metadata enrichment for better performance
   Future<void> _batchEnrichMetadata(List<Map<String, dynamic>> results) async {
-    final batchSize = 10;
+    const batchSize = 10;
 
     for (int i = 0; i < results.length; i += batchSize) {
       final batch = results.skip(i).take(batchSize);

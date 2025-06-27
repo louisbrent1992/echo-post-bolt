@@ -1274,7 +1274,7 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
         });
       },
       child: Container(
-        decoration: BoxDecoration(
+        decoration: const BoxDecoration(
             // Remove border to make it sleeker
             ),
         child: Stack(
@@ -1379,21 +1379,6 @@ class _MediaSelectionScreenState extends State<MediaSelectionScreen> {
         );
       }
     }
-  }
-
-  String _formatFileSize(int bytes) {
-    if (bytes == 0) return '0 B';
-
-    const suffixes = ['B', 'KB', 'MB', 'GB'];
-    var size = bytes.toDouble();
-    var suffixIndex = 0;
-
-    while (size >= 1024 && suffixIndex < suffixes.length - 1) {
-      size /= 1024;
-      suffixIndex++;
-    }
-
-    return '${size.toStringAsFixed(size < 10 ? 1 : 0)} ${suffixes[suffixIndex]}';
   }
 
   String _getFormatDisplayName(String mimeType) {

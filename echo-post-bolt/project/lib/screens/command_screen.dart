@@ -7,8 +7,8 @@ import 'package:provider/provider.dart';
 import 'package:http/http.dart' as http;
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:record/record.dart';
-import 'package:video_player/video_player.dart';
-import 'package:video_thumbnail/video_thumbnail.dart';
+// Removed unused: import 'package:video_player/video_player.dart';
+// Removed unused: import 'package:video_thumbnail/video_thumbnail.dart';
 
 import '../models/social_action.dart';
 import '../models/status_message.dart';

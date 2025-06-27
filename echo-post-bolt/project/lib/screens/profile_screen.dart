@@ -372,8 +372,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
                   // Manage Connected Accounts Section
                   const SizedBox(height: 24),
-                  Row(
-                    children: const [
+                  const Row(
+                    children: [
                       Icon(Icons.link, color: Color(0xFFFF0055), size: 20),
                       SizedBox(width: 8),
                       Text(
@@ -391,10 +391,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     width: double.infinity,
                     padding: const EdgeInsets.all(16),
                     decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.03),
+                      color: Colors.white.withValues(alpha: 0.03),
                       borderRadius: BorderRadius.circular(12),
                       border: Border.all(
-                        color: const Color(0xFFFF0055).withOpacity(0.2),
+                        color: const Color(0xFFFF0055).withValues(alpha: 0.2),
                         width: 1.2,
                       ),
                     ),
@@ -406,11 +406,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
                               SocialPlatforms.getIcon(platform),
                               color: _platformConnections[platform] == true
                                   ? const Color(0xFFFF0055)
-                                  : Colors.white.withOpacity(0.4),
+                                  : Colors.white.withValues(alpha: 0.4),
                             ),
                             title: Text(
                               SocialPlatforms.getDisplayName(platform),
-                              style: TextStyle(
+                              style: const TextStyle(
                                 color: Colors.white,
                                 fontWeight: FontWeight.w500,
                               ),
@@ -422,7 +422,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                               style: TextStyle(
                                 color: _platformConnections[platform] == true
                                     ? Colors.greenAccent
-                                    : Colors.white.withOpacity(0.5),
+                                    : Colors.white.withValues(alpha: 0.5),
                                 fontSize: 12,
                               ),
                             ),

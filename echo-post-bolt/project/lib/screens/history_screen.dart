@@ -14,7 +14,6 @@ import '../services/social_post_service.dart';
 import '../services/auth_service.dart';
 import '../services/media_coordinator.dart';
 import '../services/social_action_post_coordinator.dart';
-import '../widgets/social_icon.dart';
 import '../screens/command_screen.dart';
 
 class HistoryScreen extends StatefulWidget {
@@ -812,14 +811,14 @@ class _HistoryScreenState extends State<HistoryScreen> {
             size: 64,
           ),
           const SizedBox(height: 16),
-          Text(
+          const Text(
             'Media Unavailable',
-            textAlign: TextAlign.center,
             style: TextStyle(
-              color: Colors.white.withValues(alpha: 0.8),
+              color: Colors.white,
               fontSize: 18,
               fontWeight: FontWeight.w600,
             ),
+            textAlign: TextAlign.center,
           ),
           const SizedBox(height: 8),
           Text(
@@ -1075,8 +1074,8 @@ class _HistoryScreenState extends State<HistoryScreen> {
                                       ),
                                       borderRadius: BorderRadius.circular(16),
                                       border: Border.all(
-                                        color:
-                                            Color.fromRGBO(255, 255, 255, 0.1),
+                                        color: const Color.fromRGBO(
+                                            255, 255, 255, 0.1),
                                         width: 1,
                                       ),
                                     ),
@@ -1091,11 +1090,10 @@ class _HistoryScreenState extends State<HistoryScreen> {
                                               .withValues(alpha: 0.6),
                                         ),
                                         const SizedBox(height: 16),
-                                        Text(
+                                        const Text(
                                           'Media Unavailable',
                                           style: TextStyle(
-                                            color: Colors.white
-                                                .withValues(alpha: 0.8),
+                                            color: Colors.white,
                                             fontSize: 18,
                                             fontWeight: FontWeight.w600,
                                           ),
@@ -1884,11 +1882,12 @@ class _HistoryScreenState extends State<HistoryScreen> {
 
   /// Validates and recovers media for all posts in the history
   Future<void> _validateAllPostsMedia(BuildContext context) async {
-    final mediaCoordinator =
-        Provider.of<MediaCoordinator>(context, listen: false);
     final firestoreService =
         Provider.of<FirestoreService>(context, listen: false);
+    final mediaCoordinator =
+        Provider.of<MediaCoordinator>(context, listen: false);
     final scaffoldMessenger = ScaffoldMessenger.of(context);
+    final navigator = Navigator.of(context);
 
     // Show confirmation dialog
     final confirmed = await showDialog<bool>(
@@ -1924,9 +1923,15 @@ class _HistoryScreenState extends State<HistoryScreen> {
 
     if (confirmed != true) return;
 
-    // Show progress dialog
+    // Capture context before any async operations
+    final dialogContext = context;
+
+    // Show progress dialog immediately after confirmation, before any async operations
+    if (!mounted) return;
+
+    // ignore: use_build_context_synchronously
     showDialog(
-      context: context,
+      context: dialogContext,
       barrierDismissible: false,
       builder: (context) => AlertDialog(
         backgroundColor: const Color(0xFF2A2A2A),
@@ -1946,6 +1951,17 @@ class _HistoryScreenState extends State<HistoryScreen> {
       ),
     );
 
+    // Perform async operations
+    _performMediaValidationAsync(
+        firestoreService, mediaCoordinator, navigator, scaffoldMessenger);
+  }
+
+  Future<void> _performMediaValidationAsync(
+    FirestoreService firestoreService,
+    MediaCoordinator mediaCoordinator,
+    NavigatorState navigator,
+    ScaffoldMessengerState scaffoldMessenger,
+  ) async {
     try {
       // Get all posts
       final querySnapshot = await firestoreService.getActionsStream().first;
@@ -1968,7 +1984,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
 
       if (!mounted) return;
       if (posts.isEmpty) {
-        Navigator.pop(context); // Close progress dialog
+        if (mounted) navigator.pop(); // Close progress dialog
         scaffoldMessenger.showSnackBar(
           const SnackBar(
             content: Text('No posts with media found'),
@@ -2038,7 +2054,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
       }
 
       if (!mounted) return;
-      Navigator.pop(context); // Close progress dialog
+      if (mounted) navigator.pop(); // Close progress dialog
 
       scaffoldMessenger.showSnackBar(
         SnackBar(
@@ -2050,7 +2066,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
       );
     } catch (e) {
       if (!mounted) return;
-      Navigator.pop(context); // Close progress dialog
+      if (mounted) navigator.pop(); // Close progress dialog
       scaffoldMessenger.showSnackBar(
         SnackBar(
           content: Text('Failed to validate media: $e'),

@@ -220,9 +220,11 @@ class _RightActionButton extends StatelessWidget {
         height: 72,
         decoration: BoxDecoration(
           shape: BoxShape.circle,
-          color: const Color(0xFFFF0055).withOpacity(0.1), // Translucent pink
+          color: const Color(0xFFFF0055)
+              .withValues(alpha: 0.1), // Translucent pink
           border: Border.all(
-            color: const Color(0xFFFF0055).withOpacity(0.3), // Pink border
+            color:
+                const Color(0xFFFF0055).withValues(alpha: 0.3), // Pink border
             width: 2.0,
           ),
         ),
@@ -271,9 +273,11 @@ class _LeftSaveButton extends StatelessWidget {
         height: 72,
         decoration: BoxDecoration(
           shape: BoxShape.circle,
-          color: const Color(0xFFFF0055).withOpacity(0.1), // Translucent pink
+          color: const Color(0xFFFF0055)
+              .withValues(alpha: 0.1), // Translucent pink
           border: Border.all(
-            color: const Color(0xFFFF0055).withOpacity(0.3), // Pink border
+            color:
+                const Color(0xFFFF0055).withValues(alpha: 0.3), // Pink border
             width: 2.0,
           ),
         ),

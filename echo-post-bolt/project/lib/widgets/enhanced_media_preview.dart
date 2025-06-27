@@ -4,10 +4,8 @@ import 'package:flutter/foundation.dart';
 import 'package:video_player/video_player.dart';
 import 'package:photo_manager/photo_manager.dart';
 import 'package:video_thumbnail/video_thumbnail.dart';
-import 'package:flutter/rendering.dart';
 import 'dart:ui' as ui;
 import 'dart:async';
-import 'dart:typed_data';
 
 import '../models/social_action.dart';
 import '../services/video_validation_service.dart';
@@ -404,8 +402,8 @@ class _EnhancedMediaPreviewState extends State<EnhancedMediaPreview>
       child: Container(
         width: double.infinity,
         height: 250,
-        decoration: BoxDecoration(
-          color: const Color(0xFF2A2A2A),
+        decoration: const BoxDecoration(
+          color: Color(0xFF2A2A2A),
         ),
         child: Stack(
           fit: StackFit.expand,

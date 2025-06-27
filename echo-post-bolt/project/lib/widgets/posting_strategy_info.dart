@@ -32,15 +32,15 @@ class PostingStrategyInfo extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
+          const Row(
             children: [
-              const Icon(
+              Icon(
                 Icons.info_outline,
                 color: Color(0xFFFF0055),
                 size: 20,
               ),
-              const SizedBox(width: 8),
-              const Text(
+              SizedBox(width: 8),
+              Text(
                 'Posting Strategy',
                 style: TextStyle(
                   fontSize: 16,

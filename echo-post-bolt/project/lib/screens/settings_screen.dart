@@ -122,7 +122,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Text(
-                  '${_formatDuration(settingsService.voiceTranscriptionTimeout)}',
+                  _formatDuration(settingsService.voiceTranscriptionTimeout),
                   style: const TextStyle(
                     color: Color(0xFFFF0055),
                     fontWeight: FontWeight.bold,

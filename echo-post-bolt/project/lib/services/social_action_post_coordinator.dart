@@ -94,7 +94,7 @@ class SocialActionPostCoordinator extends ChangeNotifier {
   StatusPriority _currentStatusPriority = StatusPriority.low;
   Timer? _processingWatchdog;
   // Automatically clears error state after a short delay
-  Timer? _error_clear_timer;
+  Timer? _errorClearTimer;
   static const Duration _defaultProcessingTimeout = Duration(seconds: 45);
 
   SocialActionPostCoordinator({
@@ -343,7 +343,7 @@ class SocialActionPostCoordinator extends ChangeNotifier {
       _errorMessage = null;
       _temporaryStatus = null;
       _statusTimer?.cancel();
-      _error_clear_timer?.cancel();
+      _errorClearTimer?.cancel();
     }
 
     _safeNotifyListeners();
@@ -684,7 +684,7 @@ class SocialActionPostCoordinator extends ChangeNotifier {
     _processingWatchdog?.cancel();
     _temporaryStatus = null;
     _stateTransitionDebouncer?.cancel();
-    _error_clear_timer?.cancel();
+    _errorClearTimer?.cancel();
 
     _safeNotifyListeners();
 
@@ -1808,7 +1808,7 @@ class SocialActionPostCoordinator extends ChangeNotifier {
     _endHashtagEditingSession();
     _statusTimer?.cancel();
     _processingWatchdog?.cancel();
-    _error_clear_timer?.cancel();
+    _errorClearTimer?.cancel();
 
     if (kDebugMode) {
       print('🗑️ SocialActionPostCoordinator: Disposal complete');
@@ -1875,8 +1875,8 @@ class SocialActionPostCoordinator extends ChangeNotifier {
     );
 
     // Restart the auto-clear timer
-    _error_clear_timer?.cancel();
-    _error_clear_timer = Timer(duration, () {
+    _errorClearTimer?.cancel();
+    _errorClearTimer = Timer(duration, () {
       _hasError = false;
       _errorMessage = null;
       _safeNotifyListeners();
@@ -2022,7 +2022,7 @@ class SocialActionPostCoordinator extends ChangeNotifier {
       return;
     } else if (_hasContent) {
       // NEW: Start processing for post execution
-      startProcessing(timeout: Duration(seconds: 30));
+      startProcessing(timeout: const Duration(seconds: 30));
 
       // Execute in background without blocking
       _executePostInBackground();
@@ -2384,7 +2384,7 @@ class SocialActionPostCoordinator extends ChangeNotifier {
             '🔍 SocialActionPostCoordinator: Pre-posting media validation with recovery');
       }
 
-      final config = MediaValidationConfig.production;
+      const config = MediaValidationConfig.production;
       final validationResults = await Future.wait(
         _currentPost.content.media.map((item) => _mediaCoordinator
             .validateAndRecoverMediaURI(item.fileUri, config: config)),
@@ -2549,7 +2549,7 @@ class SocialActionPostCoordinator extends ChangeNotifier {
         SocialPlatforms.isPlatformCompatible(platform, contentType);
 
     if (isCompatible) {
-      return PlatformToggleResult(
+      return const PlatformToggleResult(
         canToggle: true,
         message: 'Platform is compatible with current content',
       );
