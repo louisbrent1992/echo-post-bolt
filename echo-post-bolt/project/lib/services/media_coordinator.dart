@@ -1230,11 +1230,19 @@ class MediaCoordinator extends ChangeNotifier {
             await _getMediaTypesInDirectory(dir.path);
       }
 
+      // Determine if we are in edit mode based on content presence
+      bool isEditing = false;
+      if (_existingPostForAi != null) {
+        final hasText = _existingPostForAi!.content.text.isNotEmpty;
+        final hasMedia = _existingPostForAi!.content.media.isNotEmpty;
+        isEditing = hasText || hasMedia;
+      }
+
       final mediaContext = {
         'recent_media': latestMedia,
         'total_count': latestMedia.length,
         'last_updated': DateTime.now().toIso8601String(),
-        'isEditing': _existingPostForAi != null,
+        'isEditing': isEditing,
         'isVoiceDictation': _isVoiceDictationMode,
         'directory_status': {
           'enabled_directories': enabledDirs.map((d) => d.path).toList(),
@@ -1251,175 +1259,6 @@ class MediaCoordinator extends ChangeNotifier {
       }
 
       return mediaContext;
-    } catch (e) {
-      if (kDebugMode) {
-        print('❌ MediaCoordinator: Failed to get media context for AI: $e');
-      }
-      return {
-        'recent_media': [],
-        'total_count': 0,
-        'last_updated': DateTime.now().toIso8601String(),
-        'isEditing': false,
-        'isVoiceDictation': _isVoiceDictationMode,
-        'error': e.toString(),
-        'directory_status': {
-          'enabled_directories': [],
-          'any_directory_has_content': false,
-        },
-      };
-    }
-  }
-
-  // ========== DirectoryService Methods ==========
-
-  /// Toggle custom directories mode
-  Future<void> setCustomDirectoriesEnabled(bool enabled) async {
-    if (!_isInitialized) {
-      throw StateError(
-          'MediaCoordinator not initialized. Call initialize() first.');
-    }
-    await _directoryService.setCustomDirectoriesEnabled(enabled);
-    notifyListeners();
-  }
-
-  /// Update a directory's enabled status
-  Future<void> updateDirectoryEnabled(String directoryId, bool enabled) async {
-    if (!_isInitialized) {
-      throw StateError(
-          'MediaCoordinator not initialized. Call initialize() first.');
-    }
-    await _directoryService.updateDirectoryEnabled(directoryId, enabled);
-    notifyListeners();
-  }
-
-  /// Add a custom directory
-  Future<void> addCustomDirectory(String displayName, String path) async {
-    if (!_isInitialized) {
-      throw StateError(
-          'MediaCoordinator not initialized. Call initialize() first.');
-    }
-    await _directoryService.addCustomDirectory(displayName, path);
-    notifyListeners();
-  }
-
-  /// Remove a custom directory (can't remove defaults)
-  Future<void> removeDirectory(String directoryId) async {
-    if (!_isInitialized) {
-      throw StateError(
-          'MediaCoordinator not initialized. Call initialize() first.');
-    }
-    await _directoryService.removeDirectory(directoryId);
-    notifyListeners();
-  }
-
-  /// Reset to platform defaults
-  Future<void> resetToDefaults() async {
-    if (!_isInitialized) {
-      throw StateError(
-          'MediaCoordinator not initialized. Call initialize() first.');
-    }
-    await _directoryService.resetToDefaults();
-    notifyListeners();
-  }
-
-  /// Check if a directory path exists and is accessible
-  Future<bool> isDirectoryAccessible(String path) async {
-    if (!_isInitialized) {
-      throw StateError(
-          'MediaCoordinator not initialized. Call initialize() first.');
-    }
-    return await _directoryService.isDirectoryAccessible(path);
-  }
-
-  /// Get suggested directories based on common patterns
-  Future<List<String>> getSuggestedDirectories() async {
-    if (!_isInitialized) {
-      throw StateError(
-          'MediaCoordinator not initialized. Call initialize() first.');
-    }
-    return await _directoryService.getSuggestedDirectories();
-  }
-
-  /// Set the active directory
-  void setActiveDirectory(String path) {
-    if (!_isInitialized) {
-      throw StateError(
-          'MediaCoordinator not initialized. Call initialize() first.');
-    }
-    _directoryService.setActiveDirectory(path);
-    notifyListeners();
-  }
-
-  /// Get the active directory
-  MediaDirectory? get activeDirectory {
-    if (!_isInitialized) {
-      throw StateError(
-          'MediaCoordinator not initialized. Call initialize() first.');
-    }
-    return _directoryService.activeDirectory;
-  }
-
-  /// Get all directories
-  List<MediaDirectory> get directories {
-    if (!_isInitialized) {
-      throw StateError(
-          'MediaCoordinator not initialized. Call initialize() first.');
-    }
-    return _directoryService.directories;
-  }
-
-  // ========== PhotoManagerService Methods ==========
-
-  /// Find asset candidates using search parameters
-  Future<List<AssetEntity>> findAssetCandidates(
-      Map<String, dynamic> searchParams) async {
-    if (!_isInitialized) {
-      throw StateError(
-          'MediaCoordinator not initialized. Call initialize() first.');
-    }
-    return await _photoManager.findAssetCandidates(searchParams);
-  }
-
-  /// Convert asset entities to maps
-  Future<List<Map<String, dynamic>>> getAssetMaps(
-      List<AssetEntity> candidates) async {
-    if (!_isInitialized) {
-      throw StateError(
-          'MediaCoordinator not initialized. Call initialize() first.');
-    }
-    return await _photoManager.getAssetMaps(candidates);
-  }
-
-  // ========== MediaSearchService Methods ==========
-
-  /// Get available albums on the device
-  Future<List<AssetPathEntity>> getAvailableAlbums() async {
-    if (!_isInitialized) {
-      throw StateError(
-          'MediaCoordinator not initialized. Call initialize() first.');
-    }
-    return await _mediaSearchService.getAvailableAlbums();
-  }
-
-  /// Re-initialize MediaSearchService with new album selection
-  Future<void> reinitializeWithAlbums(
-      List<AssetPathEntity> selectedAlbums) async {
-    if (!_isInitialized) {
-      throw StateError(
-          'MediaCoordinator not initialized. Call initialize() first.');
-    }
-
-    try {
-      // Convert AssetPathEntity list to album IDs
-      final albumIds = selectedAlbums.map((album) => album.id).toList();
-
-      // Re-initialize MediaSearchService with new album selection
-      await _mediaSearchService.reinitializeWithAlbums(albumIds);
-
-      if (kDebugMode) {
-        print(
-            '✅ MediaCoordinator: MediaSearchService re-initialized with ${selectedAlbums.length} albums');
-      }
     } catch (e) {
       if (kDebugMode) {
         print('❌ MediaCoordinator: Failed to re-initialize with albums: $e');
@@ -3070,5 +2909,39 @@ class MediaCoordinator extends ChangeNotifier {
                 'is_valid': cache.isValid,
               })),
     };
+  }
+
+  // Album management (delegates to MediaSearchService)
+  Future<List<AssetPathEntity>> getAvailableAlbums() async {
+    return await _mediaSearchService.getAvailableAlbums();
+  }
+
+  Future<void> reinitializeWithAlbums(List<AssetPathEntity> albums) async {
+    // The MediaSearchService expects a list of album IDs
+    final albumIds = albums.map((a) => a.id).toList();
+    await _mediaSearchService.reinitializeWithAlbums(albumIds);
+  }
+
+  // Directory management (delegates to DirectoryService)
+  List<MediaDirectory> get directories => _directoryService.directories;
+
+  Future<void> setCustomDirectoriesEnabled(bool enabled) async {
+    await _directoryService.setCustomDirectoriesEnabled(enabled);
+  }
+
+  Future<void> updateDirectoryEnabled(String directoryId, bool enabled) async {
+    await _directoryService.updateDirectoryEnabled(directoryId, enabled);
+  }
+
+  Future<void> removeDirectory(String directoryId) async {
+    await _directoryService.removeDirectory(directoryId);
+  }
+
+  Future<List<String>> getSuggestedDirectories() async {
+    return await _directoryService.getSuggestedDirectories();
+  }
+
+  Future<void> addCustomDirectory(String displayName, String path) async {
+    await _directoryService.addCustomDirectory(displayName, path);
   }
 }

@@ -277,7 +277,7 @@ Instructions:
 - Platforms: If the user specifies platforms ("post to TikTok"), include those in "platforms" and set "post_here": true in platform_data. If none are mentioned, include all valid platforms for the media type (e.g., video: YouTube; image: Instagram).
 - Media: Select the best matching file(s) from mediaContext using filename, timestamp, or metadata based on user description. Fill out all relevant media and metadata fields.
 - Tags, Mentions, Locations: Extract and fill from transcription and media metadata (e.g., hashtags, location).
-- Edit Mode: If editing, preserve all unchanged fields and update only what the user specifies.
+- Edit Mode: If editing (i.e. hasContent == true), preserve all unchanged fields and update only what the user specifies.
 - Schema: Use the SocialAction JSON structure as your blueprint. If information is missing, use null, "" (empty string), or [] (empty list) as appropriate.
 - Return only the raw, complete JSON object, no commentary or formatting.
 

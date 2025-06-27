@@ -27,8 +27,7 @@ class PostContentBox extends StatelessWidget {
         final action = coordinator.currentPost;
         final caption = action.content.text;
         final hashtags = action.content.hashtags;
-        final isRecording =
-            coordinator.isRecording && coordinator.isVoiceDictating;
+        final isRecording = coordinator.isRecording && coordinator.hasContent;
         final isProcessing = coordinator.isProcessing;
 
         return Container(

@@ -76,7 +76,6 @@ class SocialActionPostCoordinator extends ChangeNotifier {
 
   // Recording management
   String? _currentRecordingPath;
-  bool _isVoiceDictating = false;
   int _recordingDuration = 0;
   final int maxRecordingDuration = 30;
 
@@ -188,7 +187,6 @@ class SocialActionPostCoordinator extends ChangeNotifier {
       isPostComplete && !_isRecording && !_isProcessing;
 
   // Additional getters for recording state
-  bool get isVoiceDictating => _isVoiceDictating;
   int get recordingDuration => _recordingDuration;
   double get currentAmplitude => _currentAmplitude;
   bool get hasSpeechDetected => _hasSpeechDetected;
@@ -259,7 +257,8 @@ class SocialActionPostCoordinator extends ChangeNotifier {
 
       // Update state flags
       _isRecording = true;
-      _isVoiceDictating = isVoiceDictation;
+      // CRITICAL: Edit mode is now determined by hasContent in MediaCoordinator context
+      // No need to set _isEditMode here - it's derived from content presence
       _recordingDuration = 0;
       _hasSpeechDetected = false;
 
@@ -274,7 +273,8 @@ class SocialActionPostCoordinator extends ChangeNotifier {
             '🎤 Recording started in ${isVoiceDictation ? "voice dictation" : "command"} mode');
         print('   Recording path: $_currentRecordingPath');
         print('   _isRecording: $_isRecording');
-        print('   _isVoiceDictating: $_isVoiceDictating');
+        print(
+            '   hasContent: $hasContent (edit mode determined by content presence)');
       }
 
       _safeNotifyListeners();
@@ -282,12 +282,16 @@ class SocialActionPostCoordinator extends ChangeNotifier {
       if (kDebugMode) {
         print('❌ Failed to start recording: $e');
       }
+      // CRITICAL: Reset all states on error
       _isRecording = false;
-      _isVoiceDictating = false;
       _isProcessing = false;
       setError('Failed to start recording: $e');
     } finally {
+      // CRITICAL: Always reset transition state, even on error
       _isTransitioning = false;
+      if (kDebugMode) {
+        print('🔄 Transition state reset: _isTransitioning = false');
+      }
     }
   }
 
@@ -323,7 +327,6 @@ class SocialActionPostCoordinator extends ChangeNotifier {
     _currentRecordingPath = null;
     _isRecording = false;
     // NOTE: _isProcessing is managed by parent scope
-    _isVoiceDictating = false;
     _recordingDuration = 0;
     _isTransitioning = false; // Ensure transitions are reset
 
@@ -520,7 +523,6 @@ class SocialActionPostCoordinator extends ChangeNotifier {
 
       // CRITICAL: Reset recording states but NOT _isProcessing (managed by parent)
       _isRecording = false;
-      _isVoiceDictating = false;
       _isTransitioning = false;
       _hasError = false;
       _errorMessage = null;
@@ -532,7 +534,8 @@ class SocialActionPostCoordinator extends ChangeNotifier {
         print('✅ Voice transcription processed and states reset:');
         print('   _isRecording: $_isRecording');
         print('   _isProcessing: $_isProcessing (managed by parent)');
-        print('   _isVoiceDictating: $_isVoiceDictating');
+        print(
+            '   hasContent: $hasContent (edit mode determined by content presence)');
         print('   _isTransitioning: $_isTransitioning');
       }
 
@@ -544,8 +547,9 @@ class SocialActionPostCoordinator extends ChangeNotifier {
 
       // CRITICAL: Reset recording states but NOT _isProcessing (managed by parent)
       _isRecording = false;
-      _isVoiceDictating = false;
       _isTransitioning = false;
+      _hasError = false;
+      _errorMessage = null;
 
       // CRITICAL: Clear recording mode context even on error
       _mediaCoordinator.setRecordingModeContext(false);
@@ -704,7 +708,9 @@ class SocialActionPostCoordinator extends ChangeNotifier {
       }
 
       // CRITICAL: Set existing post context in MediaCoordinator for AI
-      _mediaCoordinator.setExistingPostContext(existingPost);
+      // If we have existing content, pass it as context for editing
+      _mediaCoordinator
+          .setExistingPostContext(hasContent ? _currentPost : existingPost);
 
       final aiResult = await _aiService.processVoiceCommand(
         transcription,
@@ -1796,6 +1802,7 @@ class SocialActionPostCoordinator extends ChangeNotifier {
     }
 
     _isDisposed = true;
+    _isTransitioning = false; // CRITICAL: Clear any stuck transition state
     _stateTransitionDebouncer?.cancel();
     _endTextEditingSession();
     _endHashtagEditingSession();
@@ -1805,6 +1812,7 @@ class SocialActionPostCoordinator extends ChangeNotifier {
 
     if (kDebugMode) {
       print('🗑️ SocialActionPostCoordinator: Disposal complete');
+      print('   _isTransitioning cleared: false');
     }
 
     super.dispose();
@@ -1884,7 +1892,6 @@ class SocialActionPostCoordinator extends ChangeNotifier {
       // Reset core recording flags
       // NOTE: _isProcessing is managed by parent scope
       _isRecording = false;
-      _isVoiceDictating = false;
 
       // Clear recording mode context
       _mediaCoordinator.setRecordingModeContext(false);
@@ -1904,8 +1911,6 @@ class SocialActionPostCoordinator extends ChangeNotifier {
 
       // Handle no speech detection case
       if (!_hasSpeechDetected) {
-        _isTransitioning = false;
-
         // Request a temporary status update that will be cleared on next recording
         requestStatusUpdate(
           'No speech detected. Please try again.',
@@ -1924,13 +1929,16 @@ class SocialActionPostCoordinator extends ChangeNotifier {
       if (kDebugMode) {
         print('❌ Error stopping recording: $e');
       }
-      // Ensure states are reset even on error
+      // CRITICAL: Ensure states are reset even on error
       // NOTE: _isProcessing is managed by parent scope
       _isRecording = false;
-      _isVoiceDictating = false;
       setError('Failed to stop recording: $e');
     } finally {
+      // CRITICAL: Always reset transition state, even on error
       _isTransitioning = false;
+      if (kDebugMode) {
+        print('🔄 Transition state reset: _isTransitioning = false');
+      }
     }
   }
 
@@ -1952,20 +1960,20 @@ class SocialActionPostCoordinator extends ChangeNotifier {
   }
 
   Color getVoiceDictationColor() {
-    if (_isRecording && _isVoiceDictating) return const Color(0xFFFF0055);
+    if (_isRecording && hasContent) return const Color(0xFFFF0055);
     if (_isProcessing) return Colors.orange;
     return Colors.white.withValues(alpha: 0.9);
   }
 
   IconData getVoiceDictationIcon() {
-    return _isRecording && _isVoiceDictating ? Icons.stop : Icons.mic;
+    return _isRecording && hasContent ? Icons.stop : Icons.mic;
   }
 
   String getStatusMessage() => _activeStatus!.message;
   Color getStatusColor() => _activeStatus!.getColor();
 
   // Direct action methods to prevent state derivation in widgets
-  bool get isVoiceRecording => _isRecording && _isVoiceDictating;
+  bool get isVoiceRecording => _isRecording && hasContent;
 
   /// Toggle voice dictation mode with proper MediaCoordinator sync
   Future<void> toggleVoiceDictation() async {
@@ -1982,7 +1990,7 @@ class SocialActionPostCoordinator extends ChangeNotifier {
     _isTransitioning = true;
 
     try {
-      if (_isVoiceDictating && _isRecording) {
+      if (hasContent && _isRecording) {
         await stopRecording();
       } else {
         await startRecordingWithMode(isVoiceDictation: true);
@@ -1993,7 +2001,11 @@ class SocialActionPostCoordinator extends ChangeNotifier {
       }
       setError('Failed to toggle voice dictation: $e');
     } finally {
+      // CRITICAL: Always reset transition state, even on error
       _isTransitioning = false;
+      if (kDebugMode) {
+        print('🔄 Transition state reset: _isTransitioning = false');
+      }
     }
   }
 
@@ -2039,7 +2051,7 @@ class SocialActionPostCoordinator extends ChangeNotifier {
     if (_isRecording) {
       final remainingSeconds = maxRecordingDuration - _recordingDuration;
       return StatusMessage(
-        message: _isVoiceDictating
+        message: hasContent
             ? 'Dictating... ${remainingSeconds}s'
             : 'Recording command... ${remainingSeconds}s',
         type: StatusMessageType.recording,
@@ -2624,7 +2636,6 @@ class SocialActionPostCoordinator extends ChangeNotifier {
       _errorMessage = null;
       _isRecording = false;
       _isProcessing = false;
-      _isVoiceDictating = false;
       _isTransitioning = false;
 
       // Step 6: Ensure coordinator is in clean editing state
@@ -2731,5 +2742,21 @@ class SocialActionPostCoordinator extends ChangeNotifier {
     }
 
     return requiringBusiness;
+  }
+
+  /// CRITICAL: Force reset transition state if stuck
+  /// This is a safety mechanism to prevent permanent deadlocks
+  void forceResetTransitionState() {
+    if (_isTransitioning) {
+      if (kDebugMode) {
+        print('🚨 Force resetting stuck transition state');
+        print('   Previous state: _isTransitioning = true');
+      }
+      _isTransitioning = false;
+      _safeNotifyListeners();
+      if (kDebugMode) {
+        print('✅ Transition state force reset: _isTransitioning = false');
+      }
+    }
   }
 }

@@ -203,8 +203,13 @@ class _HistoryScreenState extends State<HistoryScreen> {
                       const SizedBox(height: 32),
                       ElevatedButton.icon(
                         onPressed: () {
-                          // Navigate back to CommandScreen while preserving state
-                          Navigator.pop(context);
+                          // Navigate to CommandScreen to create a new post
+                          Navigator.pushReplacement(
+                            context,
+                            MaterialPageRoute(
+                              builder: (context) => const CommandScreen(),
+                            ),
+                          );
                         },
                         icon: const Icon(Icons.add),
                         label: const Text('Create Your First Post'),

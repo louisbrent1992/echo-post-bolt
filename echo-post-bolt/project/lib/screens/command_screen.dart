@@ -258,31 +258,67 @@ class _CommandScreenState extends State<CommandScreen>
       return;
     }
 
+    // CRITICAL: Force reset any stuck transition state before starting
+    _postCoordinator!.forceResetTransitionState();
+
     try {
-      // ALWAYS request microphone permission before recording
-      // This ensures permission is re-requested every time if previously denied
+      // ALWAYS request both microphone and media permissions before recording
+      // This ensures both permissions are re-requested every time if previously denied
       final permissionManager =
           Provider.of<PermissionManager>(context, listen: false);
-      final hasPermission =
-          await permissionManager.requestMicrophonePermission();
 
-      if (!hasPermission) {
-        // Check if permanently denied to provide specific guidance
-        final isPermanentlyDenied =
+      // Request both permissions together
+      final hasMicrophonePermission =
+          await permissionManager.requestMicrophonePermission();
+      final hasMediaPermission =
+          await permissionManager.requestMediaPermission();
+
+      if (!hasMicrophonePermission || !hasMediaPermission) {
+        // Check if either permission is permanently denied to provide specific guidance
+        final isMicrophonePermanentlyDenied =
             await permissionManager.isMicrophonePermissionPermanentlyDenied();
+        final isMediaPermanentlyDenied =
+            await permissionManager.isMediaPermissionPermanentlyDenied();
 
         String errorMessage;
-        if (isPermanentlyDenied) {
-          errorMessage =
-              'Microphone access permanently denied. Please enable it in device settings to use voice recording.';
+        bool showSettingsAction = false;
+
+        if (!hasMicrophonePermission && !hasMediaPermission) {
+          if (isMicrophonePermanentlyDenied || isMediaPermanentlyDenied) {
+            errorMessage =
+                'Microphone and media access permanently denied. Please enable both in device settings to use voice recording.';
+            showSettingsAction = true;
+          } else {
+            errorMessage =
+                'Microphone and media access are required for voice recording. Please allow access and try again.';
+          }
+        } else if (!hasMicrophonePermission) {
+          if (isMicrophonePermanentlyDenied) {
+            errorMessage =
+                'Microphone access permanently denied. Please enable it in device settings to use voice recording.';
+            showSettingsAction = true;
+          } else {
+            errorMessage =
+                'Microphone access is required for voice recording. Please allow access and try again.';
+          }
         } else {
-          errorMessage =
-              'Microphone access is required for voice recording. Please allow access and try again.';
+          // Only media permission denied
+          if (isMediaPermanentlyDenied) {
+            errorMessage =
+                'Media access permanently denied. Please enable it in device settings to save recordings.';
+            showSettingsAction = true;
+          } else {
+            errorMessage =
+                'Media access is required to save recordings. Please allow access and try again.';
+          }
         }
 
         if (kDebugMode) {
+          print('❌ Permission denied:');
           print(
-              '❌ Microphone permission denied. Permanently denied: $isPermanentlyDenied');
+              '   Microphone: ${hasMicrophonePermission ? '✅' : '❌'} (permanently denied: $isMicrophonePermanentlyDenied)');
+          print(
+              '   Media: ${hasMediaPermission ? '✅' : '❌'} (permanently denied: $isMediaPermanentlyDenied)');
         }
 
         _postCoordinator?.setError(errorMessage);
@@ -290,19 +326,16 @@ class _CommandScreenState extends State<CommandScreen>
         if (mounted) {
           // First show the status update
           _postCoordinator?.requestStatusUpdate(
-            isPermanentlyDenied
-                ? 'Microphone access permanently denied. Please enable in device settings.'
-                : errorMessage,
+            errorMessage,
             StatusMessageType.error,
             duration: const Duration(seconds: 6),
           );
 
-          // Then show the snackbar if permanently denied
-          if (isPermanentlyDenied && mounted) {
+          // Then show the snackbar if any permission is permanently denied
+          if (showSettingsAction && mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
-                content: const Text(
-                    'Microphone permission required. Enable in device settings.'),
+                content: Text(errorMessage),
                 backgroundColor: Colors.red.withValues(alpha: 0.8),
                 duration: const Duration(seconds: 5),
                 action: SnackBarAction(
@@ -320,7 +353,9 @@ class _CommandScreenState extends State<CommandScreen>
       }
 
       if (kDebugMode) {
-        print('✅ Microphone permission granted, starting recording...');
+        print('✅ All permissions granted, starting recording...');
+        print('   Microphone: ✅');
+        print('   Media: ✅');
       }
 
       // Start recording through coordinator
@@ -465,6 +500,9 @@ class _CommandScreenState extends State<CommandScreen>
   /// Stops the unified voice recording process and processes the recording
   Future<void> _stopUnifiedRecording() async {
     if (_postCoordinator == null) return;
+
+    // CRITICAL: Force reset any stuck transition state before stopping
+    _postCoordinator!.forceResetTransitionState();
 
     try {
       // Stop the recording
@@ -1196,6 +1234,7 @@ class _CommandScreenState extends State<CommandScreen>
     return result;
   }
 
+  /// Handle hashtag editing for the post
   Future<void> _editPostHashtags(List<String> currentHashtags) async {
     // CRITICAL: Ensure we're not in recording state when editing
     if (_postCoordinator?.isRecording == true) {
@@ -1239,6 +1278,108 @@ class _CommandScreenState extends State<CommandScreen>
       if (mounted) {
         _postCoordinator?.requestStatusUpdate(
           'Failed to edit hashtags: $e',
+          StatusMessageType.error,
+          duration: const Duration(seconds: 3),
+        );
+      }
+    }
+  }
+
+  /// Handle post scheduling
+  Future<void> _editPostSchedule() async {
+    if (_postCoordinator == null) return;
+
+    try {
+      final now = DateTime.now();
+      final currentSchedule = _postCoordinator!.currentPost.options.schedule;
+
+      // Determine initial date/time for picker
+      DateTime initialDateTime;
+      if (currentSchedule == 'now') {
+        initialDateTime = now.add(const Duration(hours: 1));
+      } else {
+        initialDateTime = DateTime.tryParse(currentSchedule) ??
+            now.add(const Duration(hours: 1));
+      }
+
+      // Show date picker
+      final pickedDate = await showDatePicker(
+        context: context,
+        initialDate: initialDateTime.isAfter(now)
+            ? initialDateTime
+            : now.add(const Duration(days: 1)),
+        firstDate: now,
+        lastDate: now.add(const Duration(days: 365)),
+        builder: (context, child) {
+          return Theme(
+            data: Theme.of(context).copyWith(
+              colorScheme: Theme.of(context).colorScheme.copyWith(
+                    primary: const Color(0xFFFF0055),
+                  ),
+            ),
+            child: child!,
+          );
+        },
+      );
+
+      if (pickedDate != null && mounted) {
+        // Show time picker
+        final pickedTime = await showTimePicker(
+          context: context,
+          initialTime: TimeOfDay.fromDateTime(initialDateTime),
+          builder: (context, child) {
+            return Theme(
+              data: Theme.of(context).copyWith(
+                colorScheme: Theme.of(context).colorScheme.copyWith(
+                      primary: const Color(0xFFFF0055),
+                    ),
+              ),
+              child: child!,
+            );
+          },
+        );
+
+        if (pickedTime != null) {
+          final scheduledDateTime = DateTime(
+            pickedDate.year,
+            pickedDate.month,
+            pickedDate.day,
+            pickedTime.hour,
+            pickedTime.minute,
+          );
+
+          if (scheduledDateTime.isBefore(now)) {
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('Cannot schedule posts in the past'),
+                  backgroundColor: Colors.red,
+                ),
+              );
+            }
+            return;
+          }
+
+          // Update the schedule
+          await _postCoordinator!
+              .updatePostSchedule(scheduledDateTime.toIso8601String());
+
+          if (mounted) {
+            _postCoordinator!.requestStatusUpdate(
+              'Post scheduled! ⏰',
+              StatusMessageType.success,
+              duration: const Duration(seconds: 2),
+            );
+          }
+        }
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ Failed to edit schedule: $e');
+      }
+      if (mounted) {
+        _postCoordinator!.requestStatusUpdate(
+          'Failed to update schedule: $e',
           StatusMessageType.error,
           duration: const Duration(seconds: 3),
         );
@@ -1649,6 +1790,7 @@ class _CommandScreenState extends State<CommandScreen>
                         onVoiceEdit: _startVoiceEditing,
                         onEditText: _editPostText,
                         onEditHashtags: _editPostHashtags,
+                        onEditSchedule: _editPostSchedule,
                       ),
                       const SizedBox(height: 12),
                     ],
