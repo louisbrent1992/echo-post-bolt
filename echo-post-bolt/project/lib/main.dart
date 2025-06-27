@@ -189,14 +189,14 @@ class _ServiceInitializationWrapperState
         _initializationStatus = 'Initializing media services...';
       });
 
-      // Initialize AppSettingsService first
+      // Capture all providers before any async operations
       final appSettingsService =
           Provider.of<AppSettingsService>(context, listen: false);
-      await appSettingsService.initialize();
-
-      // Capture MediaCoordinator before async operation
       final mediaCoordinator =
           Provider.of<MediaCoordinator>(context, listen: false);
+
+      // Initialize AppSettingsService first
+      await appSettingsService.initialize();
 
       // Wait a bit to ensure all providers are ready
       await Future.delayed(const Duration(milliseconds: 100));

@@ -762,7 +762,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
       }
 
       // Cache the result and update UI
-      if (mounted) {
+      if (context.mounted) {
         setState(() {
           _videoThumbnailCache[videoPath] = thumbnailData;
           _generatingThumbnails.remove(videoPath);
@@ -773,7 +773,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
         print('❌ PostHistory: Failed to generate video thumbnail: $e');
       }
 
-      if (mounted) {
+      if (context.mounted) {
         setState(() {
           _videoThumbnailCache[videoPath] = null;
           _generatingThumbnails.remove(videoPath);
@@ -1796,7 +1796,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
           );
         }
       } finally {
-        if (mounted) {
+        if (context.mounted) {
           setState(() {
             _isDeleting = false;
           });
@@ -1923,15 +1923,11 @@ class _HistoryScreenState extends State<HistoryScreen> {
 
     if (confirmed != true) return;
 
-    // Capture context before any async operations
-    final dialogContext = context;
-
     // Show progress dialog immediately after confirmation, before any async operations
-    if (!mounted) return;
+    if (!context.mounted) return;
 
-    // ignore: use_build_context_synchronously
     showDialog(
-      context: dialogContext,
+      context: context,
       barrierDismissible: false,
       builder: (context) => AlertDialog(
         backgroundColor: const Color(0xFF2A2A2A),
@@ -1965,7 +1961,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
     try {
       // Get all posts
       final querySnapshot = await firestoreService.getActionsStream().first;
-      if (!mounted) return;
+      if (!context.mounted) return;
       final posts = <SocialAction>[];
 
       for (final doc in querySnapshot.docs) {
@@ -1982,9 +1978,9 @@ class _HistoryScreenState extends State<HistoryScreen> {
         }
       }
 
-      if (!mounted) return;
+      if (!context.mounted) return;
       if (posts.isEmpty) {
-        if (mounted) navigator.pop(); // Close progress dialog
+        if (context.mounted) navigator.pop(); // Close progress dialog
         scaffoldMessenger.showSnackBar(
           const SnackBar(
             content: Text('No posts with media found'),
@@ -2053,8 +2049,8 @@ class _HistoryScreenState extends State<HistoryScreen> {
         }
       }
 
-      if (!mounted) return;
-      if (mounted) navigator.pop(); // Close progress dialog
+      if (!context.mounted) return;
+      if (context.mounted) navigator.pop(); // Close progress dialog
 
       scaffoldMessenger.showSnackBar(
         SnackBar(
@@ -2065,8 +2061,8 @@ class _HistoryScreenState extends State<HistoryScreen> {
         ),
       );
     } catch (e) {
-      if (!mounted) return;
-      if (mounted) navigator.pop(); // Close progress dialog
+      if (!context.mounted) return;
+      if (context.mounted) navigator.pop(); // Close progress dialog
       scaffoldMessenger.showSnackBar(
         SnackBar(
           content: Text('Failed to validate media: $e'),

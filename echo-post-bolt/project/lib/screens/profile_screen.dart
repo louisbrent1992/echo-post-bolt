@@ -125,6 +125,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Future<void> _logout() async {
+    // Capture AuthService before any async operations
+    final authService = Provider.of<AuthService>(context, listen: false);
+
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -158,7 +161,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
     if (confirmed == true) {
       try {
-        final authService = Provider.of<AuthService>(context, listen: false);
         await authService.signOut();
 
         if (mounted) {
