@@ -1211,6 +1211,7 @@ class MediaCoordinator extends ChangeNotifier {
   }
 
   /// Get media context for AI processing
+  /// ENHANCED: Provides comprehensive media information organized for ChatGPT
   Future<Map<String, dynamic>> getMediaContextForAi() async {
     if (!_isInitialized) {
       throw StateError(
@@ -1218,7 +1219,62 @@ class MediaCoordinator extends ChangeNotifier {
     }
 
     try {
+      if (kDebugMode) {
+        print('🔍 MediaCoordinator: Starting getMediaContextForAi()');
+        print('   Is initialized: $_isInitialized');
+        print(
+            '   Enabled directories: ${_directoryService.enabledDirectories.length}');
+      }
+
       final latestMedia = await _getLatestMediaFiles();
+
+      if (kDebugMode) {
+        print(
+            '📊 MediaCoordinator: _getLatestMediaFiles() returned ${latestMedia.length} items');
+        if (latestMedia.isNotEmpty) {
+          print(
+              '   First item: ${latestMedia.first['file_name']} (${latestMedia.first['mime_type']})');
+        }
+      }
+
+      // Organize media by date for better ChatGPT understanding
+      final mediaByDate = <String, List<Map<String, dynamic>>>{};
+      final mediaByType = <String, List<Map<String, dynamic>>>{};
+      final mediaWithLocation = <Map<String, dynamic>>[];
+
+      for (final media in latestMedia) {
+        // Organize by date
+        final creationTime =
+            media['device_metadata']?['creation_time'] as String?;
+        if (creationTime != null) {
+          final date = DateTime.tryParse(creationTime);
+          if (date != null) {
+            final dateKey =
+                '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+            mediaByDate.putIfAbsent(dateKey, () => []).add(media);
+          }
+        }
+
+        // Organize by type
+        final mimeType = media['mime_type'] as String? ?? '';
+        String mediaType;
+        if (mimeType.startsWith('image/')) {
+          mediaType = 'image';
+        } else if (mimeType.startsWith('video/')) {
+          mediaType = 'video';
+        } else {
+          mediaType = 'other';
+        }
+        mediaByType.putIfAbsent(mediaType, () => []).add(media);
+
+        // Track media with location data
+        final latitude = media['device_metadata']?['latitude'];
+        final longitude = media['device_metadata']?['longitude'];
+        if (latitude != null && longitude != null) {
+          mediaWithLocation.add(media);
+        }
+      }
+
       final enabledDirs = _directoryService.enabledDirectories;
 
       // Build directory status maps
@@ -1239,16 +1295,59 @@ class MediaCoordinator extends ChangeNotifier {
         isEditing = hasText || hasMedia;
       }
 
+      // Get date information
+      String? mostRecentDate;
+      String? oldestDate;
+
+      if (latestMedia.isNotEmpty) {
+        mostRecentDate =
+            latestMedia.first['device_metadata']?['creation_time'] as String?;
+        oldestDate =
+            latestMedia.last['device_metadata']?['creation_time'] as String?;
+      }
+
+      // Create comprehensive media context
       final mediaContext = {
+        // ENHANCED: Recent media with better organization
         'recent_media': latestMedia,
+
+        // FIXED: Flatten mediaByDate from Map to List for AI Service compatibility
+        'mediaByDate': mediaByDate.values.expand((list) => list).toList(),
+
+        // FIXED: Rename and ensure it's a List for AI Service compatibility
+        'mediaByLocation': mediaWithLocation,
+
+        // Keep the structured versions for other uses
+        'mediaByDateStructured': mediaByDate,
+        'mediaByType': mediaByType,
+        'mediaWithLocationStructured': mediaWithLocation,
+
+        // Summary statistics for ChatGPT
+        'media_summary': {
+          'total_count': latestMedia.length,
+          'image_count': mediaByType['image']?.length ?? 0,
+          'video_count': mediaByType['video']?.length ?? 0,
+          'media_with_location_count': mediaWithLocation.length,
+          'date_range': _getDateRange(latestMedia),
+          'most_recent_date': mostRecentDate,
+          'oldest_date': oldestDate,
+        },
+
+        // File name patterns for better understanding
+        'filename_patterns': _extractFilenamePatterns(latestMedia),
+
+        // System context
         'total_count': latestMedia.length,
         'last_updated': DateTime.now().toIso8601String(),
         'isEditing': isEditing,
         'isVoiceDictation': _isVoiceDictationMode,
+
         'directory_status': {
           'enabled_directories': enabledDirs.map((d) => d.path).toList(),
           'directories_with_content': directoriesWithContent,
-          'media_types_by_directory': mediaTypesByDirectory,
+          'media_types_by_directory': mediaTypesByDirectory.map(
+            (key, value) => MapEntry(key, value.toList()),
+          ),
           'any_directory_has_content':
               directoriesWithContent.values.any((hasContent) => hasContent),
         },
@@ -1259,12 +1358,146 @@ class MediaCoordinator extends ChangeNotifier {
         mediaContext['existingPost'] = _existingPostForAi!.toJson();
       }
 
+      if (kDebugMode) {
+        print('✅ MediaCoordinator: getMediaContextForAi() completed');
+        print('   Recent media count: ${latestMedia.length}');
+        print('   Images: ${(mediaByType['image'] ?? []).length}');
+        print('   Videos: ${(mediaByType['video'] ?? []).length}');
+        print('   Media with location: ${mediaWithLocation.length}');
+        final mediaSummary =
+            mediaContext['media_summary'] as Map<String, dynamic>?;
+        print('   Date range: ${mediaSummary?['date_range']}');
+        print('   Total context keys: ${mediaContext.keys.toList()}');
+
+        // ENHANCED: Debug the flattened data structures for AI Service
+        final flatMediaByDate = mediaContext['mediaByDate'] as List;
+        final flatMediaByLocation = mediaContext['mediaByLocation'] as List;
+        print('   Flattened mediaByDate count: ${flatMediaByDate.length}');
+        print(
+            '   Flattened mediaByLocation count: ${flatMediaByLocation.length}');
+
+        // Show sample media URIs if available
+        if (latestMedia.isNotEmpty) {
+          print('   Sample recent media URIs:');
+          for (int i = 0; i < latestMedia.length.clamp(0, 3); i++) {
+            final media = latestMedia[i];
+            print('     [$i]: ${media['file_uri']} (${media['mime_type']})');
+          }
+        }
+
+        if (flatMediaByDate.isNotEmpty) {
+          print('   Sample mediaByDate URIs:');
+          for (int i = 0; i < flatMediaByDate.length.clamp(0, 2); i++) {
+            final media = flatMediaByDate[i] as Map<String, dynamic>;
+            print('     [$i]: ${media['file_uri']} (${media['mime_type']})');
+          }
+        }
+
+        if (flatMediaByLocation.isNotEmpty) {
+          print('   Sample mediaByLocation URIs:');
+          for (int i = 0; i < flatMediaByLocation.length.clamp(0, 2); i++) {
+            final media = flatMediaByLocation[i] as Map<String, dynamic>;
+            print('     [$i]: ${media['file_uri']} (${media['mime_type']})');
+          }
+        }
+      }
+
       return mediaContext;
     } catch (e) {
       if (kDebugMode) {
-        print('❌ MediaCoordinator: Failed to re-initialize with albums: $e');
+        print('❌ MediaCoordinator: Failed to get media context for AI: $e');
+        print('📊 Stack trace: ${StackTrace.current}');
       }
       rethrow;
+    }
+  }
+
+  /// Extract filename patterns to help ChatGPT understand file naming conventions
+  Map<String, dynamic> _extractFilenamePatterns(
+      List<Map<String, dynamic>> mediaFiles) {
+    final patterns = <String, int>{};
+    final extensions = <String, int>{};
+    final commonPrefixes = <String, int>{};
+
+    for (final media in mediaFiles) {
+      final fileName = media['file_name'] as String? ?? '';
+      if (fileName.isEmpty) continue;
+
+      // Track extensions
+      final extension =
+          fileName.contains('.') ? fileName.split('.').last.toLowerCase() : '';
+      if (extension.isNotEmpty) {
+        extensions[extension] = (extensions[extension] ?? 0) + 1;
+      }
+
+      // Track common prefixes (first 3-5 characters)
+      if (fileName.length >= 3) {
+        final prefix =
+            fileName.substring(0, fileName.length >= 5 ? 5 : 3).toLowerCase();
+        commonPrefixes[prefix] = (commonPrefixes[prefix] ?? 0) + 1;
+      }
+
+      // Track common patterns
+      if (fileName.toLowerCase().contains('img_')) {
+        patterns['IMG_'] = (patterns['IMG_'] ?? 0) + 1;
+      }
+      if (fileName.toLowerCase().contains('photo')) {
+        patterns['photo'] = (patterns['photo'] ?? 0) + 1;
+      }
+      if (fileName.toLowerCase().contains('screenshot')) {
+        patterns['screenshot'] = (patterns['screenshot'] ?? 0) + 1;
+      }
+      if (fileName.toLowerCase().contains('video')) {
+        patterns['video'] = (patterns['video'] ?? 0) + 1;
+      }
+      if (RegExp(r'\d{4}-\d{2}-\d{2}').hasMatch(fileName)) {
+        patterns['date_format'] = (patterns['date_format'] ?? 0) + 1;
+      }
+    }
+
+    return {
+      'common_extensions': extensions,
+      'common_prefixes': commonPrefixes,
+      'naming_patterns': patterns,
+    };
+  }
+
+  /// Get date range string for media summary
+  String? _getDateRange(List<Map<String, dynamic>> mediaFiles) {
+    if (mediaFiles.isEmpty) return null;
+
+    DateTime? earliest;
+    DateTime? latest;
+
+    for (final media in mediaFiles) {
+      final creationTime =
+          media['device_metadata']?['creation_time'] as String?;
+      if (creationTime != null) {
+        final date = DateTime.tryParse(creationTime);
+        if (date != null) {
+          if (earliest == null || date.isBefore(earliest)) {
+            earliest = date;
+          }
+          if (latest == null || date.isAfter(latest)) {
+            latest = date;
+          }
+        }
+      }
+    }
+
+    if (earliest == null || latest == null) return null;
+
+    final daysDiff = latest.difference(earliest).inDays;
+    if (daysDiff == 0) {
+      return 'Today';
+    } else if (daysDiff == 1) {
+      return 'Last 2 days';
+    } else if (daysDiff <= 7) {
+      return 'Last week';
+    } else if (daysDiff <= 30) {
+      return 'Last month';
+    } else {
+      return 'Last ${(daysDiff / 30).ceil()} months';
     }
   }
 
@@ -1484,15 +1717,283 @@ class MediaCoordinator extends ChangeNotifier {
   }
 
   /// Get the latest media files with complete metadata
+  /// FIXED: Direct retrieval bypassing search logic for better reliability
   Future<List<Map<String, dynamic>>> _getLatestMediaFiles() async {
-    final recentMedia = await getMediaForQuery(
-      '', // Empty query to get all recent media
-      dateRange: null,
-      mediaTypes: ['image', 'video'],
-    );
+    try {
+      if (kDebugMode) {
+        print('🔍 MediaCoordinator: Getting latest media files directly...');
+        print(
+            '   AI Media Context Limit: ${_appSettingsService.aiMediaContextLimit}');
+        print('   Custom directories enabled: $isCustomDirectoriesEnabled');
+      }
 
-    // Take only the most recent files and ensure they have complete metadata
-    return recentMedia.take(_appSettingsService.aiMediaContextLimit).toList();
+      final allMediaFiles = <Map<String, dynamic>>[];
+
+      // Method 1: Get recent media from PhotoManager directly
+      final photoManagerMedia = await _getRecentMediaFromPhotoManager();
+      allMediaFiles.addAll(photoManagerMedia);
+
+      if (kDebugMode) {
+        print('   PhotoManager returned: ${photoManagerMedia.length} files');
+      }
+
+      // Method 2: Get recent media from custom directories (if enabled)
+      if (isCustomDirectoriesEnabled) {
+        final customMedia = await _getRecentMediaFromCustomDirectories();
+        allMediaFiles.addAll(customMedia);
+
+        if (kDebugMode) {
+          print('   Custom directories returned: ${customMedia.length} files');
+        }
+      }
+
+      // Remove duplicates based on file_uri
+      final uniqueMedia = <String, Map<String, dynamic>>{};
+      for (final media in allMediaFiles) {
+        final fileUri = media['file_uri'] as String;
+        uniqueMedia[fileUri] = media;
+      }
+
+      final deduplicatedMedia = uniqueMedia.values.toList();
+
+      // Sort by creation time (newest first)
+      deduplicatedMedia.sort((a, b) {
+        final aTime = DateTime.tryParse(a['device_metadata']
+                    ?['creation_time'] ??
+                a['metadata']?['creation_time'] ??
+                DateTime.now().toIso8601String()) ??
+            DateTime.now();
+        final bTime = DateTime.tryParse(b['device_metadata']
+                    ?['creation_time'] ??
+                b['metadata']?['creation_time'] ??
+                DateTime.now().toIso8601String()) ??
+            DateTime.now();
+        return bTime.compareTo(aTime);
+      });
+
+      // Take only the most recent files according to the limit
+      final limitedResults = deduplicatedMedia
+          .take(_appSettingsService.aiMediaContextLimit)
+          .toList();
+
+      // Enrich with metadata
+      await _batchEnrichMetadata(limitedResults);
+
+      if (kDebugMode) {
+        print(
+            '✅ MediaCoordinator: Returning ${limitedResults.length} latest media files');
+        if (limitedResults.isNotEmpty) {
+          print('   Most recent file: ${limitedResults.first['file_uri']}');
+          print(
+              '   File names: ${limitedResults.take(5).map((m) => m['file_name'] ?? 'unknown').join(', ')}${limitedResults.length > 5 ? '...' : ''}');
+        }
+      }
+
+      return limitedResults;
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ MediaCoordinator: Error getting latest media files: $e');
+        print('📊 Stack trace: ${StackTrace.current}');
+      }
+      return <Map<String, dynamic>>[];
+    }
+  }
+
+  /// Get recent media directly from PhotoManager without search
+  Future<List<Map<String, dynamic>>> _getRecentMediaFromPhotoManager() async {
+    try {
+      // Get all available albums/paths
+      final assetPaths = await PhotoManager.getAssetPathList(
+        type: RequestType.common, // Both images and videos
+        filterOption: FilterOptionGroup(
+          imageOption: const FilterOption(
+            sizeConstraint: SizeConstraint(ignoreSize: true),
+          ),
+          videoOption: const FilterOption(
+            sizeConstraint: SizeConstraint(ignoreSize: true),
+          ),
+        ),
+      );
+
+      if (assetPaths.isEmpty) {
+        if (kDebugMode) {
+          print('⚠️ MediaCoordinator: No asset paths found in PhotoManager');
+        }
+        return <Map<String, dynamic>>[];
+      }
+
+      // Get recent assets from all paths
+      final allAssets = <AssetEntity>[];
+      for (final path in assetPaths) {
+        try {
+          final assets = await path.getAssetListRange(
+            start: 0,
+            end: _appSettingsService.aiMediaContextLimit *
+                2, // Get extra to account for filtering
+          );
+          allAssets.addAll(assets);
+        } catch (e) {
+          if (kDebugMode) {
+            print(
+                '⚠️ MediaCoordinator: Failed to get assets from path ${path.name}: $e');
+          }
+          continue;
+        }
+      }
+
+      if (allAssets.isEmpty) {
+        if (kDebugMode) {
+          print('⚠️ MediaCoordinator: No assets found in PhotoManager');
+        }
+        return <Map<String, dynamic>>[];
+      }
+
+      // Sort by creation date (newest first)
+      allAssets.sort((a, b) => (b.createDateTime ?? DateTime.now())
+          .compareTo(a.createDateTime ?? DateTime.now()));
+
+      // Convert to our format and filter by enabled directories
+      final mediaResults = <Map<String, dynamic>>[];
+      for (final asset in allAssets) {
+        try {
+          final file = await asset.file;
+          if (file == null) continue;
+
+          // Check if file is in enabled directories
+          final isAllowed =
+              await isFileAllowedByCurrentDirectoryState(file.path);
+          if (!isAllowed) continue;
+
+          final mediaMap = {
+            'id': asset.id,
+            'file_uri': file.uri.toString(),
+            'file_name': file.path.split('/').last,
+            'mime_type': _getMimeTypeFromPath(file.path),
+            'device_metadata': {
+              'creation_time':
+                  (asset.createDateTime ?? DateTime.now()).toIso8601String(),
+              'latitude': asset.latitude,
+              'longitude': asset.longitude,
+              'width': asset.width,
+              'height': asset.height,
+              'file_size_bytes': await file.length(),
+              'duration': asset.duration?.toDouble() ?? 0.0,
+              'orientation': asset.orientation ?? 1,
+            },
+          };
+
+          mediaResults.add(mediaMap);
+
+          // Stop when we have enough
+          if (mediaResults.length >= _appSettingsService.aiMediaContextLimit) {
+            break;
+          }
+        } catch (e) {
+          if (kDebugMode) {
+            print(
+                '⚠️ MediaCoordinator: Failed to process asset ${asset.id}: $e');
+          }
+          continue;
+        }
+      }
+
+      return mediaResults;
+    } catch (e) {
+      if (kDebugMode) {
+        print(
+            '❌ MediaCoordinator: Error getting recent media from PhotoManager: $e');
+      }
+      return <Map<String, dynamic>>[];
+    }
+  }
+
+  /// Get recent media from custom directories directly
+  Future<List<Map<String, dynamic>>>
+      _getRecentMediaFromCustomDirectories() async {
+    try {
+      final mediaFiles = <Map<String, dynamic>>[];
+      final enabledDirectories = _directoryService.enabledDirectories;
+
+      if (enabledDirectories.isEmpty) {
+        return mediaFiles;
+      }
+
+      // Collect all media files from enabled directories
+      final allFiles = <File>[];
+      for (final directory in enabledDirectories) {
+        try {
+          final dir = Directory(directory.path);
+          if (!await dir.exists()) continue;
+
+          await for (final entity in dir.list()) {
+            if (entity is File && _isSupportedMediaFile(entity.path)) {
+              allFiles.add(entity);
+            }
+          }
+        } catch (e) {
+          if (kDebugMode) {
+            print(
+                '⚠️ MediaCoordinator: Failed to scan directory ${directory.path}: $e');
+          }
+          continue;
+        }
+      }
+
+      if (allFiles.isEmpty) {
+        return mediaFiles;
+      }
+
+      // Sort by modification time (newest first)
+      allFiles.sort((a, b) {
+        try {
+          return b.lastModifiedSync().compareTo(a.lastModifiedSync());
+        } catch (e) {
+          return 0;
+        }
+      });
+
+      // Convert to our format
+      for (final file
+          in allFiles.take(_appSettingsService.aiMediaContextLimit)) {
+        try {
+          final stats = await file.stat();
+          final fileName = file.path.split('/').last;
+
+          final mediaMap = {
+            'id': 'custom_${file.path.hashCode}',
+            'file_uri': file.uri.toString(),
+            'file_name': fileName,
+            'mime_type': _getMimeTypeFromPath(file.path),
+            'device_metadata': {
+              'creation_time': stats.modified.toIso8601String(),
+              'latitude': null,
+              'longitude': null,
+              'width': 0,
+              'height': 0,
+              'file_size_bytes': stats.size,
+              'duration': 0.0,
+              'orientation': 1,
+            },
+          };
+
+          mediaFiles.add(mediaMap);
+        } catch (e) {
+          if (kDebugMode) {
+            print(
+                '⚠️ MediaCoordinator: Failed to process file ${file.path}: $e');
+          }
+          continue;
+        }
+      }
+
+      return mediaFiles;
+    } catch (e) {
+      if (kDebugMode) {
+        print(
+            '❌ MediaCoordinator: Error getting recent media from custom directories: $e');
+      }
+      return <Map<String, dynamic>>[];
+    }
   }
 
   /// Check if a directory has any media content

@@ -12,7 +12,18 @@ class AIService {
   final MediaCoordinator? _mediaCoordinator;
 
   AIService(this._apiKey, [MediaCoordinator? mediaCoordinator])
-      : _mediaCoordinator = mediaCoordinator;
+      : _mediaCoordinator = mediaCoordinator {
+    if (kDebugMode) {
+      print('🤖 AIService initialized with:');
+      print('   API Key: ${_apiKey.isNotEmpty ? "✅ Present" : "❌ Missing"}');
+      print(
+          '   MediaCoordinator: ${_mediaCoordinator != null ? "✅ Injected" : "❌ Null"}');
+      if (_mediaCoordinator != null) {
+        print(
+            '   MediaCoordinator initialized: ${_mediaCoordinator!.isInitialized}');
+      }
+    }
+  }
 
   /// Attempts to repair common JSON formatting issues
   String repairJson(String brokenJson) {
@@ -219,9 +230,32 @@ class AIService {
 
     try {
       // Get media context for the prompt (includes existing post context if editing)
-      var mediaContext = _mediaCoordinator != null
-          ? await _mediaCoordinator!.getMediaContextForAi()
-          : <String, dynamic>{};
+      var mediaContext = <String, dynamic>{};
+
+      if (_mediaCoordinator != null) {
+        if (kDebugMode) {
+          print('🔍 AIService: MediaCoordinator is available');
+          print('🔍 AIService: About to call getMediaContextForAi()');
+        }
+
+        try {
+          mediaContext = await _mediaCoordinator!.getMediaContextForAi();
+          if (kDebugMode) {
+            print('✅ AIService: getMediaContextForAi() completed successfully');
+          }
+        } catch (e) {
+          if (kDebugMode) {
+            print('❌ AIService: getMediaContextForAi() failed: $e');
+            print('📊 Stack trace: ${StackTrace.current}');
+          }
+          // Continue with empty context rather than failing completely
+          mediaContext = <String, dynamic>{};
+        }
+      } else {
+        if (kDebugMode) {
+          print('⚠️ AIService: MediaCoordinator is null');
+        }
+      }
 
       // If pre-selected media is provided, add it to the structured media context
       if (preSelectedMedia != null && preSelectedMedia.isNotEmpty) {
@@ -425,6 +459,45 @@ Generate a complete SocialAction JSON object based on this input.
         },
       ];
 
+      if (kDebugMode) {
+        print('🔍 MEDIA CONTEXT DEBUG:');
+        print('📊 MediaContext keys: ${mediaContext.keys.toList()}');
+        print(
+            '📊 MediaContext size: ${json.encode(mediaContext).length} characters');
+
+        // Show available media files
+        if (mediaContext['recent_media'] is List) {
+          final recentMedia = mediaContext['recent_media'] as List;
+          print('📎 Recent media count: ${recentMedia.length}');
+          for (int i = 0; i < recentMedia.length && i < 3; i++) {
+            final media = recentMedia[i] as Map<String, dynamic>;
+            print('   ${i + 1}. ${media['file_name']} (${media['mime_type']})');
+          }
+        }
+
+        if (mediaContext['mediaByDate'] is List) {
+          final mediaByDate = mediaContext['mediaByDate'] as List;
+          print('📅 Media by date count: ${mediaByDate.length}');
+          for (int i = 0; i < mediaByDate.length && i < 3; i++) {
+            final media = mediaByDate[i] as Map<String, dynamic>;
+            print('   ${i + 1}. ${media['file_name']} (${media['mime_type']})');
+          }
+        }
+
+        if (mediaContext['pre_selected_media'] is List) {
+          final preSelected = mediaContext['pre_selected_media'] as List;
+          print('🎯 Pre-selected media count: ${preSelected.length}');
+          for (int i = 0; i < preSelected.length && i < 3; i++) {
+            final media = preSelected[i] as Map<String, dynamic>;
+            print('   ${i + 1}. ${media['file_name']} (${media['mime_type']})');
+          }
+        }
+
+        print(
+            '🎤 Voice dictation mode: ${mediaContext['isVoiceDictation'] ?? false}');
+        print('📝 User transcription: "$transcription"');
+      }
+
       final response = await http.post(
         Uri.parse(_openaiApiUrl),
         headers: {
@@ -432,10 +505,11 @@ Generate a complete SocialAction JSON object based on this input.
           'Authorization': 'Bearer $_apiKey',
         },
         body: json.encode({
-          'model': 'gpt-4o',
+          'model': 'gpt-4o-2024-08-06',
           'messages': messages,
-          'temperature': 0.7,
+          'temperature': 0.1,
           'response_format': {'type': 'json_object'},
+          'max_tokens': 8000,
         }),
       );
 
@@ -445,12 +519,47 @@ Generate a complete SocialAction JSON object based on this input.
       }
 
       final jsonResponse = json.decode(response.body);
+
+      final finishReason = jsonResponse['choices'][0]['finish_reason'];
+      if (finishReason == 'length') {
+        if (kDebugMode) {
+          print('⚠️ ChatGPT response was truncated due to token limit!');
+          print('📊 Consider increasing max_tokens or simplifying the prompt');
+        }
+        throw Exception(
+            'ChatGPT response was truncated due to token limit. Increase max_tokens.');
+      }
+
       final content = jsonResponse['choices'][0]['message']['content'];
 
       if (kDebugMode) {
         print('📝 RAW ChatGPT response (before any processing): $content');
         print(
             '📊 Response length: ${content?.toString().length ?? 0} characters');
+        print('🏁 Finish reason: $finishReason');
+
+        // ✅ NEW: Check if response ends properly
+        final contentStr = content?.toString() ?? '';
+        final endsWithBrace = contentStr.trim().endsWith('}');
+        final startsWithBrace = contentStr.trim().startsWith('{');
+        print('🔍 Response structure check:');
+        print('   Starts with {: $startsWithBrace');
+        print('   Ends with }: $endsWithBrace');
+        print(
+            '   Last 100 chars: "${contentStr.length > 100 ? contentStr.substring(contentStr.length - 100) : contentStr}"');
+
+        // ✅ Count braces to check JSON completeness
+        final openBraces = '{'.allMatches(contentStr).length;
+        final closeBraces = '}'.allMatches(contentStr).length;
+        print('   Open braces: $openBraces, Close braces: $closeBraces');
+        print(
+            '   Brace balance: ${openBraces == closeBraces ? "BALANCED ✅" : "UNBALANCED ❌"}');
+
+        print('🔍 Token usage:');
+        print('   Prompt tokens: ${jsonResponse['usage']?['prompt_tokens']}');
+        print(
+            '   Completion tokens: ${jsonResponse['usage']?['completion_tokens']}');
+        print('   Total tokens: ${jsonResponse['usage']?['total_tokens']}');
       }
 
       // Use robust JSON parsing instead of direct decode

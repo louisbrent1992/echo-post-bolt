@@ -50,7 +50,10 @@ Future<void> main() async {
           create: (_) => MediaCoordinator(),
         ),
         Provider<AIService>(
-          create: (context) => AIService(apiKey),
+          create: (context) => AIService(
+            apiKey,
+            context.read<MediaCoordinator>(),
+          ),
         ),
         Provider<FirestoreService>(
           create: (_) => FirestoreService(),
@@ -208,6 +211,28 @@ class _ServiceInitializationWrapperState
         return;
       }
 
+      // Initialize permission manager and request permissions FIRST
+      final permissionManager = PermissionManager();
+      if (kDebugMode) {
+        print('🔐 Requesting media permissions...');
+      }
+      final hasPermissions = await permissionManager.requestAllPermissions();
+
+      if (!hasPermissions) {
+        if (kDebugMode) {
+          print(
+              '⚠️ Permissions not granted, but continuing with limited functionality');
+        }
+      } else {
+        if (kDebugMode) {
+          print('✅ All permissions granted successfully');
+        }
+      }
+
+      // Initialize media coordinator
+      if (kDebugMode) {
+        print('🎛️ Initializing MediaCoordinator...');
+      }
       await mediaCoordinator.initialize();
 
       if (kDebugMode) {

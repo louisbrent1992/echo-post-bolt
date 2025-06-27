@@ -173,17 +173,76 @@ class _CommandScreenState extends State<CommandScreen>
 
   Future<void> _initializeScreen() async {
     try {
-      // Check permissions through PermissionManager without forcing requests
-      // This allows the app to work even if permissions are denied initially
+      // Get the permission manager
       final permissionManager =
           Provider.of<PermissionManager>(context, listen: false);
-      await permissionManager.checkPermissions();
 
       if (kDebugMode) {
-        print('📋 Initial permission check completed');
-        print('   Media: ${permissionManager.hasMediaPermission ? '✅' : '❌'}');
-        print(
-            '   Microphone: ${permissionManager.hasMicrophonePermission ? '✅' : '❌'}');
+        print('🔐 CommandScreen: Requesting all permissions upfront...');
+      }
+
+      // Request all permissions upfront when the screen initializes
+      // This prevents permission dialogs from interfering with button interactions
+      final hasMicrophonePermission =
+          await permissionManager.requestMicrophonePermission();
+      final hasMediaPermission =
+          await permissionManager.requestMediaPermission();
+
+      if (kDebugMode) {
+        print('📋 CommandScreen: Permission status after requests:');
+        print('   Microphone: ${hasMicrophonePermission ? '✅' : '❌'}');
+        print('   Media: ${hasMediaPermission ? '✅' : '❌'}');
+      }
+
+      // Show user-friendly status about permissions without blocking the UI
+      if (!hasMicrophonePermission || !hasMediaPermission) {
+        final isMicrophonePermanentlyDenied =
+            await permissionManager.isMicrophonePermissionPermanentlyDenied();
+        final isMediaPermanentlyDenied =
+            await permissionManager.isMediaPermissionPermanentlyDenied();
+
+        String statusMessage;
+        if (!hasMicrophonePermission && !hasMediaPermission) {
+          statusMessage = isMicrophonePermanentlyDenied ||
+                  isMediaPermanentlyDenied
+              ? 'Some features limited. Enable permissions in settings for full functionality.'
+              : 'Voice recording and media selection available with permissions.';
+        } else if (!hasMicrophonePermission) {
+          statusMessage = isMicrophonePermanentlyDenied
+              ? 'Voice recording limited. Enable microphone in settings.'
+              : 'Voice recording available with microphone permission.';
+        } else {
+          statusMessage = isMediaPermanentlyDenied
+              ? 'Media selection limited. Enable media access in settings.'
+              : 'Media selection available with media permission.';
+        }
+
+        if (mounted) {
+          // Show a non-blocking informational message
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(statusMessage),
+              backgroundColor: Colors.orange.withValues(alpha: 0.8),
+              duration: const Duration(seconds: 4),
+              action:
+                  (!hasMicrophonePermission && isMicrophonePermanentlyDenied) ||
+                          (!hasMediaPermission && isMediaPermanentlyDenied)
+                      ? SnackBarAction(
+                          label: 'Settings',
+                          textColor: Colors.white,
+                          onPressed: () async {
+                            await permissionManager.openDeviceSettings();
+                          },
+                        )
+                      : null,
+            ),
+          );
+        }
+      } else {
+        if (kDebugMode) {
+          print(
+              '✅ CommandScreen: All permissions granted - full functionality available');
+        }
       }
 
       // Initialize the media coordinator regardless of permission status
@@ -199,13 +258,17 @@ class _CommandScreenState extends State<CommandScreen>
       }
     } catch (e) {
       if (kDebugMode) {
-        print('❌ Error initializing screen: $e');
+        print('❌ CommandScreen initialization failed: $e');
       }
+
+      // Don't block the UI even if permission requests fail
       if (mounted) {
-        _postCoordinator?.requestStatusUpdate(
-          'Failed to initialize: $e',
-          StatusMessageType.error,
-          duration: const Duration(seconds: 4),
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Initialization warning: $e'),
+            backgroundColor: Colors.orange.withValues(alpha: 0.8),
+            duration: const Duration(seconds: 3),
+          ),
         );
       }
     }
@@ -262,98 +325,63 @@ class _CommandScreenState extends State<CommandScreen>
     _postCoordinator!.forceResetTransitionState();
 
     try {
-      // ALWAYS request both microphone and media permissions before recording
-      // This ensures both permissions are re-requested every time if previously denied
+      // Check permissions without requesting (they were requested during screen init)
       final permissionManager =
           Provider.of<PermissionManager>(context, listen: false);
 
-      // Request both permissions together
-      final hasMicrophonePermission =
-          await permissionManager.requestMicrophonePermission();
-      final hasMediaPermission =
-          await permissionManager.requestMediaPermission();
+      final hasMicrophonePermission = permissionManager.hasMicrophonePermission;
+      final hasMediaPermission = permissionManager.hasMediaPermission;
 
       if (!hasMicrophonePermission || !hasMediaPermission) {
-        // Check if either permission is permanently denied to provide specific guidance
-        final isMicrophonePermanentlyDenied =
-            await permissionManager.isMicrophonePermissionPermanentlyDenied();
-        final isMediaPermanentlyDenied =
-            await permissionManager.isMediaPermissionPermanentlyDenied();
-
+        // Permissions were denied - show helpful message without re-requesting
         String errorMessage;
-        bool showSettingsAction = false;
-
         if (!hasMicrophonePermission && !hasMediaPermission) {
-          if (isMicrophonePermanentlyDenied || isMediaPermanentlyDenied) {
-            errorMessage =
-                'Microphone and media access permanently denied. Please enable both in device settings to use voice recording.';
-            showSettingsAction = true;
-          } else {
-            errorMessage =
-                'Microphone and media access are required for voice recording. Please allow access and try again.';
-          }
+          errorMessage =
+              'Microphone and media access required for voice recording. Please enable in device settings.';
         } else if (!hasMicrophonePermission) {
-          if (isMicrophonePermanentlyDenied) {
-            errorMessage =
-                'Microphone access permanently denied. Please enable it in device settings to use voice recording.';
-            showSettingsAction = true;
-          } else {
-            errorMessage =
-                'Microphone access is required for voice recording. Please allow access and try again.';
-          }
+          errorMessage =
+              'Microphone access required for voice recording. Please enable in device settings.';
         } else {
-          // Only media permission denied
-          if (isMediaPermanentlyDenied) {
-            errorMessage =
-                'Media access permanently denied. Please enable it in device settings to save recordings.';
-            showSettingsAction = true;
-          } else {
-            errorMessage =
-                'Media access is required to save recordings. Please allow access and try again.';
-          }
+          errorMessage =
+              'Media access required to save recordings. Please enable in device settings.';
         }
 
         if (kDebugMode) {
-          print('❌ Permission denied:');
-          print(
-              '   Microphone: ${hasMicrophonePermission ? '✅' : '❌'} (permanently denied: $isMicrophonePermanentlyDenied)');
-          print(
-              '   Media: ${hasMediaPermission ? '✅' : '❌'} (permanently denied: $isMediaPermanentlyDenied)');
+          print('❌ Recording blocked - permissions not granted:');
+          print('   Microphone: ${hasMicrophonePermission ? '✅' : '❌'}');
+          print('   Media: ${hasMediaPermission ? '✅' : '❌'}');
         }
 
         _postCoordinator?.setError(errorMessage);
 
         if (mounted) {
-          // First show the status update
           _postCoordinator?.requestStatusUpdate(
             errorMessage,
             StatusMessageType.error,
-            duration: const Duration(seconds: 6),
+            duration: const Duration(seconds: 4),
           );
 
-          // Then show the snackbar if any permission is permanently denied
-          if (showSettingsAction && mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text(errorMessage),
-                backgroundColor: Colors.red.withValues(alpha: 0.8),
-                duration: const Duration(seconds: 5),
-                action: SnackBarAction(
-                  label: 'Settings',
-                  textColor: Colors.white,
-                  onPressed: () async {
-                    await permissionManager.openDeviceSettings();
-                  },
-                ),
+          // Show snackbar with settings action
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(errorMessage),
+              backgroundColor: Colors.red.withValues(alpha: 0.8),
+              duration: const Duration(seconds: 5),
+              action: SnackBarAction(
+                label: 'Settings',
+                textColor: Colors.white,
+                onPressed: () async {
+                  await permissionManager.openDeviceSettings();
+                },
               ),
-            );
-          }
+            ),
+          );
         }
         return;
       }
 
       if (kDebugMode) {
-        print('✅ All permissions granted, starting recording...');
+        print('✅ Permissions verified, starting recording...');
         print('   Microphone: ✅');
         print('   Media: ✅');
       }
@@ -868,65 +896,48 @@ class _CommandScreenState extends State<CommandScreen>
 
   Future<void> _navigateToMediaSelection() async {
     try {
-      // ALWAYS request media permission before accessing media
-      // This ensures permission is re-requested every time if previously denied
+      // Check permissions without requesting (they were requested during screen init)
       final permissionManager =
           Provider.of<PermissionManager>(context, listen: false);
-      final hasPermission = await permissionManager.requestMediaPermission();
+      final hasPermission = permissionManager.hasMediaPermission;
 
       if (!hasPermission) {
-        // Check if permanently denied to provide specific guidance
-        final isPermanentlyDenied =
-            await permissionManager.isMediaPermissionPermanentlyDenied();
-
-        String errorMessage;
-        if (isPermanentlyDenied) {
-          errorMessage =
-              'Media access permanently denied. Please enable it in device settings to select photos and videos.';
-        } else {
-          errorMessage =
-              'Media access is required to select photos and videos. Please allow access and try again.';
-        }
+        // Permission was denied - show helpful message without re-requesting
+        String errorMessage =
+            'Media access required to select photos and videos. Please enable in device settings.';
 
         if (kDebugMode) {
-          print(
-              '❌ Media permission denied. Permanently denied: $isPermanentlyDenied');
+          print('❌ Media selection blocked - media permission not granted');
         }
 
         if (mounted) {
-          // First show the status update
           _postCoordinator?.requestStatusUpdate(
-            isPermanentlyDenied
-                ? 'Media access permanently denied. Please enable in device settings.'
-                : errorMessage,
+            errorMessage,
             StatusMessageType.error,
-            duration: const Duration(seconds: 6),
+            duration: const Duration(seconds: 4),
           );
 
-          // Then show the snackbar if permanently denied
-          if (isPermanentlyDenied && mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: const Text(
-                    'Media permission required. Enable in device settings.'),
-                backgroundColor: Colors.red.withValues(alpha: 0.8),
-                duration: const Duration(seconds: 5),
-                action: SnackBarAction(
-                  label: 'Settings',
-                  textColor: Colors.white,
-                  onPressed: () async {
-                    await permissionManager.openDeviceSettings();
-                  },
-                ),
+          // Show snackbar with settings action
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(errorMessage),
+              backgroundColor: Colors.red.withValues(alpha: 0.8),
+              duration: const Duration(seconds: 5),
+              action: SnackBarAction(
+                label: 'Settings',
+                textColor: Colors.white,
+                onPressed: () async {
+                  await permissionManager.openDeviceSettings();
+                },
               ),
-            );
-          }
+            ),
+          );
         }
         return;
       }
 
       if (kDebugMode) {
-        print('✅ Media permission granted, proceeding to media selection...');
+        print('✅ Media permission verified, proceeding to media selection...');
       }
 
       // Only log navigation attempts occasionally
