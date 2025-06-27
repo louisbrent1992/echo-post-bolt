@@ -2615,17 +2615,17 @@ class SocialActionPostCoordinator extends ChangeNotifier {
       final editingAction = validatedAction.copyWith(
         actionId: editingActionId,
         createdAt: DateTime.now().toIso8601String(),
+        // Strip media here; it will be re-attached via the standard
+        // pre-selection pipeline so we use the exact same flow as a fresh pick.
+        content: validatedAction.content.copyWith(media: []),
       );
 
-      // Step 3: Sync coordinator state with validated action
+      // Step 3: Route historical media through the SAME pre-selection mechanism
+      _preSelectedMedia = List<MediaItem>.from(validatedAction.content.media);
+
+      // Step 4: Sync coordinator state (media will be merged by _syncMediaStates)
       _currentPost = editingAction;
       _currentTranscription = editingAction.internal.originalTranscription;
-
-      // Step 4: Clear pre-selected media and sync with post media
-      _preSelectedMedia.clear();
-      if (editingAction.content.media.isNotEmpty) {
-        _preSelectedMedia = List.from(editingAction.content.media);
-      }
 
       // Step 5: Update coordinator state flags
       _hasContent = editingAction.content.text.isNotEmpty ||
@@ -2648,8 +2648,10 @@ class SocialActionPostCoordinator extends ChangeNotifier {
       // Step 7: Sync media states for consistency
       _syncMediaStates();
 
-      // Step 8: Notify listeners for UI update
-      _safeNotifyListeners();
+      // Step 8: CRITICAL - Defer UI notification until next frame to prevent setState during build
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _safeNotifyListeners();
+      });
 
       if (kDebugMode) {
         print('✅ Historical post loaded successfully');

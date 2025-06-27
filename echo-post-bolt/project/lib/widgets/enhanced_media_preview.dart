@@ -54,6 +54,10 @@ class _EnhancedMediaPreviewState extends State<EnhancedMediaPreview>
   int? _imageWidth;
   int? _imageHeight;
 
+  // CRITICAL: Build phase protection to prevent setState during build
+  bool _isInBuildPhase = false;
+  bool _hasPendingStateUpdate = false;
+
   @override
   void initState() {
     super.initState();
@@ -70,6 +74,8 @@ class _EnhancedMediaPreviewState extends State<EnhancedMediaPreview>
         : null;
 
     if (newMediaPath != _lastVideoPath) {
+      // CRITICAL: Dispose existing controller before reinitializing to prevent memory leaks
+      _disposeVideoController();
       _initializeMedia();
     }
 
@@ -314,10 +320,12 @@ class _EnhancedMediaPreviewState extends State<EnhancedMediaPreview>
   }
 
   void _videoListener() {
-    if (_videoController != null && mounted) {
+    if (_videoController != null && mounted && !_isInBuildPhase) {
       setState(() {
         _isPlaying = _videoController!.value.isPlaying;
       });
+    } else if (_videoController != null && mounted && _isInBuildPhase) {
+      _hasPendingStateUpdate = true;
     }
   }
 
@@ -381,14 +389,17 @@ class _EnhancedMediaPreviewState extends State<EnhancedMediaPreview>
 
   @override
   Widget build(BuildContext context) {
+    _isInBuildPhase = true;
+
     if (widget.mediaItems.isEmpty) {
+      _isInBuildPhase = false;
       return const SizedBox.shrink();
     }
 
     final mediaItem = widget.mediaItems.first;
     final isVideo = mediaItem.mimeType.startsWith('video/');
 
-    return GestureDetector(
+    final builtWidget = GestureDetector(
       onTap: widget.onTap,
       child: Container(
         width: double.infinity,
@@ -421,6 +432,18 @@ class _EnhancedMediaPreviewState extends State<EnhancedMediaPreview>
         ),
       ),
     );
+
+    _isInBuildPhase = false;
+
+    // Handle any pending state updates after build phase completes
+    if (_hasPendingStateUpdate) {
+      _hasPendingStateUpdate = false;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) setState(() {});
+      });
+    }
+
+    return builtWidget;
   }
 
   Widget _buildVideoDisplay() {
