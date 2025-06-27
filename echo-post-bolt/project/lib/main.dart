@@ -250,9 +250,12 @@ class _ServiceInitializationWrapperState
               gradient: LinearGradient(
                 begin: Alignment.topCenter,
                 end: Alignment.bottomCenter,
+                stops: [0.0, 0.3, 0.7, 1.0],
                 colors: [
-                  Colors.black,
-                  Color(0xFF1A1A1A),
+                  Color(0xFF000000), // Pure black at top
+                  Color(0xFF1A1A1A), // Dark gray
+                  Color(0xFF2A2A2A), // Medium dark gray
+                  Color(0xFF1A1A1A), // Back to dark gray at bottom
                 ],
               ),
             ),
@@ -261,18 +264,11 @@ class _ServiceInitializationWrapperState
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   // App logo/icon
-                  Container(
+                  Image.asset(
+                    'assets/icons/logo.png',
                     width: 80,
                     height: 80,
-                    decoration: const BoxDecoration(
-                      color: Color(0xFFFF0055),
-                      shape: BoxShape.circle,
-                    ),
-                    child: const Icon(
-                      Icons.mic,
-                      color: Colors.white,
-                      size: 40,
-                    ),
+                    fit: BoxFit.contain,
                   ),
                   const SizedBox(height: 32),
 

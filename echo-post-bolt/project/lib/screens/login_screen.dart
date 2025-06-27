@@ -73,21 +73,11 @@ class _LoginScreenState extends State<LoginScreen> {
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   // Logo and App Name
-                  Container(
-                    padding: const EdgeInsets.all(20),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFFF0055).withValues(alpha: 0.1),
-                      shape: BoxShape.circle,
-                      border: Border.all(
-                        color: const Color(0xFFFF0055).withValues(alpha: 0.3),
-                        width: 2,
-                      ),
-                    ),
-                    child: const Icon(
-                      Icons.mic,
-                      size: 60,
-                      color: Color(0xFFFF0055),
-                    ),
+                  Image.asset(
+                    'assets/icons/logo.png',
+                    width: 100,
+                    height: 100,
+                    fit: BoxFit.contain,
                   ),
                   const SizedBox(height: 24),
                   const Text(
@@ -163,6 +153,17 @@ class _LoginScreenState extends State<LoginScreen> {
                     style: TextStyle(
                       color: Colors.white.withValues(alpha: 0.6),
                       fontSize: 12,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+
+                  // Built with attribution
+                  const Text(
+                    'Built with Bolt.new',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 14,
+                      fontWeight: FontWeight.bold,
                     ),
                   ),
                 ],

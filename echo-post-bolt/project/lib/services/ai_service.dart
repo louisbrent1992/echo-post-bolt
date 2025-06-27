@@ -263,48 +263,33 @@ class AIService {
 
       // SINGLE SYSTEM PROMPT - ChatGPT handles editing vs creation based on context
       const systemPrompt = '''
-You are the assistant to the EchoPost app.
+You are the EchoPost assistant.
 
-Your job is to create a complete JSON object called a SocialAction, which represents a fully structured and platform-ready social media post.
+Your task is to generate a fully structured SocialAction JSON object representing a platform-ready social media post. The JSON must contain all the information EchoPost needs for posting: platforms, text, media, scheduling, preview, and options. Every aspect of the user's request must be captured only through this JSON—no explanations, no extra text, no markdown.
 
-EchoPost uses this JSON object to determine everything it needs to do: which platforms to post to, what text and media to use, how to schedule it, and how to render the preview. Every decision you make must be expressed only through this JSON.
+Inputs:
+- The user's voice transcription (intent, caption, instructions)
+- The mediaContext object (all available media files with metadata)
 
-You will be given two inputs:
-- A voice transcription from the user
-- A mediaContext object that includes available media and metadata
+Instructions:
+- Build a SocialAction JSON that fully reflects the user's intent, based on the transcription and available media.
+- Caption: Fill "content.text" with an engaging, accurate caption that matches the user's request.
+- Platforms: If the user specifies platforms ("post to TikTok"), include those in "platforms" and set "post_here": true in platform_data. If none are mentioned, include all valid platforms for the media type (e.g., video: YouTube; image: Instagram).
+- Media: Select the best matching file(s) from mediaContext using filename, timestamp, or metadata based on user description. Fill out all relevant media and metadata fields.
+- Tags, Mentions, Locations: Extract and fill from transcription and media metadata (e.g., hashtags, location).
+- Edit Mode: If editing, preserve all unchanged fields and update only what the user specifies.
+- Schema: Use the SocialAction JSON structure as your blueprint. If information is missing, use null, "" (empty string), or [] (empty list) as appropriate.
+- Return only the raw, complete JSON object, no commentary or formatting.
 
-Instead of following individual rules, focus on building a SocialAction that logically reflects what the JSON structure is designed to capture:
-- Fill in the text of the user prompt with an engaging caption that acctually reflects their intensions.
-- If the user refers to a specific platform (like “post to TikTok”), include that in "platforms" and set "post_here": true in "platform_data".
-- Fill the media and meta information for the selectecd resplace null values relevant information as required for each platform.
-- If the user refers to names, tags, or locations, look for that information in the file names or metadata in mediaContext.
-- If the transcription suggests editing a post or "editing_mode" is true, preserve all unchanged fields in the content.
-- If the user mentions specific media (“use the beach photo” or “post the last video”), select the media from mediaContext that best matches the filename, timestamp, or metadata.
-- If the user gives no platform preference, include all valid platforms for the selected media (e.g., YouTube for video, Instagram for image).
-- Use the structure of the JSON as your blueprint. Every field should be meaningful. If you don’t know the value, use null, "" (empty string), or [] (empty list) as appropriate.
+Top-level fields required: action_id, created_at, platforms, content, options, platform_data, internal, media_query.
 
-This is a schema-driven task. You are not writing text. You are producing a complete JSON response based on what a social media post should do.
-
-Return only the raw JSON object. Do not include commentary, explanations, or formatting.
-
-Before responding, double-check that your JSON includes these top-level fields:
-- action_id
-- created_at
-- platforms
-- content
-- options
-- platform_data
-- internal
-- media_query
-
-Carefully fill in or edit this SocialAction JSON object template to match the intensions of the request:
-
+Example:
 {
   "action_id": "echo_1720032000000",
   "created_at": "2025-06-26T16:00:00Z",
   "platforms": ["facebook", "instagram", "youtube", "twitter", "tiktok"],
   "content": {
-    "text": "Captured the magic of the orchestral session 🎻✨ A moment where music speaks louder than words.\n#composeforlife #fortheloveofmusic",
+    "text": "Captured the magic of the orchestral session. A moment where music speaks louder than words.\n#composeforlife #fortheloveofmusic",
     "hashtags": ["composeforlife", "fortheloveofmusic"],
     "mentions": [],
     "link": null,
@@ -447,7 +432,7 @@ Generate a complete SocialAction JSON object based on this input.
           'Authorization': 'Bearer $_apiKey',
         },
         body: json.encode({
-          'model': 'gpt-4-turbo-preview',
+          'model': 'gpt-4o',
           'messages': messages,
           'temperature': 0.7,
           'response_format': {'type': 'json_object'},
