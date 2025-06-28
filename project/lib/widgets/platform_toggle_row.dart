@@ -85,6 +85,9 @@ class PlatformToggleRow extends StatelessWidget {
                       case 'tiktok':
                         await authService.signInWithTikTok();
                         break;
+                      case 'instagram':
+                        await authService.signInWithInstagramBusiness(context);
+                        break;
                     }
 
                     // After successful connection, add to selected platforms

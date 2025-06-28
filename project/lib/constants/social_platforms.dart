@@ -87,10 +87,10 @@ class SocialPlatforms {
       requiresMedia: true,
       maxTextLength: 2200,
       maxHashtags: 30,
-      supportsAutomatedPosting: false,
+      supportsAutomatedPosting: true,
       requiresBusinessAccount: true,
       postingRequirements:
-          'Requires Instagram Business or Creator account for automated posting. Personal accounts will use native sharing.',
+          'Requires Instagram Business or Creator account for automated posting. Personal accounts will use manual sharing.',
     ),
     'youtube': PlatformCapabilities(
       supportsText: true,

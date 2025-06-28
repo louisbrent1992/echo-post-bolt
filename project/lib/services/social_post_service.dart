@@ -10,6 +10,7 @@ import '../models/social_action.dart';
 import '../services/social_action_post_coordinator.dart';
 import '../constants/social_platforms.dart';
 import 'auth_service.dart';
+import 'package:path/path.dart' as path;
 
 class SocialPostService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
@@ -208,7 +209,17 @@ class SocialPostService {
           await _postToFacebook(action, authService);
           break;
         case 'instagram':
-          await _postToInstagram(action);
+          // Check if user has Instagram access
+          final hasInstagramAccess =
+              await authService?.hasInstagramAccess() ?? false;
+
+          if (hasInstagramAccess) {
+            // Use automated posting via Instagram API with Instagram Login
+            await _postToInstagram(action);
+          } else {
+            // Fall back to SharePlus for manual sharing
+            await _shareToInstagramViaSharePlus(action);
+          }
           break;
         case 'youtube':
           await _postToYouTube(action);
@@ -799,16 +810,266 @@ class SocialPostService {
       print('  Media count: ${action.content.media.length}');
     }
 
-    // Simulate processing time
-    await Future.delayed(const Duration(milliseconds: 1200));
+    try {
+      // Get Instagram access token from Firestore
+      final uid = _auth.currentUser?.uid;
+      if (uid == null) {
+        throw Exception('User not authenticated');
+      }
 
-    // Simulate occasional API failures (3% chance)
-    if (DateTime.now().millisecond % 33 == 0) {
-      throw Exception('Instagram media processing failed');
+      final tokenDoc = await _firestore
+          .collection('users')
+          .doc(uid)
+          .collection('tokens')
+          .doc('instagram')
+          .get();
+
+      if (!tokenDoc.exists) {
+        throw Exception(
+            'Instagram access token not found. Please authenticate with Instagram first.');
+      }
+
+      final tokenData = tokenDoc.data()!;
+      final accessToken = tokenData['access_token'] as String;
+      final instagramUserId = tokenData['instagram_user_id'] as String;
+      final accountType = tokenData['account_type'] as String;
+
+      // Check if token is expired
+      final expiresIn = tokenData['expires_in'] as int?;
+      final createdAt = tokenData['created_at'] as Timestamp?;
+      if (expiresIn != null && createdAt != null) {
+        final expirationDate =
+            createdAt.toDate().add(Duration(seconds: expiresIn));
+        if (expirationDate.isBefore(DateTime.now())) {
+          throw Exception(
+              'Instagram access token has expired. Please re-authenticate.');
+        }
+      }
+
+      // Ensure we have media (Instagram requires media)
+      if (action.content.media.isEmpty) {
+        throw Exception('Instagram requires media content for posting');
+      }
+
+      final mediaItem = action.content.media.first;
+      final isVideo = mediaItem.mimeType.startsWith('video/');
+      final filePath = Uri.parse(mediaItem.fileUri).path;
+
+      // Verify file exists
+      final file = File(filePath);
+      if (!await file.exists()) {
+        throw Exception('Media file does not exist: $filePath');
+      }
+
+      if (kDebugMode) {
+        print('  📷 Instagram User ID: $instagramUserId');
+        print('  📷 Account Type: $accountType');
+        print('  📷 Media type: ${isVideo ? 'VIDEO' : 'IMAGE'}');
+        print('  📷 File path: $filePath');
+      }
+
+      // Instagram API with Instagram Login uses different endpoints
+      // For content publishing, we use the Instagram Graph API endpoints
+
+      // Step 1: Create a container with the media
+      final containerEndpoint =
+          'https://graph.instagram.com/v12.0/$instagramUserId/media';
+      final containerParams = {
+        'access_token': accessToken,
+        'caption': formattedContent,
+        'media_type': isVideo ? 'VIDEO' : 'IMAGE',
+      };
+
+      if (isVideo) {
+        // For videos, we need to provide a video URL
+        final videoUrl = await _uploadMediaToInstagram(
+            accessToken, mediaItem.fileUri, 'video');
+        if (videoUrl == null) {
+          throw Exception('Failed to upload video to Instagram');
+        }
+        containerParams['video_url'] = videoUrl;
+      } else {
+        // For images, we need to provide an image URL
+        final imageUrl = await _uploadMediaToInstagram(
+            accessToken, mediaItem.fileUri, 'image');
+        if (imageUrl == null) {
+          throw Exception('Failed to upload image to Instagram');
+        }
+        containerParams['image_url'] = imageUrl;
+      }
+
+      if (kDebugMode) {
+        print('  📤 Creating Instagram container...');
+        print('  📤 Container endpoint: $containerEndpoint');
+        print('  📤 Container params: ${jsonEncode(containerParams)}');
+      }
+
+      final containerResponse = await http.post(
+        Uri.parse(containerEndpoint),
+        body: containerParams,
+      );
+
+      if (kDebugMode) {
+        print(
+            '  📥 Container response status: ${containerResponse.statusCode}');
+        print('  📥 Container response body: ${containerResponse.body}');
+      }
+
+      if (containerResponse.statusCode != 200) {
+        final errorData = jsonDecode(containerResponse.body);
+        final errorMessage =
+            errorData['error']?['message'] ?? 'Unknown Instagram API error';
+        final errorCode = errorData['error']?['code'] ?? 'unknown';
+
+        if (kDebugMode) {
+          print('  ❌ Instagram container creation failed:');
+          print('    Code: $errorCode');
+          print('    Message: $errorMessage');
+        }
+
+        // Handle specific Instagram API errors
+        switch (errorCode) {
+          case '100':
+            throw Exception(
+                'Instagram API permission error. Check app permissions.');
+          case '190':
+            throw Exception(
+                'Instagram access token expired or invalid. Please re-authenticate.');
+          case '200':
+            throw Exception(
+                'Instagram app requires review for posting permissions. Please contact support.');
+          default:
+            throw Exception(
+                'Instagram container creation failed: $errorMessage');
+        }
+      }
+
+      final containerData = jsonDecode(containerResponse.body);
+      final containerId = containerData['id'];
+
+      if (kDebugMode) {
+        print('  ✅ Instagram container created successfully');
+        print('  🆔 Container ID: $containerId');
+      }
+
+      // Step 2: Publish the container
+      final publishEndpoint =
+          'https://graph.instagram.com/v12.0/$instagramUserId/media_publish';
+      final publishParams = {
+        'access_token': accessToken,
+        'creation_id': containerId,
+      };
+
+      if (kDebugMode) {
+        print('  📤 Publishing Instagram container...');
+        print('  📤 Publish endpoint: $publishEndpoint');
+        print('  📤 Publish params: ${jsonEncode(publishParams)}');
+      }
+
+      final publishResponse = await http.post(
+        Uri.parse(publishEndpoint),
+        body: publishParams,
+      );
+
+      if (kDebugMode) {
+        print('  📥 Publish response status: ${publishResponse.statusCode}');
+        print('  📥 Publish response body: ${publishResponse.body}');
+      }
+
+      if (publishResponse.statusCode != 200) {
+        final errorData = jsonDecode(publishResponse.body);
+        final errorMessage =
+            errorData['error']?['message'] ?? 'Unknown Instagram API error';
+        final errorCode = errorData['error']?['code'] ?? 'unknown';
+
+        if (kDebugMode) {
+          print('  ❌ Instagram publishing failed:');
+          print('    Code: $errorCode');
+          print('    Message: $errorMessage');
+        }
+
+        // Handle specific Instagram API errors
+        switch (errorCode) {
+          case '100':
+            throw Exception(
+                'Instagram API permission error. Check app permissions.');
+          case '190':
+            throw Exception(
+                'Instagram access token expired or invalid. Please re-authenticate.');
+          case '200':
+            throw Exception(
+                'Instagram app requires review for posting permissions. Please contact support.');
+          default:
+            throw Exception('Instagram publishing failed: $errorMessage');
+        }
+      }
+
+      final publishData = jsonDecode(publishResponse.body);
+      final postId = publishData['id'];
+
+      if (kDebugMode) {
+        print('  ✅ Successfully posted to Instagram');
+        print('  🆔 Post ID: $postId');
+      }
+
+      // Store the post ID for verification
+      await _storePostId(action.actionId, 'instagram', postId);
+    } catch (e) {
+      if (kDebugMode) {
+        print('  ❌ Instagram posting failed: $e');
+      }
+      rethrow;
     }
+  }
 
-    if (kDebugMode) {
-      print('  ✅ Successfully posted to Instagram');
+  /// Upload media to Instagram and get the media URL
+  Future<String?> _uploadMediaToInstagram(
+      String accessToken, String fileUri, String mediaType) async {
+    try {
+      if (kDebugMode) {
+        print('📤 Uploading media to Instagram: $fileUri');
+      }
+
+      // For local files, we need to upload them to a publicly accessible URL
+      if (fileUri.startsWith('file://')) {
+        final filePath = Uri.parse(fileUri).path;
+        final file = File(filePath);
+
+        if (!await file.exists()) {
+          throw Exception('Media file does not exist: $filePath');
+        }
+
+        // In a real implementation, you would:
+        // 1. Upload the file to your own server/storage (Firebase Storage, AWS S3, etc.)
+        // 2. Return the public URL
+
+        // For this implementation, we'll use a mock URL
+        // In production, you would use Firebase Storage or another service
+        final fileName = path.basename(filePath);
+        final mockUrl = 'https://example.com/uploads/$fileName';
+
+        if (kDebugMode) {
+          print('  ⚠️ Using mock URL for Instagram media: $mockUrl');
+          print('  ⚠️ In production, upload to your own server/storage');
+        }
+
+        return mockUrl;
+      }
+
+      // If it's already a public URL, we can use it directly
+      if (fileUri.startsWith('http://') || fileUri.startsWith('https://')) {
+        if (kDebugMode) {
+          print('✅ Using public URL for media: $fileUri');
+        }
+        return fileUri;
+      }
+
+      return null;
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ Media upload failed: $e');
+      }
+      return null;
     }
   }
 
@@ -1011,13 +1272,93 @@ class SocialPostService {
   Future<bool> _verifyInstagramPost(String? postId) async {
     if (postId == null) return false;
 
-    // Simulate verification check
-    await Future.delayed(const Duration(milliseconds: 400));
+    try {
+      // Get Instagram access token from Firestore
+      final uid = _auth.currentUser?.uid;
+      if (uid == null) return false;
 
-    // In a real implementation, this would call Instagram Basic Display API
-    // GET /{media-id}?fields=id,media_type,media_url,permalink
+      final tokenDoc = await _firestore
+          .collection('users')
+          .doc(uid)
+          .collection('tokens')
+          .doc('instagram')
+          .get();
 
-    return true; // Simulate success for now
+      if (!tokenDoc.exists) return false;
+
+      final tokenData = tokenDoc.data()!;
+      final accessToken = tokenData['access_token'] as String;
+      final instagramId = tokenData['instagram_id'] as String;
+
+      // Check if token is expired
+      final expiresAt = tokenData['expires_at'] as Timestamp?;
+      if (expiresAt != null && expiresAt.toDate().isBefore(DateTime.now())) {
+        if (kDebugMode) {
+          print('❌ Instagram access token expired during verification');
+        }
+        return false;
+      }
+
+      // Verify post exists using Instagram Graph API
+      final response = await http.get(
+        Uri.parse(
+            'https://graph.facebook.com/v19.0/$postId?fields=id,media_type,media_url,permalink&access_token=$accessToken'),
+      );
+
+      if (kDebugMode) {
+        print('🔍 Instagram verification response: ${response.statusCode}');
+        print('🔍 Response body: ${response.body}');
+      }
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        final verifiedPostId = data['id'];
+
+        if (verifiedPostId == postId) {
+          if (kDebugMode) {
+            print('✅ Instagram post verified successfully');
+          }
+          return true;
+        }
+      } else if (response.statusCode == 404) {
+        if (kDebugMode) {
+          print('❌ Instagram post not found (404)');
+        }
+        return false;
+      } else {
+        final errorData = jsonDecode(response.body);
+        final errorMessage = errorData['error']?['message'] ?? 'Unknown error';
+        final errorCode = errorData['error']?['code'] ?? 'unknown';
+
+        if (kDebugMode) {
+          print(
+              '❌ Instagram verification error: $errorMessage (Code: $errorCode)');
+        }
+
+        // Handle specific Instagram API errors
+        switch (errorCode) {
+          case '100':
+            if (kDebugMode) {
+              print('❌ Instagram API permission error during verification');
+            }
+            return false;
+          case '190':
+            if (kDebugMode) {
+              print('❌ Instagram access token expired during verification');
+            }
+            return false;
+          default:
+            return false;
+        }
+      }
+
+      return false;
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ Instagram verification failed: $e');
+      }
+      return false;
+    }
   }
 
   /// Verify YouTube post exists
@@ -1288,6 +1629,56 @@ class SocialPostService {
       if (kDebugMode) {
         print('❌ Error storing page access token: $e');
       }
+    }
+  }
+
+  /// Share to Instagram via SharePlus (manual sharing for consumer accounts)
+  Future<void> _shareToInstagramViaSharePlus(SocialAction action) async {
+    final formattedContent = _formatPostForPlatform(action, 'instagram');
+
+    if (kDebugMode) {
+      print('📷 Sharing to Instagram via SharePlus (manual sharing)...');
+      print('  Original text: ${action.content.text}');
+      print('  Hashtags: ${action.content.hashtags.join(', ')}');
+      print('  Formatted content: $formattedContent');
+      print('  Media count: ${action.content.media.length}');
+    }
+
+    try {
+      // Instagram requires media, so we need at least one media file
+      List<XFile> mediaFiles = [];
+      if (action.content.media.isNotEmpty) {
+        for (final mediaItem in action.content.media) {
+          if (mediaItem.fileUri.startsWith('file://')) {
+            final filePath = Uri.parse(mediaItem.fileUri).path;
+            if (await File(filePath).exists()) {
+              mediaFiles.add(XFile(filePath));
+            }
+          }
+        }
+      }
+
+      if (mediaFiles.isEmpty) {
+        throw Exception('Instagram requires media content for sharing');
+      }
+
+      // Share using SharePlus with media
+      await Share.shareXFiles(
+        mediaFiles,
+        text: formattedContent,
+        subject: 'Instagram Post',
+      );
+
+      if (kDebugMode) {
+        print('  ✅ Successfully shared to Instagram via SharePlus');
+        print(
+            '  📝 Note: This is manual sharing. User needs to open Instagram app to complete posting.');
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        print('  ❌ SharePlus sharing failed: $e');
+      }
+      rethrow;
     }
   }
 }

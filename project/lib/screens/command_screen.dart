@@ -820,8 +820,7 @@ class _CommandScreenState extends State<CommandScreen>
           await authService.signInWithFacebook();
           break;
         case 'instagram':
-          // Instagram uses Facebook authentication
-          await authService.signInWithFacebook();
+          await authService.signInWithInstagramBusiness(context);
           break;
         case 'twitter':
           // TODO: Implement Twitter OAuth when available

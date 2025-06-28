@@ -20,6 +20,7 @@ dependencies:
   # HTTP & Networking
   http: ^1.1.0
   url_launcher: ^6.2.2
+  webview_flutter: ^4.4.2
 
   # Permissions
   permission_handler: ^11.3.0
@@ -28,7 +29,6 @@ dependencies:
   flutter_facebook_auth: 6.0.4
   google_sign_in: ^6.1.6
   tiktok_sdk_v2: ^0.0.2
-  oauth2_client: 4.2.0
 
   # Sharing
   share_plus: ^7.2.1
