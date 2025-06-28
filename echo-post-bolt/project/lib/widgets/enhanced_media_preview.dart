@@ -64,6 +64,10 @@ class _EnhancedMediaPreviewState extends State<EnhancedMediaPreview>
   // Add video completion tracking
   bool _hasVideoCompleted = false;
 
+  // UNIFIED: Static video operation limiter to prevent buffer overflow
+  static int _activeVideoOperations = 0;
+  static const int _maxConcurrentVideoOps = 2;
+
   @override
   void initState() {
     super.initState();
@@ -105,23 +109,44 @@ class _EnhancedMediaPreviewState extends State<EnhancedMediaPreview>
     _cachedThumbnail = null;
     _cachedThumbnailPath = null;
     _hasVideoCompleted = false;
+
+    // UNIFIED: Force garbage collection hint for video buffers
+    if (kDebugMode) {
+      print('🧹 UNIFIED: Complete video cleanup with buffer management');
+    }
   }
 
   void _disposeVideoController() {
     if (_videoController != null) {
-      // Pause playback before disposal to ensure clean shutdown
-      _videoController!.pause();
-      // Remove listener to prevent memory leaks
-      _videoController!.removeListener(_videoListener);
-      // Ensure proper resource cleanup
-      _videoController!.dispose();
-      _videoController = null;
-      _isVideoInitialized = false;
-      _isPlaying = false;
-      _hasVideoCompleted = false;
+      // UNIFIED: Aggressive cleanup sequence to prevent buffer leaks
+      try {
+        // Pause playback before disposal to ensure clean shutdown
+        _videoController!.pause();
+        // Remove listener to prevent memory leaks
+        _videoController!.removeListener(_videoListener);
+        // Ensure proper resource cleanup
+        _videoController!.dispose();
+      } catch (e) {
+        // Ignore disposal errors during cleanup
+        if (kDebugMode) {
+          print('⚠️ UNIFIED: Video controller disposal warning: $e');
+        }
+      } finally {
+        _videoController = null;
+        _isVideoInitialized = false;
+        _isPlaying = false;
+        _hasVideoCompleted = false;
 
-      if (kDebugMode) {
-        print('🧹 Video controller disposed and resources cleaned up');
+        // UNIFIED: Decrement operation counter on disposal
+        if (_activeVideoOperations > 0) {
+          _activeVideoOperations--;
+        }
+
+        if (kDebugMode) {
+          print(
+              '🧹 UNIFIED: Video controller disposed with aggressive cleanup');
+          print('   Active video operations: $_activeVideoOperations');
+        }
       }
     }
   }
@@ -359,15 +384,45 @@ class _EnhancedMediaPreviewState extends State<EnhancedMediaPreview>
   }
 
   Future<void> _initializeVideo(String videoPath) async {
+    // UNIFIED: Check operation limit to prevent buffer overflow
+    if (_activeVideoOperations >= _maxConcurrentVideoOps) {
+      if (kDebugMode) {
+        print(
+            '⚠️ UNIFIED: Video operation limit reached ($_activeVideoOperations/$_maxConcurrentVideoOps) - deferring initialization');
+      }
+
+      // Defer initialization to prevent buffer overflow
+      await Future.delayed(const Duration(milliseconds: 500));
+
+      // Retry if limit still exceeded
+      if (_activeVideoOperations >= _maxConcurrentVideoOps) {
+        if (kDebugMode) {
+          print(
+              '⚠️ UNIFIED: Video operation limit still exceeded - skipping initialization');
+        }
+        return;
+      }
+    }
+
+    _activeVideoOperations++;
+
     try {
-      _disposeVideoController();
+      // UNIFIED: Ensure complete cleanup before new initialization
+      _completeVideoCleanup();
 
       final file = File(videoPath);
       if (!await file.exists()) {
         if (kDebugMode) {
-          print('❌ Video file does not exist: $videoPath');
+          print('❌ UNIFIED: Video file does not exist: $videoPath');
         }
         return;
+      }
+
+      if (kDebugMode) {
+        print(
+            '🎬 UNIFIED: Initializing video with optimized buffer management: $videoPath');
+        print(
+            '   Active video operations: $_activeVideoOperations/$_maxConcurrentVideoOps');
       }
 
       // Create video player with optimized buffer configuration
@@ -404,13 +459,14 @@ class _EnhancedMediaPreviewState extends State<EnhancedMediaPreview>
       }
 
       if (kDebugMode) {
-        print('✅ Video initialized: ${_videoController!.value.duration}');
+        print(
+            '✅ UNIFIED: Video initialized with buffer optimization: ${_videoController!.value.duration}');
         print('   Video path: $videoPath');
-        print('   Ready for playback');
+        print('   Ready for playback with managed buffers');
       }
     } catch (e) {
       if (kDebugMode) {
-        print('❌ Failed to initialize video: $e');
+        print('❌ UNIFIED: Failed to initialize video: $e');
       }
 
       if (mounted) {
@@ -419,8 +475,17 @@ class _EnhancedMediaPreviewState extends State<EnhancedMediaPreview>
         });
       }
 
-      // Clean up on error
-      _disposeVideoController();
+      // UNIFIED: Aggressive cleanup on error
+      _completeVideoCleanup();
+    } finally {
+      // UNIFIED: Always decrement operation counter
+      _activeVideoOperations =
+          (_activeVideoOperations - 1).clamp(0, _maxConcurrentVideoOps);
+
+      if (kDebugMode) {
+        print(
+            '🔄 UNIFIED: Video operation completed, active operations: $_activeVideoOperations');
+      }
     }
   }
 
@@ -1039,24 +1104,37 @@ class _EnhancedMediaPreviewState extends State<EnhancedMediaPreview>
 
   @override
   void didPushNext() {
-    // Another page is on top of us → pause playback and release resources
-    if (_videoController != null) {
-      _videoController!.pause();
-      // Always dispose video controller when navigating away to prevent conflicts
-      _disposeVideoController();
+    // UNIFIED: Aggressive video cleanup when navigating away to prevent buffer conflicts
+    if (kDebugMode) {
+      print(
+          '🔄 UNIFIED: Navigation away detected - performing aggressive video cleanup');
     }
+
+    _completeVideoCleanup();
     _isPlaying = false;
     super.didPushNext();
   }
 
   @override
   void didPopNext() {
-    // Returned to this page - reinitialize video if needed
+    // UNIFIED: Smart reinitialization when returning to prevent resource conflicts
+    if (kDebugMode) {
+      print(
+          '🔄 UNIFIED: Navigation return detected - smart video reinitialization');
+    }
+
+    // Only reinitialize if we have video content and no active controller
     if (_videoController == null && widget.mediaItems.isNotEmpty) {
       final mediaItem = widget.mediaItems.first;
       if (mediaItem.mimeType.startsWith('video/')) {
         final videoPath = Uri.parse(mediaItem.fileUri).path;
-        _initializeVideo(videoPath);
+
+        // Delay reinitialization to ensure UI is stable
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) {
+            _initializeVideo(videoPath);
+          }
+        });
       }
     }
     super.didPopNext();

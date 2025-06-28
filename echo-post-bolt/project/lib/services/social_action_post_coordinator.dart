@@ -2575,7 +2575,7 @@ class SocialActionPostCoordinator extends ChangeNotifier {
   }
 
   /// Load historical post back into coordinator for editing
-  /// This surgically rehydrates coordinator state without breaking existing flows
+  /// UNIFIED: Routes all media through replaceMedia() pipeline to eliminate duplication
   Future<void> loadHistoricalPost(SocialAction historicalAction) async {
     if (_isDisposed) {
       throw StateError('Cannot load historical post - coordinator is disposed');
@@ -2584,86 +2584,92 @@ class SocialActionPostCoordinator extends ChangeNotifier {
     try {
       if (kDebugMode) {
         print(
-            '🔄 Loading historical post for editing: ${historicalAction.actionId}');
+            '🔄 UNIFIED: Loading historical post via replaceMedia pipeline: ${historicalAction.actionId}');
         print('   Original platforms: ${historicalAction.platforms}');
         print('   Media count: ${historicalAction.content.media.length}');
         print('   Text: "${historicalAction.content.text}"');
         print('   Hashtags: ${historicalAction.content.hashtags}');
       }
 
-      // Step 1: Validate and recover media URIs if present
-      SocialAction validatedAction = historicalAction;
-      if (historicalAction.content.media.isNotEmpty) {
-        validatedAction = await validateAndRecoverPostMedia(
-          historicalAction,
-          config: kDebugMode
-              ? MediaValidationConfig.debug
-              : MediaValidationConfig.production,
-        );
-
-        if (kDebugMode) {
-          print('📱 Media validation completed');
-          print(
-              '   Original media count: ${historicalAction.content.media.length}');
-          print(
-              '   Validated media count: ${validatedAction.content.media.length}');
-        }
-      }
-
-      // Step 2: Generate new action ID for editing (preserves original as draft)
-      final editingActionId = 'edit_${DateTime.now().millisecondsSinceEpoch}';
-      final editingAction = validatedAction.copyWith(
-        actionId: editingActionId,
-        createdAt: DateTime.now().toIso8601String(),
-        // Strip media here; it will be re-attached via the standard
-        // pre-selection pipeline so we use the exact same flow as a fresh pick.
-        content: validatedAction.content.copyWith(media: []),
-      );
-
-      // Step 3: Route historical media through the SAME pre-selection mechanism
-      _preSelectedMedia = List<MediaItem>.from(validatedAction.content.media);
-
-      // Step 4: Sync coordinator state (media will be merged by _syncMediaStates)
-      _currentPost = editingAction;
-      _currentTranscription = editingAction.internal.originalTranscription;
-
-      // Step 5: Update coordinator state flags
-      _hasContent = editingAction.content.text.isNotEmpty ||
-          editingAction.content.hashtags.isNotEmpty;
-      _hasMedia = editingAction.content.media.isNotEmpty;
-      _needsMediaSelection = false; // Editing existing post
-      _hasError = false;
-      _errorMessage = null;
-      _isRecording = false;
-      _isProcessing = false;
-      _isTransitioning = false;
-
-      // Step 6: Ensure coordinator is in clean editing state
+      // Step 1: Reset coordinator to clean state first
+      _initializeCleanPost();
       _endTextEditingSession();
       _endHashtagEditingSession();
       _statusTimer?.cancel();
       _processingWatchdog?.cancel();
       _temporaryStatus = null;
 
-      // Step 7: Sync media states for consistency
-      _syncMediaStates();
+      // Step 2: Validate and recover media URIs if present
+      List<MediaItem> validatedMedia = [];
+      if (historicalAction.content.media.isNotEmpty) {
+        final validatedAction = await validateAndRecoverPostMedia(
+          historicalAction,
+          config: kDebugMode
+              ? MediaValidationConfig.debug
+              : MediaValidationConfig.production,
+        );
+        validatedMedia = validatedAction.content.media;
 
-      // Step 8: CRITICAL - Defer UI notification until next frame to prevent setState during build
+        if (kDebugMode) {
+          print('📱 UNIFIED: Media validation completed');
+          print(
+              '   Original media count: ${historicalAction.content.media.length}');
+          print('   Validated media count: ${validatedMedia.length}');
+        }
+      }
+
+      // Step 3: Create editing post WITHOUT media (will be added via replaceMedia)
+      final editingActionId = 'edit_${DateTime.now().millisecondsSinceEpoch}';
+      _currentPost = historicalAction.copyWith(
+        actionId: editingActionId,
+        createdAt: DateTime.now().toIso8601String(),
+        content: historicalAction.content
+            .copyWith(media: []), // CRITICAL: No media duplication
+      );
+      _currentTranscription = historicalAction.internal.originalTranscription;
+
+      // Step 4: UNIFIED MEDIA ROUTING - Use replaceMedia as single source of truth
+      if (validatedMedia.isNotEmpty) {
+        if (kDebugMode) {
+          print(
+              '🔄 UNIFIED: Routing ${validatedMedia.length} media items through replaceMedia pipeline');
+        }
+
+        // Use the existing validated replaceMedia pipeline
+        await replaceMedia(validatedMedia);
+      } else {
+        // No media to route, just update state flags
+        _hasContent = _currentPost.content.text.isNotEmpty ||
+            _currentPost.content.hashtags.isNotEmpty;
+        _hasMedia = false;
+        _needsMediaSelection = false;
+      }
+
+      // Step 5: Update remaining coordinator state flags
+      _hasError = false;
+      _errorMessage = null;
+      _isRecording = false;
+      _isProcessing = false;
+      _isTransitioning = false;
+
+      // Step 6: CRITICAL - Defer UI notification until next frame to prevent setState during build
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _safeNotifyListeners();
       });
 
       if (kDebugMode) {
-        print('✅ Historical post loaded successfully');
+        print(
+            '✅ UNIFIED: Historical post loaded successfully via replaceMedia pipeline');
         print('   Editing action ID: $editingActionId');
         print('   hasContent: $_hasContent');
         print('   hasMedia: $_hasMedia');
         print('   Current platforms: ${_currentPost.platforms}');
+        print('   Media routed through single pipeline - no duplication');
         print('   Ready for editing on CommandScreen');
       }
     } catch (e) {
       if (kDebugMode) {
-        print('❌ Failed to load historical post: $e');
+        print('❌ UNIFIED: Failed to load historical post: $e');
       }
       setError('Failed to load post for editing: $e');
       rethrow;
