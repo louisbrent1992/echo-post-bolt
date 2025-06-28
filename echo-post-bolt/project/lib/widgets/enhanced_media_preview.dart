@@ -56,6 +56,14 @@ class _EnhancedMediaPreviewState extends State<EnhancedMediaPreview>
   bool _isInBuildPhase = false;
   bool _hasPendingStateUpdate = false;
 
+  // FIXED: Remove static cache that was causing controller conflicts
+  // Use instance-level cache instead for better memory management
+  Uint8List? _cachedThumbnail;
+  String? _cachedThumbnailPath;
+
+  // Add video completion tracking
+  bool _hasVideoCompleted = false;
+
   @override
   void initState() {
     super.initState();
@@ -72,8 +80,8 @@ class _EnhancedMediaPreviewState extends State<EnhancedMediaPreview>
         : null;
 
     if (newMediaPath != _lastVideoPath) {
-      // CRITICAL: Dispose existing controller before reinitializing to prevent memory leaks
-      _disposeVideoController();
+      // CRITICAL: Complete cleanup before reinitializing
+      _completeVideoCleanup();
       _initializeMedia();
     }
 
@@ -85,18 +93,37 @@ class _EnhancedMediaPreviewState extends State<EnhancedMediaPreview>
 
   @override
   void dispose() {
-    _disposeVideoController();
+    _completeVideoCleanup();
     // Unsubscribe from route observer
     routeObserver.unsubscribe(this);
     super.dispose();
   }
 
+  /// CRITICAL: Complete video cleanup including all resources
+  void _completeVideoCleanup() {
+    _disposeVideoController();
+    _cachedThumbnail = null;
+    _cachedThumbnailPath = null;
+    _hasVideoCompleted = false;
+  }
+
   void _disposeVideoController() {
-    _videoController?.removeListener(_videoListener);
-    _videoController?.dispose();
-    _videoController = null;
-    _isVideoInitialized = false;
-    _isPlaying = false;
+    if (_videoController != null) {
+      // Pause playback before disposal to ensure clean shutdown
+      _videoController!.pause();
+      // Remove listener to prevent memory leaks
+      _videoController!.removeListener(_videoListener);
+      // Ensure proper resource cleanup
+      _videoController!.dispose();
+      _videoController = null;
+      _isVideoInitialized = false;
+      _isPlaying = false;
+      _hasVideoCompleted = false;
+
+      if (kDebugMode) {
+        print('🧹 Video controller disposed and resources cleaned up');
+      }
+    }
   }
 
   Future<void> _initializeMedia() async {
@@ -151,6 +178,17 @@ class _EnhancedMediaPreviewState extends State<EnhancedMediaPreview>
   Future<void> _generateVideoThumbnail(String videoPath) async {
     if (_isGeneratingThumbnail) return;
 
+    // Check cache first
+    if (_cachedThumbnailPath == videoPath) {
+      if (mounted) {
+        setState(() {
+          _videoThumbnail = _cachedThumbnail;
+          _isGeneratingThumbnail = false;
+        });
+      }
+      return;
+    }
+
     setState(() {
       _isGeneratingThumbnail = true;
       _videoThumbnail = null;
@@ -161,27 +199,47 @@ class _EnhancedMediaPreviewState extends State<EnhancedMediaPreview>
       final assetEntity = await _findAssetEntityByPath(videoPath);
 
       if (assetEntity != null) {
-        // Use PhotoManager to generate thumbnail
-        final thumbnailData = await assetEntity.thumbnailDataWithSize(
+        // Generate a low-res thumbnail first for quick display
+        final quickThumbnail = await assetEntity.thumbnailDataWithSize(
+          const ThumbnailSize(100, 100),
+          quality: 60,
+        );
+
+        // Show low-res thumbnail immediately if available
+        if (mounted && quickThumbnail != null) {
+          setState(() {
+            _videoThumbnail = quickThumbnail;
+            _cachedThumbnail = quickThumbnail;
+            _cachedThumbnailPath = videoPath;
+          });
+        }
+
+        // Then generate high-quality thumbnail
+        final highQualityThumbnail = await assetEntity.thumbnailDataWithSize(
           const ThumbnailSize(400, 400),
           quality: 80,
         );
 
-        if (mounted && thumbnailData != null) {
+        if (mounted && highQualityThumbnail != null) {
+          // Cache the high-quality thumbnail
+          _cachedThumbnail = highQualityThumbnail;
+          _cachedThumbnailPath = videoPath;
+
           setState(() {
-            _videoThumbnail = thumbnailData;
+            _videoThumbnail = highQualityThumbnail;
             _isGeneratingThumbnail = false;
           });
 
           if (kDebugMode) {
-            print('✅ Generated video thumbnail using PhotoManager');
+            print(
+                '✅ Generated high-quality video thumbnail using PhotoManager');
           }
           return;
         }
       }
 
-      // Fallback: use video_thumbnail package for better thumbnail generation
-      await _generateThumbnailFromVideoPlayer(videoPath);
+      // Fallback to video_thumbnail package with progressive quality
+      await _generateProgressiveThumbnail(videoPath);
     } catch (e) {
       if (kDebugMode) {
         print('❌ Failed to generate video thumbnail: $e');
@@ -230,34 +288,58 @@ class _EnhancedMediaPreviewState extends State<EnhancedMediaPreview>
     return null;
   }
 
-  Future<void> _generateThumbnailFromVideoPlayer(String videoPath) async {
+  Future<void> _generateProgressiveThumbnail(String videoPath) async {
     try {
       final file = File(videoPath);
       if (!await file.exists()) return;
 
-      // Use video_thumbnail package for better thumbnail generation
-      final thumbnailData = await VideoThumbnail.thumbnailData(
+      // Generate low-quality thumbnail first
+      final quickThumbnail = await VideoThumbnail.thumbnailData(
+        video: videoPath,
+        imageFormat: ImageFormat.JPEG,
+        maxWidth: 100,
+        maxHeight: 100,
+        quality: 50,
+        timeMs: 1000,
+      );
+
+      // Show low-quality thumbnail immediately if available
+      if (mounted && quickThumbnail != null) {
+        setState(() {
+          _videoThumbnail = quickThumbnail;
+          _cachedThumbnail = quickThumbnail;
+          _cachedThumbnailPath = videoPath;
+        });
+      }
+
+      // Then generate high-quality thumbnail
+      final highQualityThumbnail = await VideoThumbnail.thumbnailData(
         video: videoPath,
         imageFormat: ImageFormat.JPEG,
         maxWidth: 400,
         maxHeight: 400,
         quality: 80,
-        timeMs: 1000, // Get thumbnail at 1 second
+        timeMs: 1000,
       );
 
-      if (mounted && thumbnailData != null) {
+      if (mounted && highQualityThumbnail != null) {
+        // Cache the high-quality thumbnail
+        _cachedThumbnail = highQualityThumbnail;
+        _cachedThumbnailPath = videoPath;
+
         setState(() {
-          _videoThumbnail = thumbnailData;
+          _videoThumbnail = highQualityThumbnail;
           _isGeneratingThumbnail = false;
         });
 
         if (kDebugMode) {
-          print('✅ Generated video thumbnail using video_thumbnail package');
+          print(
+              '✅ Generated high-quality video thumbnail using video_thumbnail package');
         }
         return;
       }
 
-      // Final fallback: just mark as complete without thumbnail
+      // Final fallback: just mark as complete
       if (mounted) {
         setState(() {
           _isGeneratingThumbnail = false;
@@ -265,8 +347,7 @@ class _EnhancedMediaPreviewState extends State<EnhancedMediaPreview>
       }
     } catch (e) {
       if (kDebugMode) {
-        print(
-            '❌ Failed to generate thumbnail from video_thumbnail package: $e');
+        print('❌ Failed to generate progressive thumbnail: $e');
       }
 
       if (mounted) {
@@ -289,11 +370,32 @@ class _EnhancedMediaPreviewState extends State<EnhancedMediaPreview>
         return;
       }
 
-      _videoController = VideoPlayerController.file(file);
+      // Create video player with optimized buffer configuration
+      _videoController = VideoPlayerController.file(
+        file,
+        videoPlayerOptions: VideoPlayerOptions(
+          mixWithOthers: true, // Allow mixing with other audio
+          allowBackgroundPlayback: false, // Prevent background resource usage
+        ),
+      );
+
+      // Add listener before initialization to catch early events
       _videoController!.addListener(_videoListener);
       _videoController!.setVolume(_isMuted ? 0.0 : 1.0);
 
-      await _videoController!.initialize();
+      // Set playback configuration for better buffering
+      _videoController!.setPlaybackSpeed(1.0); // Ensure normal playback speed
+
+      // Initialize with a timeout to prevent hanging
+      await _videoController!.initialize().timeout(
+        const Duration(seconds: 10),
+        onTimeout: () {
+          throw TimeoutException('Video initialization timed out');
+        },
+      );
+
+      // Reset completion flag for new video
+      _hasVideoCompleted = false;
 
       if (mounted) {
         setState(() {
@@ -303,6 +405,8 @@ class _EnhancedMediaPreviewState extends State<EnhancedMediaPreview>
 
       if (kDebugMode) {
         print('✅ Video initialized: ${_videoController!.value.duration}');
+        print('   Video path: $videoPath');
+        print('   Ready for playback');
       }
     } catch (e) {
       if (kDebugMode) {
@@ -314,16 +418,56 @@ class _EnhancedMediaPreviewState extends State<EnhancedMediaPreview>
           _isVideoInitialized = false;
         });
       }
+
+      // Clean up on error
+      _disposeVideoController();
     }
   }
 
   void _videoListener() {
     if (_videoController != null && mounted && !_isInBuildPhase) {
-      setState(() {
-        _isPlaying = _videoController!.value.isPlaying;
-      });
+      final isCurrentlyPlaying = _videoController!.value.isPlaying;
+      final position = _videoController!.value.position;
+      final duration = _videoController!.value.duration;
+
+      // Check for video completion
+      if (!_hasVideoCompleted &&
+          duration.inMilliseconds > 0 &&
+          position.inMilliseconds >= duration.inMilliseconds - 100) {
+        _hasVideoCompleted = true;
+        _handleVideoCompletion();
+      }
+
+      // Only update state if playing status actually changed
+      if (_isPlaying != isCurrentlyPlaying) {
+        setState(() {
+          _isPlaying = isCurrentlyPlaying;
+        });
+      }
     } else if (_videoController != null && mounted && _isInBuildPhase) {
       _hasPendingStateUpdate = true;
+    }
+  }
+
+  /// Handle video completion - reset for replay
+  void _handleVideoCompletion() {
+    if (_videoController != null && mounted) {
+      // Pause the video
+      _videoController!.pause();
+
+      // Reset to beginning for replay capability
+      _videoController!.seekTo(Duration.zero);
+
+      if (mounted) {
+        setState(() {
+          _isPlaying = false;
+          _hasVideoCompleted = false; // Allow replay
+        });
+      }
+
+      if (kDebugMode) {
+        print('🔄 Video completed - reset for replay');
+      }
     }
   }
 
@@ -450,10 +594,19 @@ class _EnhancedMediaPreviewState extends State<EnhancedMediaPreview>
       return Stack(
         fit: StackFit.expand,
         children: [
-          // Thumbnail as background
+          // Thumbnail as background with memory optimization
           Image.memory(
             _videoThumbnail!,
             fit: BoxFit.cover,
+            gaplessPlayback: true, // Prevent flickering during transitions
+            frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
+              if (wasSynchronouslyLoaded) return child;
+              return AnimatedOpacity(
+                opacity: frame == null ? 0 : 1,
+                duration: const Duration(milliseconds: 300),
+                child: child,
+              );
+            },
             errorBuilder: (context, error, stackTrace) {
               return _buildVideoPlayerOrLoading();
             },
@@ -461,13 +614,15 @@ class _EnhancedMediaPreviewState extends State<EnhancedMediaPreview>
 
           // If video is playing, overlay the video player with proper cropping
           if (_isPlaying && _isVideoInitialized && _videoController != null)
-            Center(
-              child: AspectRatio(
-                aspectRatio: _videoController!.value.aspectRatio,
-                child: Transform.scale(
-                  scale:
-                      _calculateVideoScale(_videoController!.value.aspectRatio),
-                  child: VideoPlayer(_videoController!),
+            RepaintBoundary(
+              child: Center(
+                child: AspectRatio(
+                  aspectRatio: _videoController!.value.aspectRatio,
+                  child: Transform.scale(
+                    scale: _calculateVideoScale(
+                        _videoController!.value.aspectRatio),
+                    child: VideoPlayer(_videoController!),
+                  ),
                 ),
               ),
             ),
@@ -480,12 +635,14 @@ class _EnhancedMediaPreviewState extends State<EnhancedMediaPreview>
 
   Widget _buildVideoPlayerOrLoading() {
     if (_isVideoInitialized && _videoController != null) {
-      return Center(
-        child: AspectRatio(
-          aspectRatio: _videoController!.value.aspectRatio,
-          child: Transform.scale(
-            scale: _calculateVideoScale(_videoController!.value.aspectRatio),
-            child: VideoPlayer(_videoController!),
+      return RepaintBoundary(
+        child: Center(
+          child: AspectRatio(
+            aspectRatio: _videoController!.value.aspectRatio,
+            child: Transform.scale(
+              scale: _calculateVideoScale(_videoController!.value.aspectRatio),
+              child: VideoPlayer(_videoController!),
+            ),
           ),
         ),
       );
@@ -498,9 +655,13 @@ class _EnhancedMediaPreviewState extends State<EnhancedMediaPreview>
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             if (_isGeneratingThumbnail || !_isVideoInitialized) ...[
-              const CircularProgressIndicator(
-                valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFFF0055)),
-                strokeWidth: 2,
+              const SizedBox(
+                width: 24,
+                height: 24,
+                child: CircularProgressIndicator(
+                  valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFFF0055)),
+                  strokeWidth: 2,
+                ),
               ),
               const SizedBox(height: 8),
               Text(
@@ -869,7 +1030,7 @@ class _EnhancedMediaPreviewState extends State<EnhancedMediaPreview>
   void didChangeDependencies() {
     super.didChangeDependencies();
 
-    // Subscribe to route changes so we can pause the video when this screen is covered
+    // Subscribe to route changes for better memory management
     final ModalRoute? route = ModalRoute.of(context);
     if (route is PageRoute) {
       routeObserver.subscribe(this, route);
@@ -878,15 +1039,26 @@ class _EnhancedMediaPreviewState extends State<EnhancedMediaPreview>
 
   @override
   void didPushNext() {
-    // Another page is on top of us → pause playback to avoid background updates
-    _videoController?.pause();
+    // Another page is on top of us → pause playback and release resources
+    if (_videoController != null) {
+      _videoController!.pause();
+      // Always dispose video controller when navigating away to prevent conflicts
+      _disposeVideoController();
+    }
     _isPlaying = false;
     super.didPushNext();
   }
 
   @override
   void didPopNext() {
-    // Returned to this page; we leave it paused (user can tap play)
+    // Returned to this page - reinitialize video if needed
+    if (_videoController == null && widget.mediaItems.isNotEmpty) {
+      final mediaItem = widget.mediaItems.first;
+      if (mediaItem.mimeType.startsWith('video/')) {
+        final videoPath = Uri.parse(mediaItem.fileUri).path;
+        _initializeVideo(videoPath);
+      }
+    }
     super.didPopNext();
   }
 
