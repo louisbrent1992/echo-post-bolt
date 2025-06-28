@@ -482,8 +482,11 @@ class _FacebookAccountSelectorState extends State<FacebookAccountSelector> {
             if (!_isPage)
               const Padding(
                 padding: EdgeInsets.only(top: 4),
-                child: Text('Manual sharing to your timeline',
-                    style: TextStyle(color: Colors.blueAccent, fontSize: 12)),
+                child: Text(
+                  'Manual sharing to your timeline. This will open the Facebook app for you to complete your post.',
+                  style: TextStyle(color: Colors.blueAccent, fontSize: 12),
+                  textAlign: TextAlign.left,
+                ),
               ),
           ],
         );

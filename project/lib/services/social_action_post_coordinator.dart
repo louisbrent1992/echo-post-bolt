@@ -2562,7 +2562,7 @@ class SocialActionPostCoordinator extends ChangeNotifier {
     try {
       if (kDebugMode) {
         print(
-            '🔄 Loading historical post for editing: ${historicalAction.actionId}');
+            '🔄 Loading historical post for editing: [1m${historicalAction.actionId}[0m');
         print('   Original platforms: ${historicalAction.platforms}');
         print('   Media count: ${historicalAction.content.media.length}');
         print('   Text: "${historicalAction.content.text}"');
@@ -2589,11 +2589,32 @@ class SocialActionPostCoordinator extends ChangeNotifier {
       }
 
       // Step 2: Generate new action ID for editing (preserves original as draft)
-      final editingActionId = 'edit_${DateTime.now().millisecondsSinceEpoch}';
-      final editingAction = validatedAction.copyWith(
+      final editingActionId =
+          'edit_[1m${DateTime.now().millisecondsSinceEpoch}[0m';
+      var editingAction = validatedAction.copyWith(
         actionId: editingActionId,
         createdAt: DateTime.now().toIso8601String(),
       );
+
+      // --- PATCH: Ensure Facebook platform/account info is always present for edit ---
+      // If the post was for Facebook, ensure platforms and platformData.facebook are set
+      if (historicalAction.platforms.contains('facebook')) {
+        final platforms = List<String>.from(editingAction.platforms);
+        if (!platforms.contains('facebook')) {
+          platforms.add('facebook');
+        }
+        PlatformData platformData = editingAction.platformData;
+        if (platformData.facebook == null &&
+            historicalAction.platformData.facebook != null) {
+          platformData = platformData.copyWith(
+              facebook: historicalAction.platformData.facebook);
+        }
+        editingAction = editingAction.copyWith(
+          platforms: platforms,
+          platformData: platformData,
+        );
+      }
+      // --- END PATCH ---
 
       // Step 3: Sync coordinator state with validated action
       _currentPost = editingAction;

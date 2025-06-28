@@ -271,6 +271,35 @@ class SocialPostService {
       print('  Media count: ${action.content.media.length}');
     }
 
+    // --- PATCH: Use share_plus for user timeline (manual sharing) ---
+    final fbData = action.platformData.facebook;
+    final postAsPage = fbData?.postAsPage == true;
+    if (!postAsPage) {
+      // User selected to post to their own timeline: use share_plus
+      if (kDebugMode) {
+        print(
+            '🔗 User selected My Timeline. Using share_plus for manual sharing.');
+      }
+      // Prepare text and media for sharing
+      final text = formattedContent;
+      if (action.content.media.isNotEmpty) {
+        // Only share the first image for simplicity
+        final media = action.content.media.first;
+        final fileUri = media.fileUri;
+        if (fileUri.startsWith('file://')) {
+          final filePath = fileUri.replaceFirst('file://', '');
+          await Share.shareXFiles([XFile(filePath)], text: text);
+        } else {
+          // If not a file URI, just share the text
+          await Share.share(text);
+        }
+      } else {
+        await Share.share(text);
+      }
+      return;
+    }
+    // --- END PATCH ---
+
     try {
       // Get Facebook access token from Firestore
       final uid = _auth.currentUser?.uid;
@@ -302,36 +331,35 @@ class SocialPostService {
       }
 
       // Determine posting target and get appropriate token
-      final facebookData = action.platformData.facebook;
       String endpoint;
       String accessToken;
       String targetId;
       bool isPagePost = false;
 
       // Use user selection to determine if posting as page or user
-      if (facebookData?.postAsPage == true &&
-          facebookData?.pageId != null &&
-          facebookData!.pageId.isNotEmpty) {
+      if (fbData?.postAsPage == true &&
+          fbData?.pageId != null &&
+          fbData!.pageId.isNotEmpty) {
         // Post as page
         isPagePost = true;
-        targetId = facebookData.pageId;
+        targetId = fbData.pageId;
         endpoint = 'https://graph.facebook.com/v23.0/me/feed';
         if (kDebugMode) {
           print(
-              '  📄 User selected to post as Facebook page: ${facebookData.pageId}');
+              '  📄 User selected to post as Facebook page: ${fbData.pageId}');
         }
         // Validate page access and permissions
         if (_authService != null) {
           try {
             final canPost =
-                await _authService!.canPostToFacebookPage(facebookData.pageId);
+                await _authService!.canPostToFacebookPage(fbData.pageId);
             if (!canPost) {
               throw Exception(
                   'You do not have permission to post to this Facebook page. Please ensure you are an admin, editor, or moderator of the page.');
             }
             if (kDebugMode) {
               print(
-                  '  ✅ Page posting permission verified for page: ${facebookData.pageId}');
+                  '  ✅ Page posting permission verified for page: ${fbData.pageId}');
             }
           } catch (e) {
             if (kDebugMode) {
@@ -343,12 +371,12 @@ class SocialPostService {
         // Get page access token for posting to pages
         try {
           final pageAccessToken =
-              await _getPageAccessToken(userAccessToken, facebookData.pageId);
+              await _getPageAccessToken(userAccessToken, fbData.pageId);
           if (pageAccessToken != null) {
             accessToken = pageAccessToken;
             if (kDebugMode) {
               print(
-                  '  ✅ Using page access token for posting to page: ${facebookData.pageId}');
+                  '  ✅ Using page access token for posting to page: ${fbData.pageId}');
             }
           } else {
             // Fallback to user timeline if page access token fails
@@ -423,7 +451,7 @@ class SocialPostService {
           }
         } else if (mimeType != null && mimeType.startsWith('video/')) {
           // For videos, use the videos endpoint
-          final postType = facebookData?.postType;
+          final postType = fbData?.postType;
           if (postType == 'video') {
             endpoint = endpoint.replaceFirst('/feed', '/videos');
             final mediaUrl = await _uploadMediaToFacebook(
@@ -597,9 +625,9 @@ class SocialPostService {
       }
 
       // Handle scheduled posts
-      if (facebookData?.scheduledTime != null) {
+      if (fbData?.scheduledTime != null) {
         try {
-          final scheduledTime = DateTime.parse(facebookData!.scheduledTime!);
+          final scheduledTime = DateTime.parse(fbData!.scheduledTime!);
           if (scheduledTime.isAfter(DateTime.now())) {
             postData['published'] = false;
             postData['scheduled_publish_time'] =
@@ -611,7 +639,7 @@ class SocialPostService {
         } catch (e) {
           if (kDebugMode) {
             print(
-                '  ⚠️ Invalid scheduled time format: ${facebookData!.scheduledTime}');
+                '  ⚠️ Invalid scheduled time format: ${fbData!.scheduledTime}');
           }
         }
       }

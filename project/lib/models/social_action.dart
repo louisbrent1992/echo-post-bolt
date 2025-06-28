@@ -288,6 +288,22 @@ class PlatformData {
       _$PlatformDataFromJson(json);
 
   Map<String, dynamic> toJson() => _$PlatformDataToJson(this);
+
+  PlatformData copyWith({
+    FacebookData? facebook,
+    InstagramData? instagram,
+    YouTubeData? youtube,
+    TwitterData? twitter,
+    TikTokData? tiktok,
+  }) {
+    return PlatformData(
+      facebook: facebook ?? this.facebook,
+      instagram: instagram ?? this.instagram,
+      youtube: youtube ?? this.youtube,
+      twitter: twitter ?? this.twitter,
+      tiktok: tiktok ?? this.tiktok,
+    );
+  }
 }
 
 /// FacebookData: Enhanced for different post types and media formats
