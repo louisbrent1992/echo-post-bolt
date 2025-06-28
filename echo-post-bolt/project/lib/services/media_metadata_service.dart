@@ -413,27 +413,22 @@ class MediaMetadataService extends ChangeNotifier {
       // Extract basic video metadata (width, height) for videos
       if (mimeType.startsWith('video/')) {
         try {
-          // Generate a small thumbnail and read its intrinsic size
-          final thumbData = await VideoThumbnail.thumbnailData(
-            video: file.path,
-            imageFormat: ImageFormat.JPEG,
-            maxWidth: 64,
-            maxHeight: 64,
-            quality: 1,
-            timeMs: 1000, // grab frame at 1-second mark to avoid black frames
-          );
+          // FIXED: Don't extract dimensions from thumbnails - use reasonable defaults
+          // The NativeVideoWidget will get real dimensions at runtime via native methods
+          metadata['width'] = 1920; // Default HD width
+          metadata['height'] = 1080; // Default HD height
 
-          if (thumbData != null) {
-            final completer = Completer<ui.Image>();
-            ui.decodeImageFromList(thumbData, completer.complete);
-            final uiImage = await completer.future;
-            metadata['width'] = uiImage.width;
-            metadata['height'] = uiImage.height;
+          if (kDebugMode) {
+            print(
+                '📹 Video: Using default dimensions 1920×1080 (runtime will detect actual size)');
           }
         } catch (e) {
           if (kDebugMode) {
-            print('⚠️ Failed to extract video dimensions: $e');
+            print('⚠️ Failed to extract video metadata: $e');
           }
+          // Set reasonable defaults
+          metadata['width'] = 1920;
+          metadata['height'] = 1080;
         }
       }
 
@@ -1104,27 +1099,22 @@ class MediaMetadataService extends ChangeNotifier {
       // Extract basic video metadata (width, height) for videos
       if (mimeType.startsWith('video/')) {
         try {
-          // Generate a small thumbnail and read its intrinsic size
-          final thumbData = await VideoThumbnail.thumbnailData(
-            video: file.path,
-            imageFormat: ImageFormat.JPEG,
-            maxWidth: 64,
-            maxHeight: 64,
-            quality: 1,
-            timeMs: 1000, // grab frame at 1-second mark to avoid black frames
-          );
+          // FIXED: Don't extract dimensions from thumbnails - use reasonable defaults
+          // The NativeVideoWidget will get real dimensions at runtime via native methods
+          metadata['width'] = 1920; // Default HD width
+          metadata['height'] = 1080; // Default HD height
 
-          if (thumbData != null) {
-            final completer = Completer<ui.Image>();
-            ui.decodeImageFromList(thumbData, completer.complete);
-            final uiImage = await completer.future;
-            metadata['width'] = uiImage.width;
-            metadata['height'] = uiImage.height;
+          if (kDebugMode) {
+            print(
+                '📹 Video: Using default dimensions 1920×1080 (runtime will detect actual size)');
           }
         } catch (e) {
           if (kDebugMode) {
-            print('⚠️ Failed to extract video dimensions: $e');
+            print('⚠️ Failed to extract video metadata: $e');
           }
+          // Set reasonable defaults
+          metadata['width'] = 1920;
+          metadata['height'] = 1080;
         }
       }
 

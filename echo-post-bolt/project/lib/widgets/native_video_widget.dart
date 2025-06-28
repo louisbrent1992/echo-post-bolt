@@ -103,9 +103,34 @@ class _WebVideoPlayerState extends State<_WebVideoPlayer> {
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+
+    // Check if we're navigating away from this screen
+    final route = ModalRoute.of(context);
+    if (route != null && !route.isCurrent) {
+      // Pause video when navigating away
+      _pauseOnNavigateAway();
+    }
+  }
+
+  @override
   void dispose() {
+    // Stop playback before disposing controller
+    _pauseOnNavigateAway();
+
     _controller?.dispose();
     super.dispose();
+  }
+
+  /// Pause video playback when navigating away or disposing
+  void _pauseOnNavigateAway() {
+    if (_controller != null && _controller!.value.isPlaying) {
+      _controller!.pause();
+      if (kDebugMode) {
+        print('🌐 Web: Video paused on navigate-away/dispose');
+      }
+    }
   }
 
   Future<void> _initializeController() async {
@@ -196,18 +221,60 @@ class _WebVideoPlayerState extends State<_WebVideoPlayer> {
       return _buildLoadingState();
     }
 
+    // Show loading state if no video path
+    if (widget.videoPath == null) {
+      return _buildLoadingState();
+    }
+
     return GestureDetector(
       onTap: widget.onTap,
       child: Container(
+        width: double.infinity, // Force full width
+        height: double.infinity, // Force full height
         color: widget.backgroundColor,
         child: Stack(
           children: [
-            // Video player
-            SizedBox.expand(
-              child: AspectRatio(
-                aspectRatio: _controller!.value.aspectRatio,
-                child: VideoPlayer(_controller!),
-              ),
+            // Video player with proper scaling using LayoutBuilder
+            LayoutBuilder(
+              builder: (context, constraints) {
+                // Use parent width directly; FittedBox handles scaling
+                final parentWidth = constraints.maxWidth == double.infinity
+                    ? MediaQuery.of(context).size.width
+                    : constraints.maxWidth;
+                if (parentWidth <= 0) {
+                  return _buildLoadingState();
+                }
+
+                return FutureBuilder<Size>(
+                  future: _getWebVideoSize(),
+                  builder: (context, snapshot) {
+                    if (!snapshot.hasData || snapshot.data == null) {
+                      return _buildLoadingState();
+                    }
+
+                    final videoSize = snapshot.data!;
+                    const alignment = Alignment.center;
+
+                    return SizedBox(
+                      width: parentWidth,
+                      height: constraints.maxHeight == double.infinity
+                          ? 250
+                          : constraints.maxHeight,
+                      child: ClipRect(
+                        child: FittedBox(
+                          fit: BoxFit.cover,
+                          alignment: alignment,
+                          child: SizedBox(
+                            width: videoSize.width,
+                            height: videoSize.height,
+                            child: VideoPlayer(_controller!),
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                );
+              },
             ),
 
             // Loading overlay
@@ -225,6 +292,27 @@ class _WebVideoPlayerState extends State<_WebVideoPlayer> {
         ),
       ),
     );
+  }
+
+  /// Get video size for web platform
+  Future<Size> _getWebVideoSize() async {
+    if (_controller != null && _controller!.value.isInitialized) {
+      final size = _controller!.value.size;
+      // Ensure we never return zero dimensions
+      if (size.width > 0 && size.height > 0) {
+        if (kDebugMode) {
+          print(
+              '🌐 Web: Video size from controller: ${size.width}×${size.height}');
+        }
+        return size;
+      }
+    }
+
+    if (kDebugMode) {
+      print('🌐 Web: Using default video size (controller not ready)');
+    }
+    return const Size(
+        1920, 1080); // Default size - never use MediaItem dimensions
   }
 
   Widget _buildLoadingState() {
@@ -372,10 +460,36 @@ class _MobileVideoPlayerState extends State<_MobileVideoPlayer> {
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+
+    // Check if we're navigating away from this screen
+    final route = ModalRoute.of(context);
+    if (route != null && !route.isCurrent) {
+      // Pause video when navigating away
+      _pauseOnNavigateAway();
+    }
+  }
+
+  @override
   void dispose() {
     _loadingDebounceTimer?.cancel();
     _nativePlayer.removeListener(_playerListener);
+
+    // Stop playback when widget is disposed
+    _pauseOnNavigateAway();
+
     super.dispose();
+  }
+
+  /// Pause video playback when navigating away or disposing
+  void _pauseOnNavigateAway() {
+    if (_nativePlayer.isPlaying) {
+      _nativePlayer.pause();
+      if (kDebugMode) {
+        print('📱 Mobile: Video paused on navigate-away/dispose');
+      }
+    }
   }
 
   Future<void> _initializeTexture() async {
@@ -486,15 +600,62 @@ class _MobileVideoPlayerState extends State<_MobileVideoPlayer> {
       return _buildLoadingState();
     }
 
+    // Show loading state if no video path
+    if (widget.videoPath == null) {
+      return _buildLoadingState();
+    }
+
     return GestureDetector(
       onTap: widget.onTap,
       child: Container(
+        width: double.infinity, // Force full width
+        height: double.infinity, // Force full height
         color: widget.backgroundColor,
         child: Stack(
           children: [
-            // Native video texture
-            SizedBox.expand(
-              child: Texture(textureId: _textureId!),
+            // Video texture with proper scaling using LayoutBuilder
+            LayoutBuilder(
+              builder: (context, constraints) {
+                // Use parent width directly; FittedBox will handle scaling
+                final parentWidth = constraints.maxWidth == double.infinity
+                    ? MediaQuery.of(context).size.width
+                    : constraints.maxWidth;
+
+                if (parentWidth <= 0) {
+                  return _buildLoadingState();
+                }
+
+                return FutureBuilder<Size>(
+                  future: NativeVideoPlayer.instance
+                      .getVideoSize(widget.videoPath!),
+                  builder: (context, snapshot) {
+                    if (!snapshot.hasData || snapshot.data == null) {
+                      return _buildLoadingState();
+                    }
+
+                    final videoSize = snapshot.data!;
+                    const alignment = Alignment.center;
+
+                    return SizedBox(
+                      width: parentWidth,
+                      height: constraints.maxHeight == double.infinity
+                          ? 250
+                          : constraints.maxHeight,
+                      child: ClipRect(
+                        child: FittedBox(
+                          fit: BoxFit.cover,
+                          alignment: alignment,
+                          child: SizedBox(
+                            width: videoSize.width,
+                            height: videoSize.height,
+                            child: Texture(textureId: _textureId!),
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                );
+              },
             ),
 
             // Loading overlay

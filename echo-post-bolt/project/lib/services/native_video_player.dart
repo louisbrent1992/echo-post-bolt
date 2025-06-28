@@ -87,7 +87,8 @@ class NativeVideoPlayer extends ChangeNotifier {
       }
 
       // Debounce: Schedule for later instead of dropping
-      _debounceTimer = Timer(Duration(milliseconds: _switchThrottleMs), () {
+      _debounceTimer =
+          Timer(const Duration(milliseconds: _switchThrottleMs), () {
         _switchVideoImmediate(videoPath);
       });
       return false;
@@ -119,6 +120,16 @@ class NativeVideoPlayer extends ChangeNotifier {
       if (success) {
         _currentVideoPath = videoPath;
         _isPlaying = false; // Reset play state on switch
+
+        // Fetch video dimensions after successful switch
+        try {
+          await getVideoSize(videoPath);
+        } catch (e) {
+          if (kDebugMode) {
+            print('⚠️ Could not fetch video dimensions: $e');
+          }
+        }
+
         notifyListeners();
 
         if (kDebugMode) {
@@ -186,6 +197,36 @@ class NativeVideoPlayer extends ChangeNotifier {
     return _isPlaying ? await pause() : await play();
   }
 
+  /// Get video dimensions from file path
+  Future<Size> getVideoSize(String path) async {
+    try {
+      if (kDebugMode) {
+        print('📐 Getting video size for: $path');
+      }
+
+      final result =
+          await _channel.invokeMethod('getVideoSize', {'path': path});
+      final resultMap = result as Map<dynamic, dynamic>;
+      final size = Size(
+        (resultMap['width'] as int).toDouble(),
+        (resultMap['height'] as int).toDouble(),
+      );
+
+      if (kDebugMode) {
+        print(
+            '📐 ✅ Video size detected: ${size.width.toInt()}×${size.height.toInt()}');
+      }
+
+      return size;
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ Failed to get video size for $path: $e');
+        print('📐 ⚠️ Using default size 1920×1080');
+      }
+      return const Size(1920, 1080); // Return default size on error
+    }
+  }
+
   /// Set video volume
   Future<bool> setVolume(double volume) async {
     volume = volume.clamp(0.0, 1.0);
@@ -213,10 +254,14 @@ class NativeVideoPlayer extends ChangeNotifier {
   }
 
   /// Explicit disposal for proper resource management
+  @override
   Future<void> dispose() async {
     _debounceTimer?.cancel();
 
-    if (!_isInitialized) return;
+    if (!_isInitialized) {
+      super.dispose();
+      return;
+    }
 
     try {
       if (kDebugMode) {
@@ -239,6 +284,8 @@ class NativeVideoPlayer extends ChangeNotifier {
       if (kDebugMode) {
         print('⚠️ Error disposing native player: $e');
       }
+    } finally {
+      super.dispose();
     }
   }
 }

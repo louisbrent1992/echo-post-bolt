@@ -59,6 +59,15 @@ public class NativeVideoPlayerPlugin: NSObject, FlutterPlugin {
                     return
                 }
                 self?.setVolume(volume: volume, result: result)
+            case "getVideoSize":
+                guard let args = call.arguments as? [String: Any],
+                      let path = args["path"] as? String else {
+                    result(FlutterError(code: "INVALID_ARGUMENT", 
+                                      message: "Video path is required", 
+                                      details: nil))
+                    return
+                }
+                self?.getVideoSize(path: path, result: result)
             case "dispose":
                 self?.disposePlayer(result: result)
             default:
@@ -199,6 +208,34 @@ public class NativeVideoPlayerPlugin: NSObject, FlutterPlugin {
         let clampedVolume = Float(max(0.0, min(1.0, volume)))
         player.volume = clampedVolume
         result(nil)
+    }
+    
+    private func getVideoSize(path: String, result: @escaping FlutterResult) {
+        print("📐 iOS: Getting video size for: \(path)")
+        
+        let url = URL(fileURLWithPath: path)
+        let asset = AVAsset(url: url)
+        let videoTrack = asset.tracks(withMediaType: .video).first
+        
+        if let videoTrack = videoTrack {
+            let size = videoTrack.naturalSize
+            let transform = videoTrack.preferredTransform
+            
+            // Calculate final dimensions considering rotation
+            let videoRect = CGRect(origin: .zero, size: size).applying(transform)
+            let videoSize = videoRect.size
+            
+            let finalWidth = Int(abs(videoSize.width))
+            let finalHeight = Int(abs(videoSize.height))
+            
+            print("📐 ✅ iOS: Video dimensions detected: \(finalWidth)×\(finalHeight)")
+            result(["width": finalWidth, "height": finalHeight])
+        } else {
+            print("❌ iOS: No video track found for: \(path)")
+            result(FlutterError(code: "NO_VIDEO_TRACK", 
+                              message: "No video track found", 
+                              details: nil))
+        }
     }
     
     private func disposePlayer(result: @escaping FlutterResult) {

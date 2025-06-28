@@ -11,6 +11,8 @@ import '../models/social_action.dart';
 import '../services/video_validation_service.dart';
 import '../constants/typography.dart';
 import '../route_observer.dart';
+import '../services/native_video_player.dart';
+import '../widgets/native_video_widget.dart';
 
 /// EnhancedMediaPreview: Video and image preview widget for command screen
 ///
@@ -576,22 +578,18 @@ class _EnhancedMediaPreviewState extends State<EnhancedMediaPreview>
   }
 
   void _togglePlayback() {
-    if (_videoController != null && _isVideoInitialized) {
-      if (_isPlaying) {
-        _videoController!.pause();
-      } else {
-        _videoController!.play();
-      }
-    }
+    // Use NativeVideoPlayer instance instead of video controller
+    NativeVideoPlayer.instance.togglePlayback();
   }
 
   void _toggleVolume() {
-    if (_videoController != null && _isVideoInitialized) {
-      setState(() {
-        _isMuted = !_isMuted;
-        _videoController!.setVolume(_isMuted ? 0.0 : 1.0);
-      });
-    }
+    // Toggle volume using native player
+    final currentVolume = NativeVideoPlayer.instance.volume;
+    final newVolume = currentVolume > 0 ? 0.0 : 1.0;
+    setState(() {
+      _isMuted = newVolume == 0.0;
+    });
+    NativeVideoPlayer.instance.setVolume(newVolume);
   }
 
   @override
@@ -617,14 +615,11 @@ class _EnhancedMediaPreviewState extends State<EnhancedMediaPreview>
         child: Stack(
           fit: StackFit.expand,
           children: [
-            // Media content
-            ClipRRect(
-              child: isVideo ? _buildVideoDisplay() : _buildImageDisplay(),
-            ),
+            // Media content - no ClipRRect to avoid constraint issues
+            isVideo ? _buildVideoDisplay() : _buildImageDisplay(),
 
-            // Video controls overlay (only show when video is playing or can play)
-            if (isVideo && (_isVideoInitialized || _videoThumbnail != null))
-              _buildVideoControls(),
+            // Video controls overlay (show for videos)
+            if (isVideo) _buildVideoControls(),
 
             // Platform compatibility indicators
             if (isVideo && widget.selectedPlatforms.isNotEmpty)
@@ -654,125 +649,20 @@ class _EnhancedMediaPreviewState extends State<EnhancedMediaPreview>
   }
 
   Widget _buildVideoDisplay() {
-    // Show thumbnail if available, otherwise show video player or loading
-    if (_videoThumbnail != null) {
-      return Stack(
-        fit: StackFit.expand,
-        children: [
-          // Thumbnail as background with memory optimization
-          Image.memory(
-            _videoThumbnail!,
-            fit: BoxFit.cover,
-            gaplessPlayback: true, // Prevent flickering during transitions
-            frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
-              if (wasSynchronouslyLoaded) return child;
-              return AnimatedOpacity(
-                opacity: frame == null ? 0 : 1,
-                duration: const Duration(milliseconds: 300),
-                child: child,
-              );
-            },
-            errorBuilder: (context, error, stackTrace) {
-              return _buildVideoPlayerOrLoading();
-            },
-          ),
+    final videoPath = Uri.parse(widget.mediaItems.first.fileUri).path;
 
-          // If video is playing, overlay the video player with proper cropping
-          if (_isPlaying && _isVideoInitialized && _videoController != null)
-            RepaintBoundary(
-              child: Center(
-                child: AspectRatio(
-                  aspectRatio: _videoController!.value.aspectRatio,
-                  child: Transform.scale(
-                    scale: _calculateVideoScale(
-                        _videoController!.value.aspectRatio),
-                    child: VideoPlayer(_videoController!),
-                  ),
-                ),
-              ),
-            ),
-        ],
-      );
-    }
-
-    return _buildVideoPlayerOrLoading();
-  }
-
-  Widget _buildVideoPlayerOrLoading() {
-    if (_isVideoInitialized && _videoController != null) {
-      return RepaintBoundary(
-        child: Center(
-          child: AspectRatio(
-            aspectRatio: _videoController!.value.aspectRatio,
-            child: Transform.scale(
-              scale: _calculateVideoScale(_videoController!.value.aspectRatio),
-              child: VideoPlayer(_videoController!),
-            ),
-          ),
-        ),
-      );
-    }
-
-    return Container(
-      decoration: const BoxDecoration(color: Color(0xFF2A2A2A)),
-      child: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            if (_isGeneratingThumbnail || !_isVideoInitialized) ...[
-              const SizedBox(
-                width: 24,
-                height: 24,
-                child: CircularProgressIndicator(
-                  valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFFF0055)),
-                  strokeWidth: 2,
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                _isGeneratingThumbnail
-                    ? 'Generating thumbnail...'
-                    : 'Loading video...',
-                style: const TextStyle(
-                  color: Colors.white70,
-                  fontSize: 12,
-                ),
-              ),
-            ] else ...[
-              const Icon(
-                Icons.videocam,
-                color: Colors.white54,
-                size: 48,
-              ),
-              const SizedBox(height: 8),
-              const Text(
-                'Video preview',
-                style: TextStyle(
-                  color: Colors.white70,
-                  fontSize: 12,
-                ),
-              ),
-            ],
-          ],
-        ),
+    // Use NativeVideoWidget with explicit sizing to fill container
+    return SizedBox(
+      width: double.infinity,
+      height: double.infinity,
+      child: NativeVideoWidget(
+        videoPath: videoPath,
+        autoPlay: false, // Keep autoplay off on command screen
+        volume: _isMuted ? 0.0 : 1.0,
+        backgroundColor: const Color(0xFF2A2A2A),
+        onTap: _togglePlayback,
       ),
     );
-  }
-
-  /// Calculate the scale factor needed to fill the width while maintaining aspect ratio
-  double _calculateVideoScale(double videoAspectRatio) {
-    // Get the container's aspect ratio (width/height = 250 pixels height from CommandScreen)
-    final containerWidth = MediaQuery.of(context).size.width;
-    const containerHeight = 250.0;
-    final containerAspectRatio = containerWidth / containerHeight;
-
-    if (videoAspectRatio < containerAspectRatio) {
-      // Video is taller than container - scale to match width
-      return containerAspectRatio / videoAspectRatio;
-    } else {
-      // Video is wider than container - scale to match height
-      return 1.0;
-    }
   }
 
   Widget _buildImageDisplay() {
@@ -805,48 +695,29 @@ class _EnhancedMediaPreviewState extends State<EnhancedMediaPreview>
   Widget _buildVideoControls() {
     return Stack(
       children: [
-        // Existing play/pause button in center
-        Positioned.fill(
-          child: Center(
-            child: GestureDetector(
-              onTap: _togglePlayback,
-              child: Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: Colors.black.withValues(alpha: 0.6),
-                  shape: BoxShape.circle,
-                ),
-                child: Icon(
-                  _isPlaying ? Icons.pause : Icons.play_arrow,
-                  color: Colors.white,
-                  size: 32,
-                ),
+        // Play/pause button in center - NativeVideoWidget handles this internally
+        // We can remove this since NativeVideoWidget has onTap for play/pause
+
+        // Volume control button in top-right (moved to avoid conflicts with pre-selected badge)
+        Positioned(
+          top: 12,
+          right: 12,
+          child: GestureDetector(
+            onTap: _toggleVolume,
+            child: Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: Colors.black.withValues(alpha: 0.6),
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: Icon(
+                _isMuted ? Icons.volume_off : Icons.volume_up,
+                color: Colors.white,
+                size: 20,
               ),
             ),
           ),
         ),
-
-        // Volume control button in top-left
-        if (_isVideoInitialized || _videoThumbnail != null)
-          Positioned(
-            top: 12,
-            left: 12,
-            child: GestureDetector(
-              onTap: _toggleVolume,
-              child: Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: Colors.black.withValues(alpha: 0.6),
-                  borderRadius: BorderRadius.circular(20),
-                ),
-                child: Icon(
-                  _isMuted ? Icons.volume_off : Icons.volume_up,
-                  color: Colors.white,
-                  size: 24,
-                ),
-              ),
-            ),
-          ),
       ],
     );
   }
@@ -957,20 +828,61 @@ class _EnhancedMediaPreviewState extends State<EnhancedMediaPreview>
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                Text(
-                  '${(_imageWidth ?? mediaItem.deviceMetadata.width)} × ${(_imageHeight ?? mediaItem.deviceMetadata.height)}',
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: AppTypography.small,
-                    fontWeight: FontWeight.w500,
-                  ),
+                Builder(
+                  builder: (context) {
+                    final mediaItem = widget.mediaItems.first;
+                    final isVideo = mediaItem.mimeType.startsWith('video/');
+
+                    if (isVideo) {
+                      // For videos: Use runtime detection via NativeVideoPlayer
+                      final videoPath = Uri.parse(mediaItem.fileUri).path;
+                      return FutureBuilder<Size>(
+                        future:
+                            NativeVideoPlayer.instance.getVideoSize(videoPath),
+                        builder: (context, snapshot) {
+                          if (snapshot.hasData && snapshot.data != null) {
+                            final size = snapshot.data!;
+                            return Text(
+                              '${size.width.toInt()} × ${size.height.toInt()}',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: AppTypography.small,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            );
+                          } else {
+                            // Show loading while detecting
+                            return Text(
+                              'Detecting...',
+                              style: TextStyle(
+                                color: Colors.white.withOpacity(0.7),
+                                fontSize: AppTypography.small,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            );
+                          }
+                        },
+                      );
+                    } else {
+                      // For images: Use detected dimensions or MediaItem dimensions
+                      return Text(
+                        '${(_imageWidth ?? mediaItem.deviceMetadata.width)} × ${(_imageHeight ?? mediaItem.deviceMetadata.height)}',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: AppTypography.small,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      );
+                    }
+                  },
                 ),
-                if (isVideo &&
-                    _videoController != null &&
-                    _isVideoInitialized) ...[
+                // Show duration for videos from MediaItem metadata
+                if (isVideo && mediaItem.deviceMetadata.duration != null) ...[
                   const SizedBox(height: 2),
                   Text(
-                    _formatDuration(_videoController!.value.duration),
+                    _formatDuration(Duration(
+                      seconds: mediaItem.deviceMetadata.duration!.toInt(),
+                    )),
                     style: const TextStyle(
                       color: Colors.white70,
                       fontSize: 10,

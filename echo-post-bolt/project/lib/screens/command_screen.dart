@@ -2110,18 +2110,39 @@ class _CommandScreenState extends State<CommandScreen>
         ),
         child: Row(
           children: [
-            // Resolution and duration info
+            // Resolution and duration info - use runtime detection for videos
             Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                Text(
-                  '${mediaItem.deviceMetadata.width} × ${mediaItem.deviceMetadata.height}',
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: AppTypography.small,
-                    fontWeight: FontWeight.w500,
+                // FIXED: Use runtime video size detection instead of MediaItem dimensions
+                FutureBuilder<Size>(
+                  future: NativeVideoPlayer.instance.getVideoSize(
+                    Uri.parse(mediaItem.fileUri).path,
                   ),
+                  builder: (context, snapshot) {
+                    if (snapshot.hasData && snapshot.data != null) {
+                      final size = snapshot.data!;
+                      return Text(
+                        '${size.width.toInt()} × ${size.height.toInt()}',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: AppTypography.small,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      );
+                    } else {
+                      // Show loading or fallback while detecting
+                      return Text(
+                        'Detecting...',
+                        style: TextStyle(
+                          color: Colors.white.withOpacity(0.7),
+                          fontSize: AppTypography.small,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      );
+                    }
+                  },
                 ),
                 if (mediaItem.deviceMetadata.duration != null) ...[
                   const SizedBox(height: 2),

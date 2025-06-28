@@ -1,10 +1,10 @@
-package com.example.echo_post
+package com.example.echopost
 
 import android.content.Context
+import android.media.MediaMetadataRetriever
 import android.os.Handler
 import android.os.Looper
 import android.view.Surface
-import android.media.MediaMetadataRetriever
 import androidx.media3.common.MediaItem
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
@@ -213,32 +213,21 @@ class NativeVideoPlayerPlugin : FlutterPlugin, MethodCallHandler {
     
     private fun getVideoSize(path: String, result: Result) {
         try {
-            println("📐 Android: Getting video size for: $path")
-            
-            val retriever = MediaMetadataRetriever().apply { setDataSource(path) }
-            var width = retriever.extractMetadata(
+            // Use MediaMetadataRetriever to read width/height
+            val retriever = MediaMetadataRetriever().apply {
+                setDataSource(path)
+            }
+            val width = retriever.extractMetadata(
                 MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH
             )!!.toInt()
-            var height = retriever.extractMetadata(
+            val height = retriever.extractMetadata(
                 MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT
             )!!.toInt()
-            val rotation = retriever.extractMetadata(
-                MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION
-            )?.toInt() ?: 0
             retriever.release()
-            
-            // Swap width/height for portrait videos (rotation 90 or 270)
-            if (rotation == 90 || rotation == 270) {
-                val temp = width
-                width = height
-                height = temp
-            }
-            
-            println("📐 ✅ Android: Video dimensions detected: ${width}×${height} (rotation: ${rotation}°)")
+
             result.success(mapOf("width" to width, "height" to height))
         } catch (e: Exception) {
-            println("❌ Android: Failed to get video size for $path: ${e.message}")
-            result.error("GET_VIDEO_SIZE_ERROR", "Failed to get video size: ${e.message}", null)
+            result.error("SIZE_ERROR", "Failed to get video size: ${e.message}", null)
         }
     }
     
