@@ -1,0 +1,121 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>CFBundleDisplayName</key>
+	<string>EchoPost</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>echopost</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(FLUTTER_BUILD_NAME)</string>
+	<key>CFBundleSignature</key>
+	<string>????</string>
+	<key>CFBundleVersion</key>
+	<string>$(FLUTTER_BUILD_NUMBER)</string>
+	<key>LSRequiresIPhoneOS</key>
+	<true/>
+	<key>UILaunchStoryboardName</key>
+	<string>LaunchScreen</string>
+	<key>UIMainStoryboardFile</key>
+	<string>Main</string>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<key>UISupportedInterfaceOrientations~ipad</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationPortraitUpsideDown</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<key>UIViewControllerBasedStatusBarAppearance</key>
+	<false/>
+	<key>CADisableMinimumFrameDurationOnPhone</key>
+	<true/>
+	<key>UIApplicationSupportsIndirectInputEvents</key>
+	<true/>
+	
+	<!-- Permission descriptions -->
+	<key>NSMicrophoneUsageDescription</key>
+	<string>EchoPost needs microphone access to record voice commands</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>EchoPost needs access to your photos to find and post media</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>EchoPost uses your location to tag posts and find nearby media</string>
+	
+	<!-- URL schemes for deep linking -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<!-- App-specific scheme -->
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLName</key>
+			<string>com.example.echopost</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>echopost</string>
+			</array>
+		</dict>
+		<!-- Google Sign-in -->
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>com.googleusercontent.apps.YOUR-GOOGLE-CLIENT-ID</string>
+			</array>
+		</dict>
+		<!-- Facebook Sign-in -->
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>fbYOUR-FACEBOOK-APP-ID</string>
+			</array>
+		</dict>
+	</array>
+	
+	<!-- Facebook configuration -->
+	<key>FacebookAppID</key>
+	<string>YOUR-FACEBOOK-APP-ID</string>
+	<key>FacebookClientToken</key>
+	<string>YOUR-FACEBOOK-CLIENT-TOKEN</string>
+	<key>FacebookDisplayName</key>
+	<string>EchoPost</string>
+	
+	<!-- LSApplicationQueriesSchemes for URL launching -->
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<!-- Facebook -->
+		<string>fbapi</string>
+		<string>fb-messenger-share-api</string>
+		<!-- Instagram -->
+		<string>instagram</string>
+		<string>instagram-stories</string>
+		<!-- Twitter -->
+		<string>twitter</string>
+		<string>twitterauth</string>
+		<!-- TikTok -->
+		<string>tiktok</string>
+		<string>tiktokopensdk</string>
+		<string>snssdk1233</string>
+		<!-- Others -->
+		<string>fbshareextension</string>
+	</array>
+</dict>
+</plist>
