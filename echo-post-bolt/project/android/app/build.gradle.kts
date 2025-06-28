@@ -101,4 +101,9 @@ dependencies {
     implementation("com.google.android.material:material:1.12.0")
     compileOnly("com.google.dagger:dagger:2.56.2")
     annotationProcessor("com.google.dagger:dagger-compiler:2.56.2")
+    
+    // ExoPlayer Media3 dependencies for native video player
+    implementation("androidx.media3:media3-exoplayer:1.2.1")
+    implementation("androidx.media3:media3-ui:1.2.1")
+    implementation("androidx.media3:media3-common:1.2.1")
 } 

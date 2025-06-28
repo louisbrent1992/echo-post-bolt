@@ -17,11 +17,13 @@ import '../services/social_action_post_coordinator.dart';
 import '../services/auth_service.dart';
 import '../services/app_settings_service.dart';
 import '../services/permission_manager.dart';
+import '../services/native_video_player.dart';
 import '../widgets/social_icon.dart';
 import '../widgets/post_content_box.dart';
 import '../widgets/transcription_status.dart';
 import '../widgets/unified_media_buttons.dart';
 import '../widgets/enhanced_media_preview.dart';
+import '../widgets/native_video_widget.dart';
 import '../widgets/posting_strategy_info.dart';
 import '../screens/media_selection_screen.dart';
 import '../screens/history_screen.dart';
@@ -1867,7 +1869,7 @@ class _CommandScreenState extends State<CommandScreen>
             color: Colors.grey.shade900,
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withValues(alpha: 0.3),
+                color: Colors.black.withOpacity(0.3),
                 blurRadius: 20,
                 offset: const Offset(0, 8),
               ),
@@ -1918,73 +1920,337 @@ class _CommandScreenState extends State<CommandScreen>
     }
 
     final showPreselectedBadge = coordinator.preSelectedMedia.isNotEmpty;
+    final mediaItem = mediaToShow.first;
+    final isVideo = mediaItem.mimeType.startsWith('video/');
 
     if (kDebugMode) {
       print(
-          '🖼️ _buildMediaPreview: Creating EnhancedMediaPreview with ${mediaToShow.length} items');
+          '🖼️ _buildMediaPreview: Creating media preview with ${mediaToShow.length} items');
       print('   showPreselectedBadge: $showPreselectedBadge');
+      print('   isVideo: $isVideo');
     }
 
-    return EnhancedMediaPreview(
-      mediaItems: mediaToShow,
-      selectedPlatforms: coordinator.currentPost.platforms,
-      showPreselectedBadge: showPreselectedBadge,
-      onTap: null,
+    // Use NativeVideoWidget for videos, EnhancedMediaPreview for images
+    if (isVideo) {
+      return _buildNativeVideoPreview(
+          mediaItem, coordinator, showPreselectedBadge);
+    } else {
+      return EnhancedMediaPreview(
+        mediaItems: mediaToShow,
+        selectedPlatforms: coordinator.currentPost.platforms,
+        showPreselectedBadge: showPreselectedBadge,
+        onTap: null,
+      );
+    }
+  }
+
+  /// Build native video preview with controls and overlays
+  Widget _buildNativeVideoPreview(
+    MediaItem mediaItem,
+    SocialActionPostCoordinator coordinator,
+    bool showPreselectedBadge,
+  ) {
+    final videoPath = Uri.parse(mediaItem.fileUri).path;
+    final nativePlayer = NativeVideoPlayer.instance;
+
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        // Native video player
+        NativeVideoWidget(
+          videoPath: videoPath,
+          autoPlay: false, // Don't autoplay on command screen
+          volume: 1.0,
+          backgroundColor: const Color(0xFF2A2A2A),
+        ),
+
+        // Video controls overlay
+        _buildSimpleVideoControls(null),
+
+        // Platform compatibility indicators (if platforms selected)
+        if (coordinator.currentPost.platforms.isNotEmpty)
+          _buildPlatformCompatibilityIndicators(coordinator),
+
+        // Media info overlay
+        _buildVideoInfoOverlay(mediaItem),
+
+        // Pre-selected badge
+        if (showPreselectedBadge) _buildPreselectedBadge(),
+      ],
     );
   }
 
-  Widget _buildEmptyMediaPlaceholder() {
-    return Container(
-      decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [
-            Color(0xFF2A2A2A), // Lighter gray for better contrast
-            Color(0xFF1F1F1F), // Slightly darker for subtle gradient
-          ],
-        ),
-        // border: Border.all(
-        //   color: Colors.white.withValues(alpha: 0.15),
-        //   width: 1,
-        // ),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.2),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
+  /// Simple video controls without VideoPlayerController dependency
+  Widget _buildSimpleVideoControls(dynamic videoPlayer) {
+    return Center(
+      child: GestureDetector(
+        onTap: () async {
+          // Platform-agnostic video controls
+          if (kIsWeb) {
+            // Web: Find the _WebVideoPlayer widget and call its methods
+            // Note: On web, the HTML5 video will handle most controls automatically
+            if (kDebugMode) {
+              print('🌐 Web: Video controls - using HTML5 native controls');
+            }
+          } else {
+            // Mobile: Use native player
+            await NativeVideoPlayer.instance.togglePlayback();
+            if (kDebugMode) {
+              print('📱 Mobile: Video playback toggled');
+            }
+          }
+        },
+        child: Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: Colors.black.withOpacity(0.6),
+            shape: BoxShape.circle,
           ),
-        ],
+          child: kIsWeb
+              ? const Icon(
+                  Icons.play_arrow, // Default icon for web
+                  color: Colors.white,
+                  size: 32,
+                )
+              : AnimatedBuilder(
+                  animation: NativeVideoPlayer.instance,
+                  builder: (context, child) {
+                    return Icon(
+                      NativeVideoPlayer.instance.isPlaying
+                          ? Icons.pause
+                          : Icons.play_arrow,
+                      color: Colors.white,
+                      size: 32,
+                    );
+                  },
+                ),
+        ),
       ),
-      child: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.12),
-                shape: BoxShape.circle,
-              ),
-              child: Icon(
-                Icons.image_outlined,
-                color: Colors.white.withValues(alpha: 0.8),
-                size: 48,
+    );
+  }
+
+  /// Platform compatibility indicators for videos
+  Widget _buildPlatformCompatibilityIndicators(
+      SocialActionPostCoordinator coordinator) {
+    return Positioned(
+      top: 12,
+      right: 12,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Platform indicator
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              color: Colors.black.withOpacity(0.6),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Text(
+              kIsWeb ? 'WEB' : 'MOBILE',
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 10,
+                fontWeight: FontWeight.w600,
               ),
             ),
-            const SizedBox(height: 16),
-            Text(
-              'Your media will appear here',
-              style: TextStyle(
-                color: Colors.white.withValues(alpha: 0.95),
-                fontSize: AppTypography.large,
-                fontWeight: FontWeight.w500,
+          ),
+          const SizedBox(width: 8),
+          // Volume control (mobile only for now)
+          if (!kIsWeb)
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: Colors.black.withOpacity(0.6),
+                borderRadius: BorderRadius.circular(20),
               ),
+              child: GestureDetector(
+                onTap: () async {
+                  final nativePlayer = NativeVideoPlayer.instance;
+                  final newVolume = nativePlayer.volume > 0 ? 0.0 : 1.0;
+                  await nativePlayer.setVolume(newVolume);
+                  if (kDebugMode) {
+                    print('🔊 Volume set to: ${(newVolume * 100).round()}%');
+                  }
+                },
+                child: AnimatedBuilder(
+                  animation: NativeVideoPlayer.instance,
+                  builder: (context, child) {
+                    final isMuted = NativeVideoPlayer.instance.volume == 0;
+                    return Icon(
+                      isMuted ? Icons.volume_off : Icons.volume_up,
+                      color: Colors.white,
+                      size: 20,
+                    );
+                  },
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  /// Video info overlay with metadata
+  Widget _buildVideoInfoOverlay(MediaItem mediaItem) {
+    return Positioned(
+      bottom: 0,
+      left: 0,
+      right: 0,
+      child: Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.bottomCenter,
+            end: Alignment.topCenter,
+            colors: [
+              Colors.black.withOpacity(0.8),
+              Colors.transparent,
+            ],
+          ),
+        ),
+        child: Row(
+          children: [
+            // Resolution and duration info
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  '${mediaItem.deviceMetadata.width} × ${mediaItem.deviceMetadata.height}',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: AppTypography.small,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                if (mediaItem.deviceMetadata.duration != null) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    _formatDuration(Duration(
+                        milliseconds:
+                            (mediaItem.deviceMetadata.duration! * 1000)
+                                .round())),
+                    style: const TextStyle(
+                      color: Colors.white70,
+                      fontSize: 10,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+            const Spacer(),
+            // Format and file size
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  _getFormatDisplayName(mediaItem.mimeType),
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: AppTypography.small,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  _formatFileSize(mediaItem.deviceMetadata.fileSizeBytes),
+                  style: const TextStyle(
+                    color: Colors.white70,
+                    fontSize: 10,
+                  ),
+                ),
+              ],
             ),
           ],
         ),
       ),
     );
+  }
+
+  /// Pre-selected media badge
+  Widget _buildPreselectedBadge() {
+    return Positioned(
+      top: 12,
+      left: 12,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          color: const Color(0xFFFF0055),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: const Text(
+          'Pre-selected',
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: 10,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Format duration for display
+  String _formatDuration(Duration duration) {
+    String twoDigits(int n) => n.toString().padLeft(2, '0');
+    final hours = duration.inHours;
+    final minutes = duration.inMinutes.remainder(60);
+    final seconds = duration.inSeconds.remainder(60);
+
+    if (hours > 0) {
+      return '$hours:${twoDigits(minutes)}:${twoDigits(seconds)}';
+    } else {
+      return '${twoDigits(minutes)}:${twoDigits(seconds)}';
+    }
+  }
+
+  /// Format file size for display
+  String _formatFileSize(int bytes) {
+    if (bytes == 0) return '0 B';
+
+    const suffixes = ['B', 'KB', 'MB', 'GB'];
+    var size = bytes.toDouble();
+    var suffixIndex = 0;
+
+    while (size >= 1024 && suffixIndex < suffixes.length - 1) {
+      size /= 1024;
+      suffixIndex++;
+    }
+
+    return '${size.toStringAsFixed(size < 10 ? 1 : 0)} ${suffixes[suffixIndex]}';
+  }
+
+  /// Get display name for media format
+  String _getFormatDisplayName(String mimeType) {
+    switch (mimeType.toLowerCase()) {
+      case 'video/mp4':
+        return 'MP4';
+      case 'video/quicktime':
+        return 'MOV';
+      case 'video/x-msvideo':
+        return 'AVI';
+      case 'video/x-matroska':
+        return 'MKV';
+      case 'video/webm':
+        return 'WebM';
+      case 'video/x-m4v':
+        return 'M4V';
+      case 'video/3gpp':
+        return '3GP';
+      case 'image/jpeg':
+        return 'JPEG';
+      case 'image/png':
+        return 'PNG';
+      case 'image/gif':
+        return 'GIF';
+      case 'image/webp':
+        return 'WebP';
+      case 'image/heic':
+        return 'HEIC';
+      default:
+        return mimeType.split('/').last.toUpperCase();
+    }
   }
 
   /// Handle save post action for the Triple Action Button System
@@ -2103,5 +2369,55 @@ class _CommandScreenState extends State<CommandScreen>
 
   Future<void> _stopRecording() async {
     await _stopUnifiedRecording();
+  }
+
+  Widget _buildEmptyMediaPlaceholder() {
+    return Container(
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            Color(0xFF2A2A2A), // Lighter gray for better contrast
+            Color(0xFF1F1F1F), // Slightly darker for subtle gradient
+          ],
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.2),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.12),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(
+                Icons.image_outlined,
+                color: Colors.white.withOpacity(0.8),
+                size: 48,
+              ),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              'Your media will appear here',
+              style: TextStyle(
+                color: Colors.white.withOpacity(0.95),
+                fontSize: AppTypography.large,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
