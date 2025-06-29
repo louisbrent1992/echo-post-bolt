@@ -7,14 +7,10 @@ import 'package:provider/provider.dart';
 import 'package:http/http.dart' as http;
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:record/record.dart';
-// Removed unused: import 'package:video_player/video_player.dart';
-// Removed unused: import 'package:video_thumbnail/video_thumbnail.dart';
-
 import '../models/social_action.dart';
 import '../models/status_message.dart';
 import '../services/media_coordinator.dart';
 import '../services/social_action_post_coordinator.dart';
-import '../services/auth_service.dart';
 import '../services/app_settings_service.dart';
 import '../services/permission_manager.dart';
 import '../services/native_video_player.dart';
@@ -759,9 +755,6 @@ class _CommandScreenState extends State<CommandScreen>
 
   Future<void> _togglePlatform(String platform) async {
     try {
-      // Get AuthService to check authentication status
-      final authService = Provider.of<AuthService>(context, listen: false);
-
       // Check if platform is currently selected
       final currentPlatforms = _postCoordinator?.currentPost.platforms ?? [];
       final isCurrentlySelected = currentPlatforms.contains(platform);
@@ -798,7 +791,8 @@ class _CommandScreenState extends State<CommandScreen>
       }
 
       // STEP 2: Check if they're authenticated for this platform
-      final isAuthenticated = await authService.isPlatformConnected(platform);
+      final isAuthenticated =
+          _postCoordinator?.isPlatformAuthenticated(platform) ?? false;
 
       if (isAuthenticated) {
         // User is authenticated and platform is compatible, toggle it
@@ -813,7 +807,7 @@ class _CommandScreenState extends State<CommandScreen>
           print('🔐 Platform not authenticated, starting auth flow: $platform');
         }
 
-        await _authenticatePlatform(platform, authService);
+        await _postCoordinator?.authenticatePlatform(platform);
       }
     } catch (e) {
       if (kDebugMode) {
@@ -827,72 +821,6 @@ class _CommandScreenState extends State<CommandScreen>
           duration: const Duration(seconds: 3),
         );
       }
-    }
-  }
-
-  Future<void> _authenticatePlatform(
-      String platform, AuthService authService) async {
-    try {
-      if (kDebugMode) {
-        print('🔐 Starting authentication for $platform');
-      }
-
-      // Show loading status
-      if (mounted) {
-        _postCoordinator?.requestStatusUpdate(
-          'Connecting to ${platform.substring(0, 1).toUpperCase()}${platform.substring(1)}...',
-          StatusMessageType.info,
-          duration: const Duration(seconds: 2),
-        );
-      }
-
-      // Perform platform-specific authentication
-      switch (platform.toLowerCase()) {
-        case 'facebook':
-          await authService.signInWithFacebook();
-          break;
-        case 'instagram':
-          // Instagram uses Facebook authentication
-          await authService.signInWithFacebook();
-          break;
-        case 'twitter':
-          // TODO: Implement Twitter OAuth when available
-          throw Exception('Twitter authentication not yet implemented');
-        case 'tiktok':
-          await authService.signInWithTikTok();
-          break;
-        default:
-          throw Exception('Unknown platform: $platform');
-      }
-
-      // Authentication successful, now select the platform
-      _postCoordinator?.togglePlatform(platform);
-
-      if (mounted) {
-        _postCoordinator?.requestStatusUpdate(
-          '${platform.substring(0, 1).toUpperCase()}${platform.substring(1)} connected successfully! ✅',
-          StatusMessageType.success,
-          duration: const Duration(seconds: 2),
-        );
-      }
-
-      if (kDebugMode) {
-        print('✅ Authentication successful for $platform');
-      }
-    } catch (e) {
-      if (kDebugMode) {
-        print('❌ Authentication failed for $platform: $e');
-      }
-
-      if (mounted) {
-        _postCoordinator?.requestStatusUpdate(
-          'Failed to connect to ${platform.substring(0, 1).toUpperCase()}${platform.substring(1)}: $e',
-          StatusMessageType.error,
-          duration: const Duration(seconds: 4),
-        );
-      }
-
-      rethrow;
     }
   }
 
@@ -1443,9 +1371,8 @@ class _CommandScreenState extends State<CommandScreen>
                     Text(
                       'Enter hashtags separated by spaces or commas (without # symbol):',
                       style: TextStyle(
-                        color: Colors.white.withValues(alpha: 0.7),
-                        fontSize: 12,
-                      ),
+                          color: Colors.white.withValues(alpha: 0.7),
+                          fontSize: 12),
                     ),
                     const SizedBox(height: 12),
                     Expanded(
@@ -1744,6 +1671,7 @@ class _CommandScreenState extends State<CommandScreen>
     final contentType = SocialPlatforms.getContentType(
       hasMedia: coordinator.hasMedia,
       mediaItems: coordinator.currentPost.content.media,
+      text: coordinator.currentPost.content.text,
     );
     final incompatiblePlatforms = SocialPlatforms.getIncompatiblePlatforms(
       SocialPlatforms.all,
@@ -1772,6 +1700,10 @@ class _CommandScreenState extends State<CommandScreen>
                 ),
                 enableInteraction: !isProcessing,
                 incompatiblePlatforms: incompatiblePlatforms,
+                platformAuthenticationState: {
+                  for (final platform in SocialPlatforms.all)
+                    platform: coordinator.isPlatformAuthenticated(platform)
+                },
               ),
             ),
             Expanded(
@@ -1869,7 +1801,7 @@ class _CommandScreenState extends State<CommandScreen>
             color: Colors.grey.shade900,
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withOpacity(0.3),
+                color: Colors.black.withValues(alpha: 0.3),
                 blurRadius: 20,
                 offset: const Offset(0, 8),
               ),
@@ -1951,7 +1883,6 @@ class _CommandScreenState extends State<CommandScreen>
     bool showPreselectedBadge,
   ) {
     final videoPath = Uri.parse(mediaItem.fileUri).path;
-    final nativePlayer = NativeVideoPlayer.instance;
 
     return Stack(
       fit: StackFit.expand,
@@ -2003,7 +1934,7 @@ class _CommandScreenState extends State<CommandScreen>
         child: Container(
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
-            color: Colors.black.withOpacity(0.6),
+            color: Colors.black.withValues(alpha: 0.6),
             shape: BoxShape.circle,
           ),
           child: kIsWeb
@@ -2042,12 +1973,12 @@ class _CommandScreenState extends State<CommandScreen>
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
             decoration: BoxDecoration(
-              color: Colors.black.withOpacity(0.6),
+              color: Colors.black.withValues(alpha: 0.6),
               borderRadius: BorderRadius.circular(12),
             ),
-            child: Text(
+            child: const Text(
               kIsWeb ? 'WEB' : 'MOBILE',
-              style: const TextStyle(
+              style: TextStyle(
                 color: Colors.white,
                 fontSize: 10,
                 fontWeight: FontWeight.w600,
@@ -2060,7 +1991,7 @@ class _CommandScreenState extends State<CommandScreen>
             Container(
               padding: const EdgeInsets.all(8),
               decoration: BoxDecoration(
-                color: Colors.black.withOpacity(0.6),
+                color: Colors.black.withValues(alpha: 0.6),
                 borderRadius: BorderRadius.circular(20),
               ),
               child: GestureDetector(
@@ -2103,7 +2034,7 @@ class _CommandScreenState extends State<CommandScreen>
             begin: Alignment.bottomCenter,
             end: Alignment.topCenter,
             colors: [
-              Colors.black.withOpacity(0.8),
+              Colors.black.withValues(alpha: 0.8),
               Colors.transparent,
             ],
           ),
@@ -2133,10 +2064,10 @@ class _CommandScreenState extends State<CommandScreen>
                       );
                     } else {
                       // Show loading or fallback while detecting
-                      return Text(
+                      return const Text(
                         'Detecting...',
                         style: TextStyle(
-                          color: Colors.white.withOpacity(0.7),
+                          color: Colors.white70,
                           fontSize: AppTypography.small,
                           fontWeight: FontWeight.w500,
                         ),
@@ -2405,7 +2336,7 @@ class _CommandScreenState extends State<CommandScreen>
         ),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.2),
+            color: Colors.black.withValues(alpha: 0.2),
             blurRadius: 8,
             offset: const Offset(0, 2),
           ),
@@ -2418,12 +2349,12 @@ class _CommandScreenState extends State<CommandScreen>
             Container(
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.12),
+                color: Colors.white.withValues(alpha: 0.12),
                 shape: BoxShape.circle,
               ),
               child: Icon(
                 Icons.image_outlined,
-                color: Colors.white.withOpacity(0.8),
+                color: Colors.white.withValues(alpha: 0.8),
                 size: 48,
               ),
             ),
@@ -2431,7 +2362,7 @@ class _CommandScreenState extends State<CommandScreen>
             Text(
               'Your media will appear here',
               style: TextStyle(
-                color: Colors.white.withOpacity(0.95),
+                color: Colors.white.withValues(alpha: 0.95),
                 fontSize: AppTypography.large,
                 fontWeight: FontWeight.w500,
               ),

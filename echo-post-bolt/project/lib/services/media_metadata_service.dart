@@ -8,7 +8,6 @@ import 'package:geocoding/geocoding.dart';
 import 'package:intl/intl.dart';
 import 'dart:math';
 import 'dart:ui' as ui;
-import 'package:video_thumbnail/video_thumbnail.dart';
 import 'dart:async';
 
 import 'directory_service.dart';
@@ -627,15 +626,8 @@ class MediaMetadataService extends ChangeNotifier {
 
       // Convert deduplicated media back to list and sort by creation time (newest first)
       final deduplicatedMedia = uniqueMediaItems.values.toList();
-      deduplicatedMedia.sort((a, b) {
-        final aTime =
-            DateTime.tryParse(a['date_data']['creation_date'] ?? '') ??
-                DateTime(1970);
-        final bTime =
-            DateTime.tryParse(b['date_data']['creation_date'] ?? '') ??
-                DateTime(1970);
-        return bTime.compareTo(aTime); // Newest first
-      });
+      deduplicatedMedia.sort((a, b) => b['date_data']['creation_date']
+          .compareTo(a['date_data']['creation_date']));
 
       // Take only the limit amount after deduplication and sorting
       final recentMedia = deduplicatedMedia.take(contextLimit).toList();

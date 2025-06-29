@@ -1,21 +1,30 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
+import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:share_plus/share_plus.dart';
-import 'dart:convert';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+
+import 'account_auth_service.dart';
+import 'auth/facebook_auth_service.dart';
+import 'auth/instagram_auth_service.dart';
+import 'platform_connection_service.dart';
 import '../models/social_action.dart';
 import '../services/social_action_post_coordinator.dart';
-import '../constants/social_platforms.dart';
-import 'auth_service.dart';
+import 'package:path/path.dart' as path;
 
 class SocialPostService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final SocialActionPostCoordinator? _coordinator;
+  final AccountAuthService? _authService;
 
-  SocialPostService({SocialActionPostCoordinator? coordinator})
-      : _coordinator = coordinator;
+  SocialPostService(
+      {SocialActionPostCoordinator? coordinator,
+      AccountAuthService? authService})
+      : _coordinator = coordinator,
+        _authService = authService;
 
   /// Format post content for specific platform with proper hashtag formatting
   String _formatPostForPlatform(SocialAction action, String platform) {
@@ -110,7 +119,7 @@ class SocialPostService {
 
   /// Posts the action to every platform listed with proper authentication verification
   Future<Map<String, bool>> postToAllPlatforms(SocialAction action,
-      {AuthService? authService}) async {
+      {AccountAuthService? authService}) async {
     final results = <String, bool>{};
 
     if (kDebugMode) {
@@ -121,7 +130,8 @@ class SocialPostService {
     if (authService != null) {
       final authChecks = <String, bool>{};
       for (final platform in action.platforms) {
-        authChecks[platform] = await authService.isPlatformConnected(platform);
+        authChecks[platform] =
+            await PlatformConnectionService.isPlatformConnected(platform);
       }
 
       final unauthenticatedPlatforms = authChecks.entries
@@ -165,57 +175,7 @@ class SocialPostService {
       }
 
       try {
-        bool shouldPost = false;
-        switch (platform) {
-          case 'facebook':
-            shouldPost = action.platformData.facebook?.postHere ?? false;
-            if (shouldPost) {
-              await _postToFacebookWithStrategy(action, authService);
-              results[platform] = true;
-            }
-            break;
-          case 'instagram':
-            shouldPost = action.platformData.instagram?.postHere ?? false;
-            if (shouldPost) {
-              await _postToInstagramWithStrategy(action, authService);
-              results[platform] = true;
-            }
-            break;
-          case 'youtube':
-            shouldPost = action.platformData.youtube?.postHere ?? false;
-            if (shouldPost) {
-              await _postToYouTube(action);
-              results[platform] = true;
-            }
-            break;
-          case 'twitter':
-            shouldPost = action.platformData.twitter?.postHere ?? false;
-            if (shouldPost) {
-              await _postToTwitter(action);
-              results[platform] = true;
-            }
-            break;
-          case 'tiktok':
-            shouldPost = action.platformData.tiktok?.postHere ?? false;
-            if (shouldPost) {
-              await _postToTikTok(action);
-              results[platform] = true;
-            }
-            break;
-          default:
-            if (kDebugMode) {
-              print('⚠️ Unsupported platform: $platform');
-            }
-            results[platform] = false;
-        }
-
-        // If platform is in the list but post_here is false, mark as skipped (success)
-        if (!shouldPost) {
-          results[platform] = true; // Consider skipped as success
-          if (kDebugMode) {
-            print('⏭️ Skipped posting to $platform (post_here is false)');
-          }
-        }
+        await _postToPlatform(action, platform, authService);
       } catch (e) {
         if (kDebugMode) {
           print('❌ Error posting to $platform: $e');
@@ -244,128 +204,45 @@ class SocialPostService {
     return results;
   }
 
-  /// Post to Facebook with strategy-based approach
-  Future<void> _postToFacebookWithStrategy(
-      SocialAction action, AuthService? authService) async {
-    // Check if user has business account access
-    final hasBusinessAccess = await SocialPlatforms.hasBusinessAccountAccess(
-        'facebook',
-        authService: authService);
-
-    if (hasBusinessAccess) {
-      // Use automated posting via Facebook Graph API
-      await _postToFacebook(action);
-    } else {
-      // Fall back to SharePlus for manual sharing
-      await _shareToFacebookViaSharePlus(action);
-    }
-  }
-
-  /// Post to Instagram with strategy-based approach
-  Future<void> _postToInstagramWithStrategy(
-      SocialAction action, AuthService? authService) async {
-    // Check if user has business account access
-    final hasBusinessAccess = await SocialPlatforms.hasBusinessAccountAccess(
-        'instagram',
-        authService: authService);
-
-    if (hasBusinessAccess) {
-      // Use automated posting via Instagram Basic Display API
-      await _postToInstagram(action);
-    } else {
-      // Fall back to SharePlus for manual sharing
-      await _shareToInstagramViaSharePlus(action);
-    }
-  }
-
-  /// Share to Facebook using SharePlus (manual sharing)
-  Future<void> _shareToFacebookViaSharePlus(SocialAction action) async {
-    final formattedContent = _formatPostForPlatform(action, 'facebook');
-
-    if (kDebugMode) {
-      print('📘 Sharing to Facebook via SharePlus...');
-      print('  Formatted content: $formattedContent');
-      print('  Media count: ${action.content.media.length}');
-    }
-
+  /// Post to platform with proper API integration
+  Future<void> _postToPlatform(SocialAction action, String platform,
+      AccountAuthService? authService) async {
     try {
-      String shareText = formattedContent;
+      switch (platform.toLowerCase()) {
+        case 'facebook':
+          await _postToFacebook(action, authService);
+          break;
+        case 'instagram':
+          // Check if user has Instagram access
+          final instagramAuth = InstagramAuthService();
+          final hasInstagramAccess = await instagramAuth.isInstagramConnected();
 
-      // Add media files if present
-      List<XFile> mediaFiles = [];
-      if (action.content.media.isNotEmpty) {
-        for (final mediaItem in action.content.media) {
-          if (mediaItem.fileUri.startsWith('file://')) {
-            mediaFiles.add(XFile(mediaItem.fileUri));
+          if (hasInstagramAccess) {
+            // Use automated posting via Instagram API with Instagram Login
+            await _postToInstagram(action);
+          } else {
+            // Fall back to SharePlus for manual sharing
+            await _shareToInstagramViaSharePlus(action);
           }
-        }
-      }
-
-      // Share using SharePlus
-      if (mediaFiles.isNotEmpty) {
-        await Share.shareXFiles(
-          mediaFiles,
-          text: shareText,
-          subject: 'Facebook Post',
-        );
-      } else {
-        await Share.share(
-          shareText,
-          subject: 'Facebook Post',
-        );
-      }
-
-      if (kDebugMode) {
-        print('  ✅ Successfully shared to Facebook via SharePlus');
+          break;
+        case 'youtube':
+          await _postToYouTube(action);
+          break;
+        case 'twitter':
+          await _postToTwitter(action);
+          break;
+        case 'tiktok':
+          await _postToTikTok(action);
+          break;
+        default:
+          if (kDebugMode) {
+            print('⚠️ Unsupported platform: $platform');
+          }
+          throw Exception('Unsupported platform: $platform');
       }
     } catch (e) {
       if (kDebugMode) {
-        print('  ❌ SharePlus sharing failed: $e');
-      }
-      rethrow;
-    }
-  }
-
-  /// Share to Instagram using SharePlus (manual sharing)
-  Future<void> _shareToInstagramViaSharePlus(SocialAction action) async {
-    final formattedContent = _formatPostForPlatform(action, 'instagram');
-
-    if (kDebugMode) {
-      print('📷 Sharing to Instagram via SharePlus...');
-      print('  Formatted content: $formattedContent');
-      print('  Media count: ${action.content.media.length}');
-    }
-
-    try {
-      String shareText = formattedContent;
-
-      // Instagram requires media, so we need at least one media file
-      List<XFile> mediaFiles = [];
-      if (action.content.media.isNotEmpty) {
-        for (final mediaItem in action.content.media) {
-          if (mediaItem.fileUri.startsWith('file://')) {
-            mediaFiles.add(XFile(mediaItem.fileUri));
-          }
-        }
-      }
-
-      if (mediaFiles.isEmpty) {
-        throw Exception('Instagram requires media content for sharing');
-      }
-
-      // Share using SharePlus with media
-      await Share.shareXFiles(
-        mediaFiles,
-        text: shareText,
-        subject: 'Instagram Post',
-      );
-
-      if (kDebugMode) {
-        print('  ✅ Successfully shared to Instagram via SharePlus');
-      }
-    } catch (e) {
-      if (kDebugMode) {
-        print('  ❌ SharePlus sharing failed: $e');
+        print('❌ Error posting to $platform: $e');
       }
       rethrow;
     }
@@ -398,7 +275,8 @@ class SocialPostService {
   /// - Permission errors (code 100): Check app permissions
   /// - Rate limiting (code 1): Retry later
   /// - Other errors: Detailed error messages with codes
-  Future<void> _postToFacebook(SocialAction action) async {
+  Future<void> _postToFacebook(
+      SocialAction action, AccountAuthService? authService) async {
     final formattedContent = _formatPostForPlatform(action, 'facebook');
 
     if (kDebugMode) {
@@ -408,6 +286,35 @@ class SocialPostService {
       print('  Formatted content: $formattedContent');
       print('  Media count: ${action.content.media.length}');
     }
+
+    // --- PATCH: Use share_plus for user timeline (manual sharing) ---
+    final fbData = action.platformData.facebook;
+    final postAsPage = fbData?.postAsPage == true;
+    if (!postAsPage) {
+      // User selected to post to their own timeline: use share_plus
+      if (kDebugMode) {
+        print(
+            '🔗 User selected My Timeline. Using share_plus for manual sharing.');
+      }
+      // Prepare text and media for sharing
+      final text = formattedContent;
+      if (action.content.media.isNotEmpty) {
+        // Only share the first image for simplicity
+        final media = action.content.media.first;
+        final fileUri = media.fileUri;
+        if (fileUri.startsWith('file://')) {
+          final filePath = fileUri.replaceFirst('file://', '');
+          await Share.shareXFiles([XFile(filePath)], text: text);
+        } else {
+          // If not a file URI, just share the text
+          await Share.share(text);
+        }
+      } else {
+        await Share.share(text);
+      }
+      return;
+    }
+    // --- END PATCH ---
 
     try {
       // Get Facebook access token from Firestore
@@ -429,7 +336,7 @@ class SocialPostService {
       }
 
       final tokenData = tokenDoc.data()!;
-      final accessToken = tokenData['access_token'] as String;
+      final userAccessToken = tokenData['access_token'] as String;
       final userId = tokenData['user_id'] as String;
 
       // Check if token is expired
@@ -439,44 +346,93 @@ class SocialPostService {
             'Facebook access token has expired. Please re-authenticate.');
       }
 
-      // Determine the endpoint based on whether posting as page or user
-      final facebookData = action.platformData.facebook;
+      // Determine posting target and get appropriate token
       String endpoint;
+      String accessToken;
+      String targetId;
+      bool isPagePost = false;
+
+      // Use user selection to determine if posting as page or user
+      if (fbData?.postAsPage == true &&
+          fbData?.pageId != null &&
+          fbData!.pageId.isNotEmpty) {
+        // Post as page
+        isPagePost = true;
+        targetId = fbData.pageId;
+        endpoint = 'https://graph.facebook.com/v23.0/me/feed';
+        if (kDebugMode) {
+          print(
+              '  📄 User selected to post as Facebook page: ${fbData.pageId}');
+        }
+        // Validate page access and permissions
+        if (_authService != null) {
+          try {
+            final facebookAuth = FacebookAuthService();
+            final canPost =
+                await facebookAuth.canPostToFacebookPage(fbData.pageId);
+            if (!canPost) {
+              throw Exception(
+                  'You do not have permission to post to this Facebook page. Please ensure you are an admin, editor, or moderator of the page.');
+            }
+            if (kDebugMode) {
+              print(
+                  '  ✅ Page posting permission verified for page: ${fbData.pageId}');
+            }
+          } catch (e) {
+            if (kDebugMode) {
+              print('  ⚠️ Page permission check failed: $e');
+            }
+            // Continue with posting attempt, let the API handle the final validation
+          }
+        }
+        // Get page access token for posting to pages
+        try {
+          final pageAccessToken =
+              await _getPageAccessToken(userAccessToken, fbData.pageId);
+          if (pageAccessToken != null) {
+            accessToken = pageAccessToken;
+            if (kDebugMode) {
+              print(
+                  '  ✅ Using page access token for posting to page: ${fbData.pageId}');
+            }
+          } else {
+            // Fallback to user timeline if page access token fails
+            isPagePost = false;
+            targetId = userId;
+            endpoint = 'https://graph.facebook.com/v23.0/me/feed';
+            accessToken = userAccessToken;
+            if (kDebugMode) {
+              print(
+                  '  ⚠️ Failed to get page access token, posting to user timeline instead');
+            }
+          }
+        } catch (e) {
+          // If page access token fails, try to post to user timeline
+          isPagePost = false;
+          targetId = userId;
+          endpoint = 'https://graph.facebook.com/v23.0/me/feed';
+          accessToken = userAccessToken;
+          if (kDebugMode) {
+            print(
+                '  ⚠️ Page access token error, falling back to user timeline: $e');
+          }
+        }
+      } else {
+        // Post to user's timeline - use user access token
+        isPagePost = false;
+        targetId = userId;
+        endpoint = 'https://graph.facebook.com/v23.0/me/feed';
+        accessToken = userAccessToken;
+        if (kDebugMode) {
+          print('  👤 User selected to post to their own timeline');
+        }
+      }
+
+      // Initialize post data with the correct access token
       Map<String, dynamic> postData = {
         'message': formattedContent,
         'access_token': accessToken,
       };
-
-      // FIXED: Restructure to avoid null-aware operator issues
-      final shouldPostAsPage = facebookData?.postAsPage == true;
-      final pageId = facebookData?.pageId;
-
-      if (shouldPostAsPage && pageId != null && pageId.isNotEmpty) {
-        // Post to Facebook page
-        endpoint = 'https://graph.facebook.com/v18.0/$pageId/feed';
-
-        // Get page access token for posting to pages
-        final pageAccessToken = await _getPageAccessToken(accessToken, pageId);
-        if (pageAccessToken != null) {
-          postData['access_token'] = pageAccessToken;
-          if (kDebugMode) {
-            print('  📄 Posting to Facebook page: $pageId');
-          }
-        } else {
-          // Fallback to user timeline if page access token fails
-          endpoint = 'https://graph.facebook.com/v18.0/$userId/feed';
-          if (kDebugMode) {
-            print(
-                '  ⚠️ Failed to get page access token, posting to user timeline instead');
-          }
-        }
-      } else {
-        // Post to user's timeline
-        endpoint = 'https://graph.facebook.com/v18.0/$userId/feed';
-        if (kDebugMode) {
-          print('  👤 Posting to user timeline');
-        }
-      }
 
       // Handle media attachments if present
       if (action.content.media.isNotEmpty) {
@@ -485,33 +441,34 @@ class SocialPostService {
         // FIXED: Restructure to avoid null-aware operator issues
         final mimeType = mediaItem.mimeType;
         if (mimeType != null && mimeType.startsWith('image/')) {
-          // For images, we can use the photos endpoint or include in feed
-          final postType = facebookData?.postType;
-          if (postType == 'photo') {
-            // Use photos endpoint for image posts
-            endpoint = endpoint.replaceFirst('/feed', '/photos');
-            final mediaUrl = await _uploadMediaToFacebook(
-                accessToken, mediaItem.fileUri, 'image');
-            if (mediaUrl != null) {
-              postData['source'] = mediaUrl;
-              postData['message'] = formattedContent;
-            } else {
-              // Fallback to text-only post if media upload fails
-              if (kDebugMode) {
-                print('  ⚠️ Media upload failed, posting text only');
-              }
+          // For images, use the photos endpoint and include message in the same request
+          endpoint = endpoint.replaceFirst('/feed', '/photos');
+          postData['message'] = formattedContent;
+
+          // Check if it's a local file
+          if (mediaItem.fileUri.startsWith('file://') ||
+              mediaItem.fileUri.startsWith('content://')) {
+            if (kDebugMode) {
+              print('  📸 Uploading image with message to photos endpoint');
+            }
+            // The actual file upload will be handled in the multipart request below
+          } else if (mediaItem.fileUri.startsWith('http://') ||
+              mediaItem.fileUri.startsWith('https://')) {
+            // For public URLs, use them directly
+            postData['url'] = mediaItem.fileUri;
+            if (kDebugMode) {
+              print('  📸 Using public URL for image: ${mediaItem.fileUri}');
             }
           } else {
-            // Include image URL in feed post
-            final mediaUrl = await _uploadMediaToFacebook(
-                accessToken, mediaItem.fileUri, 'image');
-            if (mediaUrl != null) {
-              postData['link'] = mediaUrl;
+            if (kDebugMode) {
+              print('  ⚠️ Unsupported image URI format, posting text only');
             }
+            // Reset endpoint back to feed for text-only post
+            endpoint = endpoint.replaceFirst('/photos', '/feed');
           }
         } else if (mimeType != null && mimeType.startsWith('video/')) {
           // For videos, use the videos endpoint
-          final postType = facebookData?.postType;
+          final postType = fbData?.postType;
           if (postType == 'video') {
             endpoint = endpoint.replaceFirst('/feed', '/videos');
             final mediaUrl = await _uploadMediaToFacebook(
@@ -526,51 +483,97 @@ class SocialPostService {
               if (kDebugMode) {
                 print('  ⚠️ Media upload failed, posting text only');
               }
+              // Reset endpoint back to feed for text-only post
+              endpoint = endpoint.replaceFirst('/videos', '/feed');
             }
           } else {
-            // Include video URL in feed post
-            final mediaUrl = await _uploadMediaToFacebook(
+            // Upload video and attach to feed post
+            final mediaId = await _uploadMediaToFacebook(
                 accessToken, mediaItem.fileUri, 'video');
-            if (mediaUrl != null) {
-              postData['link'] = mediaUrl;
+            if (mediaId != null) {
+              // Attach the media ID to the feed post
+              postData['attached_media'] = '[{"media_fbid":"$mediaId"}]';
+              if (kDebugMode) {
+                print('  📎 Attaching video media ID: $mediaId');
+              }
+            } else {
+              if (kDebugMode) {
+                print('  ⚠️ Video upload failed, posting text only');
+              }
             }
           }
         }
       }
 
-      // Handle scheduled posts
-      if (facebookData?.scheduledTime != null) {
-        try {
-          final scheduledTime = DateTime.parse(facebookData!.scheduledTime!);
-          if (scheduledTime.isAfter(DateTime.now())) {
-            postData['published'] = false;
-            postData['scheduled_publish_time'] =
-                (scheduledTime.millisecondsSinceEpoch / 1000).round();
-            if (kDebugMode) {
-              print('  ⏰ Scheduling post for: $scheduledTime');
-            }
-          }
-        } catch (e) {
-          if (kDebugMode) {
-            print(
-                '  ⚠️ Invalid scheduled time format: ${facebookData!.scheduledTime}');
-          }
+      // Check if we need to use multipart request for local image files
+      bool useMultipartRequest = false;
+      String? localImagePath;
+
+      if (action.content.media.isNotEmpty) {
+        final mediaItem = action.content.media.first;
+        if (mediaItem.mimeType != null &&
+            mediaItem.mimeType.startsWith('image/') &&
+            (mediaItem.fileUri.startsWith('file://') ||
+                mediaItem.fileUri.startsWith('content://'))) {
+          useMultipartRequest = true;
+          localImagePath = mediaItem.fileUri.replaceFirst('file://', '');
         }
       }
 
       if (kDebugMode) {
         print('  🌐 Making request to: $endpoint');
-        print('  📤 Post data: ${jsonEncode(postData)}');
+        if (useMultipartRequest) {
+          print('  📤 Using multipart request for local image upload');
+        } else {
+          print('  📤 Post data: ${jsonEncode(postData)}');
+        }
+        print(
+            '  🔑 Using ${isPagePost ? 'page' : 'user'} access token: ${accessToken.length > 12 ? '${accessToken.substring(0, 6)}...${accessToken.substring(accessToken.length - 6)}' : accessToken}');
       }
 
       // Make the API request
-      final response = await http.post(
-        Uri.parse(endpoint),
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: jsonEncode(postData),
-      );
+      http.Response response;
+
+      if (useMultipartRequest && localImagePath != null) {
+        // Use multipart request for local image upload
+        final request = http.MultipartRequest('POST', Uri.parse(endpoint));
+
+        // Add all the fields from postData
+        for (final entry in postData.entries) {
+          if (entry.value != null) {
+            request.fields[entry.key] = entry.value.toString();
+          }
+        }
+
+        // Add the image file
+        final file = File(localImagePath);
+        if (await file.exists()) {
+          final fileBytes = await file.readAsBytes();
+          final fileName = file.path.split('/').last;
+          request.files.add(http.MultipartFile.fromBytes(
+            'source',
+            fileBytes,
+            filename: fileName,
+          ));
+
+          if (kDebugMode) {
+            print(
+                '  📁 Attaching image file: $fileName (${fileBytes.length} bytes)');
+          }
+        }
+
+        final streamedResponse = await request.send();
+        response = await http.Response.fromStream(streamedResponse);
+      } else {
+        // Use regular JSON request
+        response = await http.post(
+          Uri.parse(endpoint),
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: jsonEncode(postData),
+        );
+      }
 
       if (kDebugMode) {
         print('  📥 Response status: ${response.statusCode}');
@@ -584,6 +587,8 @@ class SocialPostService {
         if (kDebugMode) {
           print('  ✅ Successfully posted to Facebook');
           print('  🆔 Post ID: $postId');
+          print(
+              '  📍 Posted to: ${isPagePost ? 'Page ($targetId)' : 'User timeline'}');
         }
 
         // Store the post ID for verification
@@ -631,6 +636,26 @@ class SocialPostService {
                 'Facebook API error: $errorMessage (Code: $errorCode)');
         }
       }
+
+      // Handle scheduled posts
+      if (fbData?.scheduledTime != null) {
+        try {
+          final scheduledTime = DateTime.parse(fbData!.scheduledTime!);
+          if (scheduledTime.isAfter(DateTime.now())) {
+            postData['published'] = false;
+            postData['scheduled_publish_time'] =
+                (scheduledTime.millisecondsSinceEpoch / 1000).round();
+            if (kDebugMode) {
+              print('  ⏰ Scheduling post for: $scheduledTime');
+            }
+          }
+        } catch (e) {
+          if (kDebugMode) {
+            print(
+                '  ⚠️ Invalid scheduled time format: ${fbData!.scheduledTime}');
+          }
+        }
+      }
     } catch (e) {
       if (kDebugMode) {
         print('  ❌ Facebook posting failed: $e');
@@ -668,27 +693,369 @@ class SocialPostService {
     try {
       if (kDebugMode) {
         print('📤 Uploading media to Facebook: $fileUri');
+        print('  📁 Media type: $mediaType');
+        print(
+            '  🔑 Using access token: ${accessToken.length > 12 ? '${accessToken.substring(0, 6)}...${accessToken.substring(accessToken.length - 6)}' : accessToken}');
       }
 
-      // For local files, we need to upload them to Facebook first
-      // This is a simplified implementation - in production you might want to:
-      // 1. Upload to a cloud storage service first (Firebase Storage, AWS S3, etc.)
-      // 2. Then use the public URL for Facebook
-      // 3. Or implement direct file upload to Facebook Graph API
-
-      // For now, we'll assume the fileUri is already a public URL
-      // In a real implementation, you would:
-      // 1. Check if it's a local file (file:// or content:// URI)
-      // 2. Upload to cloud storage if needed
-      // 3. Get the public URL
-
+      // Handle local files by uploading them to Facebook
       if (fileUri.startsWith('file://') || fileUri.startsWith('content://')) {
         if (kDebugMode) {
-          print(
-              '⚠️ Local file detected. In production, upload to cloud storage first.');
+          print('  📂 Local file detected, uploading to Facebook...');
         }
-        // For development, we'll skip media upload
-        return null;
+
+        // Read the file data
+        final file = File(fileUri.replaceFirst('file://', ''));
+        if (!await file.exists()) {
+          if (kDebugMode) {
+            print('  ❌ File does not exist: $fileUri');
+          }
+          return null;
+        }
+
+        final fileBytes = await file.readAsBytes();
+        if (kDebugMode) {
+          print('  📊 File size: ${fileBytes.length} bytes');
+        }
+
+        // Determine the correct endpoint based on media type
+        String endpoint;
+        if (mediaType == 'image') {
+          endpoint = 'https://graph.facebook.com/v23.0/me/photos';
+        } else if (mediaType == 'video') {
+          endpoint = 'https://graph.facebook.com/v23.0/me/videos';
+        } else {
+          if (kDebugMode) {
+            print('  ❌ Unsupported media type: $mediaType');
+          }
+          return null;
+        }
+
+        // Create multipart request
+        final request = http.MultipartRequest('POST', Uri.parse(endpoint));
+
+        // Add access token
+        request.fields['access_token'] = accessToken;
+
+        // Add file
+        final fileName = file.path.split('/').last;
+        request.files.add(http.MultipartFile.fromBytes(
+          'source',
+          fileBytes,
+          filename: fileName,
+        ));
+
+        if (kDebugMode) {
+          print('  🌐 Uploading to: $endpoint');
+          print('  📁 File name: $fileName');
+        }
+
+        // Send the request
+        final streamedResponse = await request.send();
+        final response = await http.Response.fromStream(streamedResponse);
+
+        if (kDebugMode) {
+          print('  📥 Upload response status: ${response.statusCode}');
+          print('  📥 Upload response body: ${response.body}');
+        }
+
+        if (response.statusCode == 200) {
+          final responseData = jsonDecode(response.body);
+          final mediaId = responseData['id'];
+
+          if (kDebugMode) {
+            print('  ✅ Media uploaded successfully');
+            print('  🆔 Media ID: $mediaId');
+          }
+
+          return mediaId;
+        } else {
+          final errorData = jsonDecode(response.body);
+          final errorMessage =
+              errorData['error']?['message'] ?? 'Unknown upload error';
+          if (kDebugMode) {
+            print('  ❌ Media upload failed: $errorMessage');
+          }
+          return null;
+        }
+      }
+
+      // Handle public URLs (already uploaded to cloud storage)
+      if (fileUri.startsWith('http://') || fileUri.startsWith('https://')) {
+        if (kDebugMode) {
+          print('  ✅ Using public URL for media: $fileUri');
+        }
+        return fileUri;
+      }
+
+      if (kDebugMode) {
+        print('  ❌ Unsupported file URI format: $fileUri');
+      }
+      return null;
+    } catch (e) {
+      if (kDebugMode) {
+        print('  ❌ Media upload failed: $e');
+      }
+      return null;
+    }
+  }
+
+  /// Post to Instagram with proper API integration
+  Future<void> _postToInstagram(SocialAction action) async {
+    final formattedContent = _formatPostForPlatform(action, 'instagram');
+
+    if (kDebugMode) {
+      print('📷 Posting to Instagram...');
+      print('  Original text: ${action.content.text}');
+      print('  Hashtags: ${action.content.hashtags.join(', ')}');
+      print('  Formatted content: $formattedContent');
+      print('  Media count: ${action.content.media.length}');
+    }
+
+    try {
+      // Get Instagram access token from Firestore
+      final uid = _auth.currentUser?.uid;
+      if (uid == null) {
+        throw Exception('User not authenticated');
+      }
+
+      final tokenDoc = await _firestore
+          .collection('users')
+          .doc(uid)
+          .collection('tokens')
+          .doc('instagram')
+          .get();
+
+      if (!tokenDoc.exists) {
+        throw Exception(
+            'Instagram access token not found. Please authenticate with Instagram first.');
+      }
+
+      final tokenData = tokenDoc.data()!;
+      final accessToken = tokenData['access_token'] as String;
+      final instagramUserId = tokenData['instagram_user_id'] as String;
+      final accountType = tokenData['account_type'] as String;
+
+      // Check if token is expired
+      final expiresIn = tokenData['expires_in'] as int?;
+      final createdAt = tokenData['created_at'] as Timestamp?;
+      if (expiresIn != null && createdAt != null) {
+        final expirationDate =
+            createdAt.toDate().add(Duration(seconds: expiresIn));
+        if (expirationDate.isBefore(DateTime.now())) {
+          throw Exception(
+              'Instagram access token has expired. Please re-authenticate.');
+        }
+      }
+
+      // Ensure we have media (Instagram requires media)
+      if (action.content.media.isEmpty) {
+        throw Exception('Instagram requires media content for posting');
+      }
+
+      final mediaItem = action.content.media.first;
+      final isVideo = mediaItem.mimeType.startsWith('video/');
+      final filePath = Uri.parse(mediaItem.fileUri).path;
+
+      // Verify file exists
+      final file = File(filePath);
+      if (!await file.exists()) {
+        throw Exception('Media file does not exist: $filePath');
+      }
+
+      if (kDebugMode) {
+        print('  📷 Instagram User ID: $instagramUserId');
+        print('  📷 Account Type: $accountType');
+        print('  📷 Media type: ${isVideo ? 'VIDEO' : 'IMAGE'}');
+        print('  📷 File path: $filePath');
+      }
+
+      // Instagram API with Instagram Login uses different endpoints
+      // For content publishing, we use the Instagram Graph API endpoints
+
+      // Step 1: Create a container with the media
+      final containerEndpoint =
+          'https://graph.instagram.com/v12.0/$instagramUserId/media';
+      final containerParams = {
+        'access_token': accessToken,
+        'caption': formattedContent,
+        'media_type': isVideo ? 'VIDEO' : 'IMAGE',
+      };
+
+      if (isVideo) {
+        // For videos, we need to provide a video URL
+        final videoUrl = await _uploadMediaToInstagram(
+            accessToken, mediaItem.fileUri, 'video');
+        if (videoUrl == null) {
+          throw Exception('Failed to upload video to Instagram');
+        }
+        containerParams['video_url'] = videoUrl;
+      } else {
+        // For images, we need to provide an image URL
+        final imageUrl = await _uploadMediaToInstagram(
+            accessToken, mediaItem.fileUri, 'image');
+        if (imageUrl == null) {
+          throw Exception('Failed to upload image to Instagram');
+        }
+        containerParams['image_url'] = imageUrl;
+      }
+
+      if (kDebugMode) {
+        print('  📤 Creating Instagram container...');
+        print('  📤 Container endpoint: $containerEndpoint');
+        print('  📤 Container params: ${jsonEncode(containerParams)}');
+      }
+
+      final containerResponse = await http.post(
+        Uri.parse(containerEndpoint),
+        body: containerParams,
+      );
+
+      if (kDebugMode) {
+        print(
+            '  📥 Container response status: ${containerResponse.statusCode}');
+        print('  📥 Container response body: ${containerResponse.body}');
+      }
+
+      if (containerResponse.statusCode != 200) {
+        final errorData = jsonDecode(containerResponse.body);
+        final errorMessage =
+            errorData['error']?['message'] ?? 'Unknown Instagram API error';
+        final errorCode = errorData['error']?['code'] ?? 'unknown';
+
+        if (kDebugMode) {
+          print('  ❌ Instagram container creation failed:');
+          print('    Code: $errorCode');
+          print('    Message: $errorMessage');
+        }
+
+        // Handle specific Instagram API errors
+        switch (errorCode) {
+          case '100':
+            throw Exception(
+                'Instagram API permission error. Check app permissions.');
+          case '190':
+            throw Exception(
+                'Instagram access token expired or invalid. Please re-authenticate.');
+          case '200':
+            throw Exception(
+                'Instagram app requires review for posting permissions. Please contact support.');
+          default:
+            throw Exception(
+                'Instagram container creation failed: $errorMessage');
+        }
+      }
+
+      final containerData = jsonDecode(containerResponse.body);
+      final containerId = containerData['id'];
+
+      if (kDebugMode) {
+        print('  ✅ Instagram container created successfully');
+        print('  🆔 Container ID: $containerId');
+      }
+
+      // Step 2: Publish the container
+      final publishEndpoint =
+          'https://graph.instagram.com/v12.0/$instagramUserId/media_publish';
+      final publishParams = {
+        'access_token': accessToken,
+        'creation_id': containerId,
+      };
+
+      if (kDebugMode) {
+        print('  📤 Publishing Instagram container...');
+        print('  📤 Publish endpoint: $publishEndpoint');
+        print('  📤 Publish params: ${jsonEncode(publishParams)}');
+      }
+
+      final publishResponse = await http.post(
+        Uri.parse(publishEndpoint),
+        body: publishParams,
+      );
+
+      if (kDebugMode) {
+        print('  📥 Publish response status: ${publishResponse.statusCode}');
+        print('  📥 Publish response body: ${publishResponse.body}');
+      }
+
+      if (publishResponse.statusCode != 200) {
+        final errorData = jsonDecode(publishResponse.body);
+        final errorMessage =
+            errorData['error']?['message'] ?? 'Unknown Instagram API error';
+        final errorCode = errorData['error']?['code'] ?? 'unknown';
+
+        if (kDebugMode) {
+          print('  ❌ Instagram publishing failed:');
+          print('    Code: $errorCode');
+          print('    Message: $errorMessage');
+        }
+
+        // Handle specific Instagram API errors
+        switch (errorCode) {
+          case '100':
+            throw Exception(
+                'Instagram API permission error. Check app permissions.');
+          case '190':
+            throw Exception(
+                'Instagram access token expired or invalid. Please re-authenticate.');
+          case '200':
+            throw Exception(
+                'Instagram app requires review for posting permissions. Please contact support.');
+          default:
+            throw Exception('Instagram publishing failed: $errorMessage');
+        }
+      }
+
+      final publishData = jsonDecode(publishResponse.body);
+      final postId = publishData['id'];
+
+      if (kDebugMode) {
+        print('  ✅ Successfully posted to Instagram');
+        print('  🆔 Post ID: $postId');
+      }
+
+      // Store the post ID for verification
+      await _storePostId(action.actionId, 'instagram', postId);
+    } catch (e) {
+      if (kDebugMode) {
+        print('  ❌ Instagram posting failed: $e');
+      }
+      rethrow;
+    }
+  }
+
+  /// Upload media to Instagram and get the media URL
+  Future<String?> _uploadMediaToInstagram(
+      String accessToken, String fileUri, String mediaType) async {
+    try {
+      if (kDebugMode) {
+        print('📤 Uploading media to Instagram: $fileUri');
+      }
+
+      // For local files, we need to upload them to a publicly accessible URL
+      if (fileUri.startsWith('file://')) {
+        final filePath = Uri.parse(fileUri).path;
+        final file = File(filePath);
+
+        if (!await file.exists()) {
+          throw Exception('Media file does not exist: $filePath');
+        }
+
+        // In a real implementation, you would:
+        // 1. Upload the file to your own server/storage (Firebase Storage, AWS S3, etc.)
+        // 2. Return the public URL
+
+        // For this implementation, we'll use a mock URL
+        // In production, you would use Firebase Storage or another service
+        final fileName = path.basename(filePath);
+        final mockUrl = 'https://example.com/uploads/$fileName';
+
+        if (kDebugMode) {
+          print('  ⚠️ Using mock URL for Instagram media: $mockUrl');
+          print('  ⚠️ In production, upload to your own server/storage');
+        }
+
+        return mockUrl;
       }
 
       // If it's already a public URL, we can use it directly
@@ -708,60 +1075,6 @@ class SocialPostService {
     }
   }
 
-  /// Get Facebook page access token for posting to pages
-  Future<String?> _getPageAccessToken(
-      String userAccessToken, String pageId) async {
-    try {
-      final response = await http.get(
-        Uri.parse(
-            'https://graph.facebook.com/v18.0/$pageId?fields=access_token&access_token=$userAccessToken'),
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      );
-
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        return data['access_token'];
-      } else {
-        if (kDebugMode) {
-          print('❌ Failed to get page access token: ${response.statusCode}');
-        }
-        return null;
-      }
-    } catch (e) {
-      if (kDebugMode) {
-        print('❌ Error getting page access token: $e');
-      }
-      return null;
-    }
-  }
-
-  /// Post to Instagram with proper API integration
-  Future<void> _postToInstagram(SocialAction action) async {
-    final formattedContent = _formatPostForPlatform(action, 'instagram');
-
-    if (kDebugMode) {
-      print('📷 Posting to Instagram...');
-      print('  Original text: ${action.content.text}');
-      print('  Hashtags: ${action.content.hashtags.join(', ')}');
-      print('  Formatted content: $formattedContent');
-      print('  Media count: ${action.content.media.length}');
-    }
-
-    // Simulate processing time
-    await Future.delayed(const Duration(milliseconds: 1200));
-
-    // Simulate occasional API failures (3% chance)
-    if (DateTime.now().millisecond % 33 == 0) {
-      throw Exception('Instagram media processing failed');
-    }
-
-    if (kDebugMode) {
-      print('  ✅ Successfully posted to Instagram');
-    }
-  }
-
   /// Post to YouTube with proper API integration
   Future<void> _postToYouTube(SocialAction action) async {
     final formattedContent = _formatPostForPlatform(action, 'youtube');
@@ -774,16 +1087,89 @@ class SocialPostService {
       print('  Media count: ${action.content.media.length}');
     }
 
-    // Simulate processing time (YouTube uploads take longer)
-    await Future.delayed(const Duration(milliseconds: 2000));
+    try {
+      // Get YouTube access token from Firestore
+      final uid = _auth.currentUser?.uid;
+      if (uid == null) {
+        throw Exception('User not authenticated');
+      }
 
-    // Simulate occasional API failures (2% chance)
-    if (DateTime.now().millisecond % 50 == 0) {
-      throw Exception('YouTube upload processing failed');
-    }
+      final tokenDoc = await _firestore
+          .collection('users')
+          .doc(uid)
+          .collection('tokens')
+          .doc('youtube')
+          .get();
 
-    if (kDebugMode) {
-      print('  ✅ Successfully posted to YouTube');
+      if (!tokenDoc.exists) {
+        throw Exception(
+            'YouTube access token not found. Please authenticate with YouTube first.');
+      }
+
+      final tokenData = tokenDoc.data()!;
+      final accessToken = tokenData['access_token'] as String;
+
+      // Ensure we have video media (YouTube requires video)
+      if (action.content.media.isEmpty) {
+        throw Exception('YouTube requires video content for posting');
+      }
+
+      final mediaItem = action.content.media.first;
+      if (!mediaItem.mimeType.startsWith('video/')) {
+        throw Exception('YouTube only supports video content');
+      }
+
+      // Get video file path
+      final videoPath = mediaItem.fileUri;
+      if (videoPath.isEmpty) {
+        throw Exception('Video file path not found');
+      }
+
+      // Upload video to YouTube
+      final response = await http.post(
+        Uri.parse('https://www.googleapis.com/upload/youtube/v3/videos')
+            .replace(queryParameters: {
+          'part': 'snippet,status',
+          'uploadType': 'multipart',
+          'access_token': accessToken,
+        }),
+        headers: {
+          'Authorization': 'Bearer $accessToken',
+          'Content-Type': 'application/json; charset=UTF-8',
+        },
+        body: jsonEncode({
+          'snippet': {
+            'title': action.content.text.split('\n')[0], // First line as title
+            'description': formattedContent,
+            'tags': action.content.hashtags,
+            'categoryId': '22', // People & Blogs
+          },
+          'status': {
+            'privacyStatus': 'public',
+            'selfDeclaredMadeForKids': false,
+          },
+        }),
+      );
+
+      if (response.statusCode != 200) {
+        throw Exception('Failed to upload video to YouTube: ${response.body}');
+      }
+
+      final responseData = jsonDecode(response.body);
+      final videoId = responseData['id'];
+
+      // Store video ID for verification
+      await _storePostId(action.actionId, 'youtube', videoId);
+
+      if (kDebugMode) {
+        print('  ✅ Successfully posted to YouTube');
+        print('  📺 Video ID: $videoId');
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        print('  ❌ YouTube posting failed: $e');
+      }
+      rethrow;
     }
   }
 
@@ -913,7 +1299,7 @@ class SocialPostService {
       // Verify post exists using Facebook Graph API
       final response = await http.get(
         Uri.parse(
-            'https://graph.facebook.com/v18.0/$postId?fields=id,created_time,message&access_token=$accessToken'),
+            'https://graph.facebook.com/v23.0/$postId?fields=id,created_time,message&access_token=$accessToken'),
         headers: {
           'Content-Type': 'application/json',
         },
@@ -961,13 +1347,93 @@ class SocialPostService {
   Future<bool> _verifyInstagramPost(String? postId) async {
     if (postId == null) return false;
 
-    // Simulate verification check
-    await Future.delayed(const Duration(milliseconds: 400));
+    try {
+      // Get Instagram access token from Firestore
+      final uid = _auth.currentUser?.uid;
+      if (uid == null) return false;
 
-    // In a real implementation, this would call Instagram Basic Display API
-    // GET /{media-id}?fields=id,media_type,media_url,permalink
+      final tokenDoc = await _firestore
+          .collection('users')
+          .doc(uid)
+          .collection('tokens')
+          .doc('instagram')
+          .get();
 
-    return true; // Simulate success for now
+      if (!tokenDoc.exists) return false;
+
+      final tokenData = tokenDoc.data()!;
+      final accessToken = tokenData['access_token'] as String;
+      final instagramId = tokenData['instagram_id'] as String;
+
+      // Check if token is expired
+      final expiresAt = tokenData['expires_at'] as Timestamp?;
+      if (expiresAt != null && expiresAt.toDate().isBefore(DateTime.now())) {
+        if (kDebugMode) {
+          print('❌ Instagram access token expired during verification');
+        }
+        return false;
+      }
+
+      // Verify post exists using Instagram Graph API
+      final response = await http.get(
+        Uri.parse(
+            'https://graph.facebook.com/v19.0/$postId?fields=id,media_type,media_url,permalink&access_token=$accessToken'),
+      );
+
+      if (kDebugMode) {
+        print('🔍 Instagram verification response: ${response.statusCode}');
+        print('🔍 Response body: ${response.body}');
+      }
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        final verifiedPostId = data['id'];
+
+        if (verifiedPostId == postId) {
+          if (kDebugMode) {
+            print('✅ Instagram post verified successfully');
+          }
+          return true;
+        }
+      } else if (response.statusCode == 404) {
+        if (kDebugMode) {
+          print('❌ Instagram post not found (404)');
+        }
+        return false;
+      } else {
+        final errorData = jsonDecode(response.body);
+        final errorMessage = errorData['error']?['message'] ?? 'Unknown error';
+        final errorCode = errorData['error']?['code'] ?? 'unknown';
+
+        if (kDebugMode) {
+          print(
+              '❌ Instagram verification error: $errorMessage (Code: $errorCode)');
+        }
+
+        // Handle specific Instagram API errors
+        switch (errorCode) {
+          case '100':
+            if (kDebugMode) {
+              print('❌ Instagram API permission error during verification');
+            }
+            return false;
+          case '190':
+            if (kDebugMode) {
+              print('❌ Instagram access token expired during verification');
+            }
+            return false;
+          default:
+            return false;
+        }
+      }
+
+      return false;
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ Instagram verification failed: $e');
+      }
+      return false;
+    }
   }
 
   /// Verify YouTube post exists
@@ -1065,6 +1531,230 @@ class SocialPostService {
       if (kDebugMode) {
         print('❌ Error marking action as failed: $e');
       }
+    }
+  }
+
+  /// Get page access token for posting to pages
+  Future<String?> _getPageAccessToken(
+      String userAccessToken, String pageId) async {
+    try {
+      if (kDebugMode) {
+        print('📄 Getting page access token for page: $pageId');
+      }
+
+      // First, try to get stored page access token from Firestore
+      final uid = _auth.currentUser?.uid;
+      if (uid != null) {
+        try {
+          final storedTokenDoc = await _firestore
+              .collection('users')
+              .doc(uid)
+              .collection('tokens')
+              .doc('facebook_pages')
+              .get();
+
+          if (storedTokenDoc.exists) {
+            final storedTokens = storedTokenDoc.data()!;
+            final pageTokens =
+                storedTokens['page_tokens'] as Map<String, dynamic>?;
+
+            if (pageTokens != null && pageTokens.containsKey(pageId)) {
+              final storedPageToken =
+                  pageTokens[pageId] as Map<String, dynamic>;
+              final token = storedPageToken['access_token'] as String;
+              final expiresAt = storedPageToken['expires_at'] as Timestamp?;
+
+              // Check if stored token is still valid
+              if (expiresAt == null ||
+                  expiresAt.toDate().isAfter(DateTime.now())) {
+                if (kDebugMode) {
+                  print('✅ Using stored page access token for page: $pageId');
+                }
+                return token;
+              } else {
+                if (kDebugMode) {
+                  print(
+                      '⚠️ Stored page access token expired for page: $pageId');
+                }
+              }
+            }
+          }
+        } catch (e) {
+          if (kDebugMode) {
+            print('⚠️ Error checking stored page tokens: $e');
+          }
+        }
+      }
+
+      // Use the FacebookAuthService method if available
+      if (_authService != null) {
+        try {
+          final facebookAuth = FacebookAuthService();
+          final pageAccessToken =
+              await facebookAuth.getFacebookPageAccessToken(pageId);
+          if (pageAccessToken != null) {
+            // Store the page access token for future use
+            await _storePageAccessToken(pageId, pageAccessToken);
+
+            if (kDebugMode) {
+              print(
+                  '✅ Got page access token via FacebookAuthService for page: $pageId');
+            }
+            return pageAccessToken;
+          }
+        } catch (e) {
+          if (kDebugMode) {
+            print(
+                '⚠️ FacebookAuthService page access token failed, falling back to direct API call: $e');
+          }
+        }
+      }
+
+      // Fallback to direct API call
+      final response = await http.get(
+        Uri.parse(
+            'https://graph.facebook.com/v23.0/$pageId?fields=access_token&access_token=$userAccessToken'),
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        final pageAccessToken = data['access_token'];
+
+        if (kDebugMode) {
+          print(
+              '✅ Got page access token via direct API call for page: $pageId');
+        }
+
+        // Store the page access token for future use
+        await _storePageAccessToken(pageId, pageAccessToken);
+
+        return pageAccessToken;
+      } else {
+        final errorData = jsonDecode(response.body);
+        final errorMessage = errorData['error']?['message'] ?? 'Unknown error';
+        final errorCode = errorData['error']?['code'] ?? 'unknown';
+
+        if (kDebugMode) {
+          print(
+              '❌ Failed to get page access token: $errorMessage (Code: $errorCode)');
+        }
+
+        // Handle specific error cases
+        switch (errorCode) {
+          case '190':
+            throw Exception(
+                'Facebook access token expired or invalid. Please re-authenticate.');
+          case '100':
+            throw Exception(
+                'Facebook API permission error. Check app permissions.');
+          case '200':
+            throw Exception(
+                'Facebook app requires review for pages_manage_posts permission. Please contact support.');
+          case '294':
+            throw Exception(
+                'Facebook app requires review for posting permissions. Please contact support.');
+          default:
+            if (errorMessage.toLowerCase().contains('permission') ||
+                errorMessage.toLowerCase().contains('pages_manage_posts')) {
+              throw Exception(
+                  'Facebook posting requires additional permissions. Please contact support to enable posting permissions.');
+            }
+            throw Exception(
+                'Facebook API error: $errorMessage (Code: $errorCode)');
+        }
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ Error getting page access token: $e');
+      }
+      rethrow;
+    }
+  }
+
+  /// Store page access token in Firestore for reuse
+  Future<void> _storePageAccessToken(
+      String pageId, String pageAccessToken) async {
+    try {
+      final uid = _auth.currentUser?.uid;
+      if (uid == null) return;
+
+      // Page access tokens typically don't expire, but we'll store them with a long expiration
+      final expiresAt = DateTime.now().add(const Duration(days: 60));
+
+      await _firestore
+          .collection('users')
+          .doc(uid)
+          .collection('tokens')
+          .doc('facebook_pages')
+          .set({
+        'page_tokens.$pageId': {
+          'access_token': pageAccessToken,
+          'expires_at': Timestamp.fromDate(expiresAt),
+          'stored_at': FieldValue.serverTimestamp(),
+        },
+        'last_updated': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+
+      if (kDebugMode) {
+        print('✅ Stored page access token for page: $pageId');
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ Error storing page access token: $e');
+      }
+    }
+  }
+
+  /// Share to Instagram via SharePlus (manual sharing for consumer accounts)
+  Future<void> _shareToInstagramViaSharePlus(SocialAction action) async {
+    final formattedContent = _formatPostForPlatform(action, 'instagram');
+
+    if (kDebugMode) {
+      print('📷 Sharing to Instagram via SharePlus (manual sharing)...');
+      print('  Original text: ${action.content.text}');
+      print('  Hashtags: ${action.content.hashtags.join(', ')}');
+      print('  Formatted content: $formattedContent');
+      print('  Media count: ${action.content.media.length}');
+    }
+
+    try {
+      // Instagram requires media, so we need at least one media file
+      List<XFile> mediaFiles = [];
+      if (action.content.media.isNotEmpty) {
+        for (final mediaItem in action.content.media) {
+          if (mediaItem.fileUri.startsWith('file://')) {
+            final filePath = Uri.parse(mediaItem.fileUri).path;
+            if (await File(filePath).exists()) {
+              mediaFiles.add(XFile(filePath));
+            }
+          }
+        }
+      }
+
+      if (mediaFiles.isEmpty) {
+        throw Exception('Instagram requires media content for sharing');
+      }
+
+      // Share using SharePlus with media
+      await Share.shareXFiles(
+        mediaFiles,
+        text: formattedContent,
+        subject: 'Instagram Post',
+      );
+
+      if (kDebugMode) {
+        print('  ✅ Successfully shared to Instagram via SharePlus');
+        print(
+            '  📝 Note: This is manual sharing. User needs to open Instagram app to complete posting.');
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        print('  ❌ SharePlus sharing failed: $e');
+      }
+      rethrow;
     }
   }
 }

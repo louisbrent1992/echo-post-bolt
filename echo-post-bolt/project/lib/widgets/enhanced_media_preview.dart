@@ -855,7 +855,7 @@ class _EnhancedMediaPreviewState extends State<EnhancedMediaPreview>
                             return Text(
                               'Detecting...',
                               style: TextStyle(
-                                color: Colors.white.withOpacity(0.7),
+                                color: Colors.white.withValues(alpha: 0.7),
                                 fontSize: AppTypography.small,
                                 fontWeight: FontWeight.w500,
                               ),

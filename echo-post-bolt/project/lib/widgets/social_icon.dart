@@ -377,6 +377,8 @@ class SevenIconHeader extends StatelessWidget {
   final bool enableInteraction;
   final List<String>?
       incompatiblePlatforms; // NEW: List of incompatible platforms
+  final Map<String, bool>?
+      platformAuthenticationState; // NEW: Authentication state
 
   const SevenIconHeader({
     super.key,
@@ -387,6 +389,7 @@ class SevenIconHeader extends StatelessWidget {
     this.height = 54,
     this.enableInteraction = true,
     this.incompatiblePlatforms, // NEW: Optional incompatible platforms list
+    this.platformAuthenticationState, // NEW: Optional authentication state
   });
 
   @override
@@ -411,6 +414,8 @@ class SevenIconHeader extends StatelessWidget {
             final isSelected = selectedPlatforms.contains(platform);
             final isIncompatible =
                 incompatiblePlatforms?.contains(platform) ?? false;
+            final isAuthenticated =
+                platformAuthenticationState?[platform] ?? false;
             final color = SocialPlatforms.getColor(platform);
             final icon = SocialPlatforms.getIcon(platform);
 
@@ -422,6 +427,7 @@ class SevenIconHeader extends StatelessWidget {
                   color,
                   isSelected,
                   isIncompatible, // NEW: Pass incompatible state
+                  isAuthenticated, // NEW: Pass authentication state
                   height * 0.8, // Consistent sizing
                 ),
               ),
@@ -492,13 +498,14 @@ class SevenIconHeader extends StatelessWidget {
     Color color,
     bool isSelected,
     bool isIncompatible, // NEW: Incompatible state parameter
+    bool isAuthenticated, // NEW: Authentication state parameter
     double size,
   ) {
     return Stack(
       alignment: Alignment.center,
       children: [
-        // Beautiful ripple effect when selected (but not if incompatible)
-        if (isSelected && !isIncompatible)
+        // Beautiful ripple effect when selected (but not if incompatible or unauthenticated)
+        if (isSelected && !isIncompatible && isAuthenticated)
           SocialIconRipple(
             color: color,
             size: size,
@@ -520,22 +527,28 @@ class SevenIconHeader extends StatelessWidget {
               height: size,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                color: isIncompatible
-                    ? Colors.grey
-                        .withValues(alpha: 0.1) // Grayed out for incompatible
-                    : isSelected
-                        ? color.withValues(alpha: 0.2)
-                        : Colors.white.withValues(alpha: 0.1),
+                color: !isAuthenticated
+                    ? Colors.grey.withValues(
+                        alpha: 0.1) // Grayed out for unauthenticated
+                    : isIncompatible
+                        ? Colors.grey.withValues(
+                            alpha: 0.1) // Grayed out for incompatible
+                        : isSelected
+                            ? color.withValues(alpha: 0.2)
+                            : Colors.white.withValues(alpha: 0.1),
                 border: Border.all(
-                  color: isIncompatible
+                  color: !isAuthenticated
                       ? Colors.grey.withValues(
-                          alpha: 0.3) // Gray border for incompatible
-                      : isSelected
-                          ? color
-                          : Colors.white.withValues(alpha: 0.3),
+                          alpha: 0.3) // Gray border for unauthenticated
+                      : isIncompatible
+                          ? Colors.grey.withValues(
+                              alpha: 0.3) // Gray border for incompatible
+                          : isSelected
+                              ? color
+                              : Colors.white.withValues(alpha: 0.3),
                   width: isSelected ? 2.0 : 1.5,
                 ),
-                boxShadow: isSelected && !isIncompatible
+                boxShadow: isSelected && !isIncompatible && isAuthenticated
                     ? [
                         BoxShadow(
                           color: color.withValues(alpha: 0.3),
@@ -547,11 +560,15 @@ class SevenIconHeader extends StatelessWidget {
               ),
               child: Icon(
                 icon,
-                color: isIncompatible
-                    ? Colors.grey.withValues(alpha: 0.5) // Grayed out icon
-                    : isSelected
-                        ? color
-                        : Colors.white.withValues(alpha: 0.8),
+                color: !isAuthenticated
+                    ? Colors.grey.withValues(
+                        alpha: 0.5) // Grayed out icon for unauthenticated
+                    : isIncompatible
+                        ? Colors.grey.withValues(
+                            alpha: 0.5) // Grayed out icon for incompatible
+                        : isSelected
+                            ? color
+                            : Colors.white.withValues(alpha: 0.8),
                 size: size * 0.5, // Increase icon size to make it larger
               ),
             ),

@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import '../services/auth_service.dart';
+import '../services/account_auth_service.dart';
 
 /// Centralized registry for all supported social media platforms
 /// This serves as the single source of truth for platform definitions,
@@ -253,7 +253,7 @@ class SocialPlatforms {
 
   /// Check if user has business account access for a platform
   static Future<bool> hasBusinessAccountAccess(String platform,
-      {AuthService? authService}) async {
+      {AccountAuthService? authService}) async {
     if (!requiresBusinessAccount(platform)) return true;
 
     if (authService == null) return false;
@@ -313,6 +313,8 @@ class SocialPlatforms {
     if (capability == null) return false;
 
     switch (contentType.toLowerCase()) {
+      case 'none':
+        return true; // Ground state - all platforms are compatible for authentication
       case 'text':
         return capability.supportsText && !capability.requiresMedia;
       case 'image':
@@ -341,9 +343,16 @@ class SocialPlatforms {
 
   /// Get content type from media list
   static String getContentType(
-      {bool hasMedia = false, List<dynamic>? mediaItems}) {
+      {bool hasMedia = false, List<dynamic>? mediaItems, String? text}) {
+    // Check for truly empty content (ground state)
+    final hasText = text != null && text.trim().isNotEmpty;
+
+    if ((!hasMedia || mediaItems == null || mediaItems.isEmpty) && !hasText) {
+      return 'none'; // Ground state - no content at all
+    }
+
     if (!hasMedia || mediaItems == null || mediaItems.isEmpty) {
-      return 'text';
+      return 'text'; // Text-only content
     }
 
     // Check the first media item's MIME type
@@ -383,7 +392,7 @@ class SocialPlatforms {
       }
     }
 
-    if (mimeType == null) return 'text';
+    if (mimeType == null) return hasText ? 'text' : 'none';
 
     if (mimeType.startsWith('video/')) {
       return 'video';
@@ -391,7 +400,7 @@ class SocialPlatforms {
       return 'image';
     }
 
-    return 'text';
+    return hasText ? 'text' : 'none';
   }
 
   /// Generate user-friendly compatibility message
@@ -403,6 +412,8 @@ class SocialPlatforms {
         incompatiblePlatforms.map((p) => getDisplayName(p)).join(', ');
 
     switch (contentType) {
+      case 'none':
+        return ''; // Ground state - no incompatibility messages
       case 'text':
         return '$platformNames require${incompatiblePlatforms.length == 1 ? 's' : ''} media content';
       case 'image':

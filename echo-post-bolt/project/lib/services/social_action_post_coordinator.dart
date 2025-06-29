@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:photo_manager/photo_manager.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 import '../models/social_action.dart';
 import '../models/media_validation.dart';
@@ -11,10 +13,17 @@ import '../services/media_coordinator.dart';
 import '../services/firestore_service.dart';
 import '../services/ai_service.dart';
 import '../services/social_post_service.dart';
-import '../services/auth_service.dart';
+import '../services/account_auth_service.dart';
+import '../services/auth/facebook_auth_service.dart';
+import '../services/auth/instagram_auth_service.dart';
+import '../services/auth/youtube_auth_service.dart';
+import '../services/auth/twitter_auth_service.dart';
+import '../services/auth/tiktok_auth_service.dart';
 import '../services/natural_language_parser.dart';
 import '../constants/social_platforms.dart';
 import '../models/status_message.dart';
+import 'platform_document_service.dart';
+import 'platform_connection_service.dart';
 
 /// Status message priority levels to prevent important messages from being overridden
 enum StatusPriority { low, medium, high, critical }
@@ -38,7 +47,7 @@ class SocialActionPostCoordinator extends ChangeNotifier {
   final FirestoreService _firestoreService;
   final AIService _aiService;
   final SocialPostService _socialPostService;
-  final AuthService _authService;
+  final AccountAuthService _authService;
   final NaturalLanguageParser _naturalLanguageParser;
 
   // Current post state - CRITICAL: Now non-nullable
@@ -97,12 +106,17 @@ class SocialActionPostCoordinator extends ChangeNotifier {
   Timer? _errorClearTimer;
   static const Duration _defaultProcessingTimeout = Duration(seconds: 45);
 
+  // NEW: Authentication state management
+  final Map<String, bool> _platformAuthenticationState = {};
+  bool _isInitializingAuthentication = false;
+  StreamSubscription? _authStateSubscription;
+
   SocialActionPostCoordinator({
     required MediaCoordinator mediaCoordinator,
     required FirestoreService firestoreService,
     required AIService aiService,
     required SocialPostService socialPostService,
-    required AuthService authService,
+    required AccountAuthService authService,
     required NaturalLanguageParser naturalLanguageParser,
   })  : _mediaCoordinator = mediaCoordinator,
         _firestoreService = firestoreService,
@@ -913,27 +927,23 @@ class SocialActionPostCoordinator extends ChangeNotifier {
 
   /// Get list of platforms that the user has authenticated with
   Future<List<String>> _getAuthenticatedPlatforms() async {
-    final authenticatedPlatforms = <String>[];
-
     try {
-      for (final platform in SocialPlatforms.all) {
-        final isConnected = await _authService.isPlatformConnected(platform);
-        if (isConnected) {
-          authenticatedPlatforms.add(platform);
-        }
-      }
+      // Use PlatformConnectionService as the single source of truth
+      final connectedPlatforms =
+          await PlatformConnectionService.getConnectedPlatforms();
 
       if (kDebugMode) {
-        print('🔐 Authenticated platforms: $authenticatedPlatforms');
+        print('🔐 Authenticated platforms: $connectedPlatforms');
       }
+
+      return connectedPlatforms;
     } catch (e) {
       if (kDebugMode) {
         print('⚠️ Failed to check platform authentication: $e');
       }
       // Return empty list if auth check fails
+      return [];
     }
-
-    return authenticatedPlatforms;
   }
 
   /// Intelligently select default platforms based on content type, media availability, and user authentication
@@ -1809,6 +1819,7 @@ class SocialActionPostCoordinator extends ChangeNotifier {
     _statusTimer?.cancel();
     _processingWatchdog?.cancel();
     _errorClearTimer?.cancel();
+    _authStateSubscription?.cancel(); // NEW: Clean up auth state subscription
 
     if (kDebugMode) {
       print('🗑️ SocialActionPostCoordinator: Disposal complete');
@@ -2543,6 +2554,7 @@ class SocialActionPostCoordinator extends ChangeNotifier {
     final contentType = SocialPlatforms.getContentType(
       hasMedia: hasMedia,
       mediaItems: _currentPost.content.media,
+      text: _currentPost.content.text,
     );
 
     final isCompatible =
@@ -2766,5 +2778,224 @@ class SocialActionPostCoordinator extends ChangeNotifier {
         print('✅ Transition state force reset: _isTransitioning = false');
       }
     }
+  }
+
+  // NEW: Authentication state getters
+  bool isPlatformAuthenticated(String platform) {
+    return _platformAuthenticationState[platform] ?? false;
+  }
+
+  List<String> getAuthenticatedPlatforms() {
+    return _platformAuthenticationState.entries
+        .where((entry) => entry.value)
+        .map((entry) => entry.key)
+        .toList();
+  }
+
+  bool get isInitializingAuthentication => _isInitializingAuthentication;
+
+  /// Initialize authentication state on coordinator creation
+  Future<void> initializeAuthenticationState() async {
+    if (_isInitializingAuthentication) return;
+
+    _isInitializingAuthentication = true;
+    _safeNotifyListeners();
+
+    try {
+      await _validateExistingTokens();
+      _setupAuthStateListener();
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ Error initializing authentication state: $e');
+      }
+    } finally {
+      _isInitializingAuthentication = false;
+      _safeNotifyListeners();
+    }
+  }
+
+  /// Check authentication status for all platforms
+  Future<void> refreshAuthenticationState() async {
+    try {
+      await _validateExistingTokens();
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ Error refreshing authentication state: $e');
+      }
+    }
+  }
+
+  /// Handle platform authentication attempt with error handling
+  Future<void> authenticatePlatform(String platform) async {
+    try {
+      if (kDebugMode) {
+        print('🔐 Starting authentication for $platform');
+      }
+
+      switch (platform.toLowerCase()) {
+        case 'facebook':
+          await _authenticateFacebook();
+          break;
+        case 'instagram':
+          await _authenticateInstagram();
+          break;
+        case 'youtube':
+          await _authenticateYouTube();
+          break;
+        case 'twitter':
+          await _authenticateTwitter();
+          break;
+        case 'tiktok':
+          await _authenticateTikTok();
+          break;
+        default:
+          throw Exception('Unsupported platform: $platform');
+      }
+
+      // Refresh authentication state after successful auth
+      await refreshAuthenticationState();
+
+      // Show success message
+      requestStatusUpdate(
+        'Successfully connected to ${SocialPlatforms.getDisplayName(platform)}! ✅',
+        StatusMessageType.success,
+        duration: const Duration(seconds: 3),
+        priority: StatusPriority.medium,
+      );
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ Authentication failed for $platform: $e');
+      }
+
+      // Show error message
+      requestStatusUpdate(
+        'Failed to connect to ${SocialPlatforms.getDisplayName(platform)}: ${e.toString()}',
+        StatusMessageType.error,
+        duration: const Duration(seconds: 5),
+        priority: StatusPriority.high,
+      );
+    }
+  }
+
+  /// Validate and refresh tokens during initialization
+  /// NEW: Streamlined logic using PlatformDocumentService and PlatformConnectionService
+  Future<void> _validateExistingTokens() async {
+    for (final platform in SocialPlatforms.all) {
+      try {
+        // Since documents are pre-initialized, they always exist
+        final tokenDoc = await FirebaseFirestore.instance
+            .collection('users')
+            .doc(FirebaseAuth.instance.currentUser?.uid)
+            .collection('tokens')
+            .doc(platform)
+            .get();
+
+        // Check if token fields are nullified using PlatformDocumentService
+        final tokenData = tokenDoc.data()!;
+        final isNullified = PlatformDocumentService.isPlatformDocumentNullified(
+            tokenData, platform);
+
+        if (isNullified) {
+          // Token fields are nullified - user is not authenticated
+          _platformAuthenticationState[platform] = false;
+          if (kDebugMode) {
+            print('❌ $platform token is nullified');
+          }
+        } else {
+          // Token fields are not nullified - use PlatformConnectionService as ground truth
+          final isConnected =
+              await PlatformConnectionService.isPlatformConnected(platform);
+          _platformAuthenticationState[platform] = isConnected;
+
+          if (kDebugMode) {
+            print(isConnected
+                ? '✅ $platform is connected'
+                : '❌ $platform is not connected');
+          }
+        }
+      } catch (e) {
+        _platformAuthenticationState[platform] = false;
+        if (kDebugMode) {
+          print('⚠️ Error checking $platform token: $e');
+        }
+      }
+    }
+    _safeNotifyListeners();
+  }
+
+  /// Listen for logout events from profile page
+  void _setupAuthStateListener() {
+    _authStateSubscription = FirebaseFirestore.instance
+        .collection('users')
+        .doc(FirebaseAuth.instance.currentUser?.uid)
+        .collection('tokens')
+        .snapshots()
+        .listen((snapshot) {
+      // Check which platforms have been logged out
+      for (final platform in SocialPlatforms.all) {
+        final tokenDoc =
+            snapshot.docs.where((doc) => doc.id == platform).firstOrNull;
+
+        if (tokenDoc == null) {
+          // Document was deleted - platform was logged out
+          if (_platformAuthenticationState[platform] == true) {
+            _handlePlatformLogout(platform);
+          }
+        } else {
+          // Document exists - check if it's nullified using PlatformDocumentService
+          final tokenData = tokenDoc.data();
+          final isNullified =
+              PlatformDocumentService.isPlatformDocumentNullified(
+                  tokenData, platform);
+
+          if (isNullified && _platformAuthenticationState[platform] == true) {
+            // Token was nullified - platform was logged out
+            _handlePlatformLogout(platform);
+          }
+        }
+      }
+    });
+  }
+
+  /// Handle platform logout from profile page
+  void _handlePlatformLogout(String platform) {
+    _platformAuthenticationState[platform] = false;
+    _safeNotifyListeners();
+
+    // Notify user through TranscriptionStatusWidget
+    requestStatusUpdate(
+      'Logged out of ${SocialPlatforms.getDisplayName(platform)}',
+      StatusMessageType.info,
+      duration: const Duration(seconds: 3),
+      priority: StatusPriority.medium,
+    );
+  }
+
+  /// Platform-specific authentication methods
+  Future<void> _authenticateFacebook() async {
+    final facebookAuth = FacebookAuthService();
+    await facebookAuth.signInWithFacebook();
+  }
+
+  Future<void> _authenticateInstagram() async {
+    final instagramAuth = InstagramAuthService();
+    // Instagram OAuth needs a context for WebView dialog, but we don't have one here
+    // The auth service will handle this by using a simulated flow or alternative method
+    await instagramAuth.signInWithInstagram();
+  }
+
+  Future<void> _authenticateYouTube() async {
+    final youtubeAuth = YouTubeAuthService();
+    await youtubeAuth.signInWithYouTube();
+  }
+
+  Future<void> _authenticateTwitter() async {
+    final twitterAuth = TwitterAuthService();
+    await twitterAuth.signInWithTwitter();
+  }
+
+  Future<void> _authenticateTikTok() async {
+    final tiktokAuth = TikTokAuthService();
+    await tiktokAuth.signInWithTikTok();
   }
 }
