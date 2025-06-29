@@ -4,18 +4,17 @@ import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:provider/provider.dart';
 import 'route_observer.dart';
-
-import 'services/auth_service.dart';
-import 'services/firestore_service.dart';
-import 'services/social_post_service.dart';
-import 'services/ai_service.dart';
+import 'services/account_auth_service.dart';
 import 'services/media_coordinator.dart';
-import 'services/social_action_post_coordinator.dart';
+import 'services/firestore_service.dart';
+import 'services/ai_service.dart';
+import 'services/social_post_service.dart';
 import 'services/natural_language_parser.dart';
+import 'services/social_action_post_coordinator.dart';
 import 'services/app_settings_service.dart';
 import 'services/permission_manager.dart';
-import 'screens/login_screen.dart';
 import 'screens/command_screen.dart';
+import 'screens/login_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -44,7 +43,7 @@ Future<void> main() async {
   runApp(
     MultiProvider(
       providers: [
-        ChangeNotifierProvider(create: (_) => AuthService()),
+        ChangeNotifierProvider(create: (_) => AccountAuthService()),
         ChangeNotifierProvider(create: (_) => AppSettingsService()),
         ChangeNotifierProvider<MediaCoordinator>(
           create: (_) => MediaCoordinator(),
@@ -71,7 +70,7 @@ Future<void> main() async {
               firestoreService: context.read<FirestoreService>(),
               aiService: context.read<AIService>(),
               socialPostService: context.read<SocialPostService>(),
-              authService: context.read<AuthService>(),
+              authService: context.read<AccountAuthService>(),
               naturalLanguageParser: context.read<NaturalLanguageParser>(),
             );
 
@@ -79,6 +78,9 @@ Future<void> main() async {
               print(
                   '🔧 SocialActionPostCoordinator created with direct dependencies');
             }
+
+            // Initialize authentication state after coordinator creation
+            coordinator.initializeAuthenticationState();
 
             return coordinator;
           },
@@ -142,7 +144,7 @@ Future<void> main() async {
               ),
               themeMode: ThemeMode.system,
               navigatorObservers: [routeObserver],
-              home: Consumer<AuthService>(
+              home: Consumer<AccountAuthService>(
                 builder: (context, authService, _) {
                   return authService.currentUser != null
                       ? const CommandScreen()

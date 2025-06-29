@@ -1,7 +1,5 @@
 import 'dart:io';
 import 'package:flutter/foundation.dart';
-import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
 /// Cross-Platform Video Test Suite
 ///
@@ -49,7 +47,7 @@ class CrossPlatformVideoTest {
         }
 
         // Delay between switches
-        await Future.delayed(Duration(milliseconds: _switchDelayMs));
+        await Future.delayed(const Duration(milliseconds: _switchDelayMs));
       } catch (e) {
         errorCount++;
         print('❌ Switch $i failed: $e');
@@ -230,7 +228,7 @@ class CrossPlatformVideoTest {
     print('');
 
     // Platform-specific validation
-    final memoryLimit = kIsWeb ? 30.0 : 50.0; // Lower limit for web
+    const memoryLimit = kIsWeb ? 30.0 : 50.0; // Lower limit for web
     if (maxMemory < memoryLimit) {
       print(
           '✅ Memory usage PASSED: ${maxMemory.toStringAsFixed(1)}MB < ${memoryLimit}MB target');

@@ -2,8 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
 
-import '../services/auth_service.dart';
+import '../services/account_auth_service.dart';
+import '../services/auth/facebook_auth_service.dart';
+import '../services/auth/instagram_auth_service.dart';
+import '../services/auth/youtube_auth_service.dart';
+import '../services/auth/twitter_auth_service.dart';
+import '../services/auth/tiktok_auth_service.dart';
 import '../screens/history_screen.dart';
 import '../constants/social_platforms.dart';
 
@@ -61,7 +67,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Future<void> _loadPlatformConnections() async {
-    final authService = Provider.of<AuthService>(context, listen: false);
+    final authService = Provider.of<AccountAuthService>(context, listen: false);
     final Map<String, bool> connections = {};
     for (final platform in SocialPlatforms.all) {
       connections[platform] = await authService.isPlatformConnected(platform);
@@ -74,23 +80,68 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Future<void> _disconnectPlatform(String platform) async {
-    final authService = Provider.of<AuthService>(context, listen: false);
     try {
-      await authService.disconnectPlatform(platform);
+      if (kDebugMode) {
+        print('🔌 Disconnecting from $platform...');
+      }
+
+      // Use the appropriate service to properly sign out from each platform
+      switch (platform.toLowerCase()) {
+        case 'facebook':
+          final facebookAuth = FacebookAuthService();
+          await facebookAuth.signOutOfFacebook();
+          break;
+        case 'instagram':
+          final instagramAuth = InstagramAuthService();
+          await instagramAuth.signOutOfInstagram();
+          break;
+        case 'youtube':
+          final youtubeAuth = YouTubeAuthService();
+          await youtubeAuth.signOutOfYouTube();
+          break;
+        case 'twitter':
+          final twitterAuth = TwitterAuthService();
+          await twitterAuth.signOutOfTwitter();
+          break;
+        case 'tiktok':
+          final tiktokAuth = TikTokAuthService();
+          await tiktokAuth.signOutOfTikTok();
+          break;
+        default:
+          // Fallback to the old method for unknown platforms
+          final authService =
+              Provider.of<AccountAuthService>(context, listen: false);
+          await authService.disconnectPlatform(platform);
+      }
+
       await _loadPlatformConnections();
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-              content: Text(
-                  'Disconnected from ${SocialPlatforms.getDisplayName(platform)}')),
+            content: Text(
+                'Disconnected from ${SocialPlatforms.getDisplayName(platform)} ✅'),
+            backgroundColor: Colors.green.withValues(alpha: 0.8),
+          ),
         );
       }
+
+      if (kDebugMode) {
+        print('✅ Successfully disconnected from $platform');
+      }
     } catch (e) {
+      if (kDebugMode) {
+        print('❌ Failed to disconnect from $platform: $e');
+      }
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-              content: Text('Failed to disconnect: $e'),
-              backgroundColor: Colors.red),
+            content: Text(
+                'Failed to disconnect from ${SocialPlatforms.getDisplayName(platform)}: $e'),
+            backgroundColor: Colors.red.withValues(alpha: 0.8),
+            duration: const Duration(seconds: 4),
+          ),
         );
       }
     }
@@ -98,25 +149,73 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   Future<void> _disconnectAllPlatforms() async {
     setState(() => _disconnectingAll = true);
-    final authService = Provider.of<AuthService>(context, listen: false);
+
     try {
+      if (kDebugMode) {
+        print('🔌 Disconnecting from all platforms...');
+      }
+
+      int successCount = 0;
+      int totalCount = 0;
+
       for (final platform in SocialPlatforms.all) {
         if (_platformConnections[platform] == true) {
-          await authService.disconnectPlatform(platform);
+          totalCount++;
+          try {
+            await _disconnectPlatformSilently(platform);
+            successCount++;
+          } catch (e) {
+            if (kDebugMode) {
+              print('❌ Failed to disconnect from $platform: $e');
+            }
+          }
         }
       }
+
       await _loadPlatformConnections();
+
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Disconnected all platforms')),
-        );
+        if (successCount == totalCount && totalCount > 0) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                  'Disconnected from all platforms ✅ ($successCount/$totalCount)'),
+              backgroundColor: Colors.green.withValues(alpha: 0.8),
+            ),
+          );
+        } else if (successCount > 0) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                  'Partially disconnected ($successCount/$totalCount platforms)'),
+              backgroundColor: Colors.orange.withValues(alpha: 0.8),
+            ),
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: const Text('Failed to disconnect platforms'),
+              backgroundColor: Colors.red.withValues(alpha: 0.8),
+            ),
+          );
+        }
+      }
+
+      if (kDebugMode) {
+        print(
+            '✅ Disconnect all completed: $successCount/$totalCount platforms');
       }
     } catch (e) {
+      if (kDebugMode) {
+        print('❌ Error during disconnect all: $e');
+      }
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-              content: Text('Failed to disconnect all: $e'),
-              backgroundColor: Colors.red),
+            content: Text('Failed to disconnect all platforms: $e'),
+            backgroundColor: Colors.red.withValues(alpha: 0.8),
+          ),
         );
       }
     } finally {
@@ -124,9 +223,40 @@ class _ProfileScreenState extends State<ProfileScreen> {
     }
   }
 
+  /// Helper method to disconnect a platform without showing individual success/error messages
+  Future<void> _disconnectPlatformSilently(String platform) async {
+    switch (platform.toLowerCase()) {
+      case 'facebook':
+        final facebookAuth = FacebookAuthService();
+        await facebookAuth.signOutOfFacebook();
+        break;
+      case 'instagram':
+        final instagramAuth = InstagramAuthService();
+        await instagramAuth.signOutOfInstagram();
+        break;
+      case 'youtube':
+        final youtubeAuth = YouTubeAuthService();
+        await youtubeAuth.signOutOfYouTube();
+        break;
+      case 'twitter':
+        final twitterAuth = TwitterAuthService();
+        await twitterAuth.signOutOfTwitter();
+        break;
+      case 'tiktok':
+        final tiktokAuth = TikTokAuthService();
+        await tiktokAuth.signOutOfTikTok();
+        break;
+      default:
+        // Fallback to the old method for unknown platforms
+        final authService =
+            Provider.of<AccountAuthService>(context, listen: false);
+        await authService.disconnectPlatform(platform);
+    }
+  }
+
   Future<void> _logout() async {
     // Capture AuthService before any async operations
-    final authService = Provider.of<AuthService>(context, listen: false);
+    final authService = Provider.of<AccountAuthService>(context, listen: false);
 
     final confirmed = await showDialog<bool>(
       context: context,

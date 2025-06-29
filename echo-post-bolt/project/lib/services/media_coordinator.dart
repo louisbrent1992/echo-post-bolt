@@ -1877,8 +1877,8 @@ class MediaCoordinator extends ChangeNotifier {
               'width': asset.width,
               'height': asset.height,
               'file_size_bytes': await file.length(),
-              'duration': asset.duration?.toDouble() ?? 0.0,
-              'orientation': asset.orientation ?? 1,
+              'duration': asset.duration.toDouble(),
+              'orientation': asset.orientation,
             },
           };
 
@@ -1891,7 +1891,7 @@ class MediaCoordinator extends ChangeNotifier {
         } catch (e) {
           if (kDebugMode) {
             print(
-                '⚠️ MediaCoordinator: Failed to process asset ${asset.id}: $e');
+                '⚠️ MediaCoordinator: Failed to process asset [1m${asset.id}[0m: $e');
           }
           continue;
         }

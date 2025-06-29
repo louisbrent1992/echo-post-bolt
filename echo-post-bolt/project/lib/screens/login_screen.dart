@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import '../services/auth_service.dart';
+import '../services/account_auth_service.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -27,8 +27,7 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   void initState() {
     super.initState();
-    // Check for existing auth state when screen loads
-    _checkExistingAuth();
+    _checkAuthState();
   }
 
   @override
@@ -38,14 +37,9 @@ class _LoginScreenState extends State<LoginScreen> {
     super.dispose();
   }
 
-  Future<void> _checkExistingAuth() async {
-    try {
-      final authService = context.read<AuthService>();
-      await authService.refreshAuthState();
-    } catch (e) {
-      // Silent failure for auth state check
-      debugPrint('Auth state check failed: $e');
-    }
+  Future<void> _checkAuthState() async {
+    final authService = context.read<AccountAuthService>();
+    await authService.refreshAuthState();
   }
 
   @override
@@ -459,14 +453,15 @@ class _LoginScreenState extends State<LoginScreen> {
     });
 
     try {
-      final authService = context.read<AuthService>();
-      final result = await authService.signInWithGoogle();
+      final authService = context.read<AccountAuthService>();
+      await authService.signInWithGoogle();
 
-      if (result == null && mounted) {
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Sign-in was cancelled. Please try again.'),
+            content: Text('Welcome to EchoPost! 🎉'),
             duration: Duration(seconds: 2),
+            backgroundColor: Colors.green,
           ),
         );
       }
@@ -509,15 +504,13 @@ class _LoginScreenState extends State<LoginScreen> {
     });
 
     try {
-      final authService = context.read<AuthService>();
-
-      final result = await authService.signInWithEmailPassword(
+      final authService = context.read<AccountAuthService>();
+      await authService.signInWithEmailPassword(
         _emailController.text.trim(),
         _passwordController.text,
       );
 
-      if (result != null && mounted) {
-        // Success - navigation handled by auth state listener
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Welcome to EchoPost! 🎉'),
@@ -814,7 +807,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       });
 
                       try {
-                        final authService = context.read<AuthService>();
+                        final authService = context.read<AccountAuthService>();
                         final currentContext = context;
                         await authService.linkGoogleToEmailAccount(
                             email, passwordController.text);
@@ -926,7 +919,7 @@ class _LoginScreenState extends State<LoginScreen> {
           TextButton(
             onPressed: () async {
               try {
-                final authService = context.read<AuthService>();
+                final authService = context.read<AccountAuthService>();
                 final currentContext = context;
                 await authService
                     .sendPasswordResetEmail(emailController.text.trim());

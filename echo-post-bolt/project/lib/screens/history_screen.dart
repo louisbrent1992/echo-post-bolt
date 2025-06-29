@@ -2,18 +2,18 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:intl/intl.dart';
 import 'package:flutter/foundation.dart';
+import 'package:intl/intl.dart';
 import 'package:video_thumbnail/video_thumbnail.dart';
 import 'package:photo_manager/photo_manager.dart';
-
 import '../models/social_action.dart';
+import '../services/account_auth_service.dart';
 import '../models/media_validation.dart';
 import '../services/firestore_service.dart';
 import '../services/social_post_service.dart';
-import '../services/auth_service.dart';
 import '../services/media_coordinator.dart';
 import '../services/social_action_post_coordinator.dart';
+import '../services/platform_connection_service.dart';
 import '../screens/command_screen.dart';
 
 class HistoryScreen extends StatefulWidget {
@@ -1439,14 +1439,15 @@ class _HistoryScreenState extends State<HistoryScreen> {
 
     final socialPostService =
         Provider.of<SocialPostService>(context, listen: false);
-    final authService = Provider.of<AuthService>(context, listen: false);
+    final authService = Provider.of<AccountAuthService>(context, listen: false);
     final scaffoldMessenger = ScaffoldMessenger.of(context);
 
     try {
       // Check authentication for each platform
       final authChecks = <String, bool>{};
       for (final platform in action.platforms) {
-        authChecks[platform] = await authService.isPlatformConnected(platform);
+        authChecks[platform] =
+            await PlatformConnectionService.isPlatformConnected(platform);
       }
 
       final unauthenticatedPlatforms = authChecks.entries
