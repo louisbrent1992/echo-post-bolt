@@ -4,6 +4,6 @@
     <!-- Facebook SDK Configuration -->
     <!-- Replace these with your actual Facebook App ID and Client Token -->
     <!-- For now, using dummy numeric values to prevent crashes -->
-    <string name="facebook_app_id">1239158027872121</string>
-    <string name="facebook_client_token">a105fd8824ae56465e43a29a6bec4eed</string>
+<string name="facebook_app_id">3696847293942074</string>
+    <string name="facebook_client_token">3a492d9e25e37077900b2b8203d28658</string>
 </resources> 

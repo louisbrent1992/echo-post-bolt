@@ -258,27 +258,27 @@ class EmailAuthService {
 
       if (methods.contains('password')) {
         // Existing email / password user → authenticate
-        try {
+          try {
           final cred = await _auth.signInWithEmailAndPassword(
               email: email, password: password);
           if (cred.user != null) {
             await _createUserDocIfNotExists(cred.user!, 'password');
+            }
+          } on FirebaseAuthException catch (e) {
+            if (e.code == 'wrong-password') {
+              throw Exception('Incorrect password. Please try again.');
+            }
+            rethrow;
           }
-        } on FirebaseAuthException catch (e) {
-          if (e.code == 'wrong-password') {
-            throw Exception('Incorrect password. Please try again.');
-          }
-          rethrow;
-        }
       } else if (methods.isEmpty) {
         // Brand-new user → create account
-        try {
+          try {
           final cred = await _auth.createUserWithEmailAndPassword(
               email: email, password: password);
           if (cred.user != null) {
             await _createUserDocIfNotExists(cred.user!, 'password');
-          }
-        } on FirebaseAuthException catch (e) {
+            }
+          } on FirebaseAuthException catch (e) {
           switch (e.code) {
             case 'weak-password':
               throw Exception('Password is too weak.');
@@ -287,8 +287,8 @@ class EmailAuthService {
               throw Exception('This email is already registered.');
             default:
               throw Exception('Account creation failed: ${e.message}');
+            }
           }
-        }
       } else if (methods.length == 1 && methods.first == 'google.com') {
         // Google-only account – alert UI and stop
         throw GoogleAccountExistsException(
