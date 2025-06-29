@@ -3,6 +3,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:provider/provider.dart';
+import 'package:app_links/app_links.dart';
+import 'dart:async';
 
 import 'services/auth_service.dart';
 import 'services/firestore_service.dart';
@@ -170,11 +172,13 @@ class _ServiceInitializationWrapperState
     extends State<ServiceInitializationWrapper> {
   bool _isInitialized = false;
   String _initializationStatus = 'Initializing services...';
+  StreamSubscription? _deepLinkSubscription;
 
   @override
   void initState() {
     super.initState();
     _initializeServices();
+    _initializeDeepLinks();
   }
 
   Future<void> _initializeServices() async {
@@ -228,6 +232,56 @@ class _ServiceInitializationWrapperState
         _initializationStatus = 'Initialization failed: $e';
       });
     }
+  }
+
+  Future<void> _initializeDeepLinks() async {
+    try {
+      final appLinks = AppLinks();
+
+      // Handle initial link if app was launched from a deep link
+      final initialLink = await appLinks.getInitialLink();
+      if (initialLink != null) {
+        if (kDebugMode) {
+          print('🔗 Initial deep link: $initialLink');
+        }
+        _handleDeepLink(initialLink);
+      }
+
+      // Listen for incoming deep links
+      _deepLinkSubscription = appLinks.uriLinkStream.listen((Uri? uri) {
+        if (uri != null) {
+          if (kDebugMode) {
+            print('🔗 Incoming deep link: $uri');
+          }
+          _handleDeepLink(uri);
+        }
+      }, onError: (err) {
+        if (kDebugMode) {
+          print('❌ Deep link error: $err');
+        }
+      });
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ Error initializing deep links: $e');
+      }
+    }
+  }
+
+  void _handleDeepLink(Uri uri) {
+    try {
+      final authService = Provider.of<AuthService>(context, listen: false);
+      authService.handleDeepLink(uri);
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ Error handling deep link: $e');
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _deepLinkSubscription?.cancel();
+    super.dispose();
   }
 
   @override

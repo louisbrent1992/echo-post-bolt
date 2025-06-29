@@ -14,6 +14,7 @@ The Instagram API with Instagram Login allows Instagram professionals (businesse
 - **Comment Moderation**: Manage and reply to comments
 - **Media Insights**: Get insights on media performance
 - **Mentions**: Identify media where users are @mentioned
+- **Local HTTP Server**: Uses localhost callback for reliable OAuth flow
 
 ## Implementation Status
 
@@ -25,17 +26,15 @@ The Instagram API with Instagram Login allows Instagram professionals (businesse
 - [x] Access token validation and expiration checking
 - [x] Fallback to manual sharing for consumer accounts
 - [x] Error handling for API responses
+- [x] Local HTTP server OAuth callback implementation
 
 ### 🔄 In Progress
 
-- [ ] WebView-based OAuth flow implementation
 - [ ] Environment variable configuration
 - [ ] Instagram app setup in Meta App Dashboard
 
 ### ❌ Pending
 
-- [ ] WebView dependency addition
-- [ ] OAuth redirect URI handling
 - [ ] Instagram app credentials setup
 - [ ] Testing with real Instagram accounts
 
@@ -45,8 +44,9 @@ Add to `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  webview_flutter: ^4.0.0 # For OAuth WebView
-  url_launcher: ^6.0.0 # Alternative for OAuth
+  http: ^0.13.6
+  url_launcher: ^6.2.2
+  app_links: ^6.4.0
 ```
 
 ## Environment Variables
@@ -81,20 +81,43 @@ The following scopes are requested during authentication:
 - `instagram_business_content_publish` - Publish content to Instagram
 - `instagram_business_manage_comments` - Manage comments
 
+### 4. Redirect URI Configuration
+
+**For Local Development:**
+
+```
+http://localhost:8585
+```
+
+**For Production:**
+
+```
+https://your-domain.com/instagram-callback
+```
+
 ## OAuth Flow Implementation
 
-### Step 1: Authorization
+### Step 1: Authorization with Local HTTP Server
 
 ```dart
-// Open Instagram authorization URL in WebView
+// Start local callback server
+final Stream<String> onCode = await _startInstagramCallbackServer();
+
+// Build authorization URL
 final authUrl = Uri.parse('https://www.instagram.com/oauth/authorize').replace(
   queryParameters: {
     'client_id': instagramAppId,
-    'redirect_uri': redirectUri,
+    'redirect_uri': 'http://localhost:8585',
     'response_type': 'code',
     'scope': 'instagram_business_basic,instagram_business_content_publish,instagram_business_manage_comments',
   },
 );
+
+// Launch in external browser
+await launchUrl(authUrl, mode: LaunchMode.externalApplication);
+
+// Wait for callback
+final code = await onCode.first;
 ```
 
 ### Step 2: Token Exchange
@@ -107,7 +130,7 @@ final response = await http.post(
     'client_id': instagramAppId,
     'client_secret': instagramAppSecret,
     'grant_type': 'authorization_code',
-    'redirect_uri': redirectUri,
+    'redirect_uri': 'http://localhost:8585',
     'code': authCode,
   },
 );
@@ -126,6 +149,42 @@ final response = await http.get(
     },
   ),
 );
+```
+
+## Local HTTP Server Implementation
+
+The app uses a local HTTP server on port 8585 to handle OAuth callbacks:
+
+```dart
+Future<Stream<String>> _startInstagramCallbackServer() async {
+  final StreamController<String> onCode = StreamController<String>();
+
+  HttpServer server = await HttpServer.bind(InternetAddress.loopbackIPv4, 8585);
+
+  server.listen((HttpRequest request) async {
+    final String? code = request.uri.queryParameters["code"];
+    final String? error = request.uri.queryParameters["error"];
+
+    // Send success response to browser
+    request.response
+      ..statusCode = 200
+      ..headers.set("Content-Type", ContentType.html.mimeType)
+      ..write("<html><h1>Authorization Complete!</h1></html>");
+
+    await request.response.close();
+    await server.close(force: true);
+
+    if (error != null) {
+      onCode.addError('Instagram OAuth error: $error');
+    } else if (code != null) {
+      onCode.add(code);
+    }
+
+    await onCode.close();
+  });
+
+  return onCode.stream;
+}
 ```
 
 ## API Endpoints
@@ -195,16 +254,38 @@ Instagram tokens are stored in Firestore with the following structure:
 
 1. Instagram professional account (Business or Creator)
 2. Instagram app configured in Meta App Dashboard
-3. Valid OAuth redirect URI
+3. Valid OAuth redirect URI (`http://localhost:8585` for development)
 4. Environment variables configured
 
-### Test Flow
+### Development Testing
 
-1. Authenticate with Instagram
-2. Verify token storage in Firestore
-3. Test content publishing
-4. Verify post creation on Instagram
-5. Test fallback for consumer accounts
+1. Start the app
+2. Navigate to Instagram authentication
+3. The app will open Instagram OAuth in external browser
+4. Complete authentication in browser
+5. Browser will redirect to `http://localhost:8585`
+6. Local server captures the authorization code
+7. App receives the code and completes token exchange
+
+## Troubleshooting
+
+### "Invalid redirect_uri" Error
+
+1. Ensure `http://localhost:8585` is added to your Instagram app's redirect URIs
+2. Check that the redirect URI in your code matches exactly
+3. Wait a few minutes for app settings to propagate
+
+### Local Server Issues
+
+1. Ensure port 8585 is not in use by another application
+2. Check firewall settings for localhost connections
+3. Verify the server starts successfully in debug logs
+
+### Token Exchange Failures
+
+1. Verify Instagram App ID and Secret are correct
+2. Check that the redirect URI matches between authorization and token exchange
+3. Ensure the authorization code is used within the time limit
 
 ## Security Considerations
 
@@ -216,13 +297,11 @@ Instagram tokens are stored in Firestore with the following structure:
 
 ## Next Steps
 
-1. **Add WebView dependency** to `pubspec.yaml`
-2. **Implement WebView OAuth flow** in `_getInstagramAuthorizationCode`
-3. **Configure Instagram app** in Meta App Dashboard
-4. **Set up environment variables** with real credentials
-5. **Test with real Instagram accounts**
-6. **Implement token refresh logic**
-7. **Add comprehensive error handling**
+1. **Configure Instagram app** in Meta App Dashboard
+2. **Set up environment variables** with real credentials
+3. **Test with real Instagram accounts**
+4. **Implement token refresh logic**
+5. **Add comprehensive error handling**
 
 ## References
 

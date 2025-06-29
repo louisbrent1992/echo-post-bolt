@@ -101,4 +101,7 @@ dependencies {
     implementation("com.google.android.material:material:1.12.0")
     compileOnly("com.google.dagger:dagger:2.56.2")
     annotationProcessor("com.google.dagger:dagger-compiler:2.56.2")
+    
+    // Facebook SDK for Login
+    implementation("com.facebook.android:facebook-login:latest.release")
 } 

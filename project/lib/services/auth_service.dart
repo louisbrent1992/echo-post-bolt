@@ -7,9 +7,10 @@ import 'package:google_sign_in/google_sign_in.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
-import 'package:webview_flutter/webview_flutter.dart';
 import 'dart:convert';
 import 'dart:math';
+import 'dart:async';
+import 'dart:io';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import '../widgets/instagram_oauth_dialog.dart';
 
@@ -41,6 +42,11 @@ class AuthService extends ChangeNotifier {
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
+  // Deep link handling
+  final StreamController<Uri> _deepLinkController =
+      StreamController<Uri>.broadcast();
+  Stream<Uri> get _deepLinkStream => _deepLinkController.stream;
+
   // Configure Google Sign-In with proper serverClientId for Firebase authentication
   final GoogleSignIn _googleSignIn = GoogleSignIn(
     // The web client ID (client_type: 3) from google-services.json is required for Firebase Auth
@@ -59,6 +65,20 @@ class AuthService extends ChangeNotifier {
 
     // Check for existing auth state on startup to handle interrupted flows
     _checkExistingAuthState();
+  }
+
+  /// Handle incoming deep link
+  void handleDeepLink(Uri uri) {
+    if (kDebugMode) {
+      print('🔗 Handling deep link: $uri');
+    }
+    _deepLinkController.add(uri);
+  }
+
+  @override
+  void dispose() {
+    _deepLinkController.close();
+    super.dispose();
   }
 
   // Check for existing authentication state - crucial for handling interruptions
@@ -562,6 +582,13 @@ class AuthService extends ChangeNotifier {
   // Sign in with Facebook
   Future<void> signInWithFacebook() async {
     try {
+      if (kDebugMode) {
+        print('🔵 Starting Facebook login...');
+        print('🔵 Facebook App ID: 3696847293942074');
+        print('🔵 Package Name: com.example.echopost');
+        print('🔵 Key Hash: Q7I1unsJVwb9NT0MAG2zng1A5v8=');
+      }
+
       final LoginResult result = await FacebookAuth.instance.login(
         permissions: [
           'business_management',
@@ -571,9 +598,21 @@ class AuthService extends ChangeNotifier {
         ],
       );
 
+      if (kDebugMode) {
+        print('🔵 Facebook login result status: ${result.status}');
+        print('🔵 Facebook login result message: ${result.message}');
+      }
+
       if (result.status == LoginStatus.success) {
         final AccessToken accessToken = result.accessToken!;
         final userData = await FacebookAuth.instance.getUserData();
+
+        if (kDebugMode) {
+          print('🔵 Facebook login successful!');
+          print('🔵 Access token: ${accessToken.token}');
+          print('🔵 User ID: ${userData['id']}');
+          print('🔵 User name: ${userData['name']}');
+        }
 
         // Save token to Firestore
         await _firestore
@@ -589,9 +628,17 @@ class AuthService extends ChangeNotifier {
 
         notifyListeners();
       } else {
+        if (kDebugMode) {
+          print('❌ Facebook login failed: ${result.message}');
+          print('❌ Status: ${result.status}');
+        }
         throw Exception('Facebook login failed: ${result.message}');
       }
     } catch (e) {
+      if (kDebugMode) {
+        print('❌ Facebook login error: $e');
+        print('❌ Error type: ${e.runtimeType}');
+      }
       rethrow;
     }
   }
@@ -1549,9 +1596,9 @@ class AuthService extends ChangeNotifier {
         throw Exception('User must be signed in with Google or Facebook first');
       }
 
-      // Step 1: Get authorization code
+      // Step 1: Get authorization code using local HTTP server
       final authCode =
-          await _getInstagramAuthorizationCode(instagramAppId, context);
+          await _getInstagramAuthorizationCodeWithLocalServer(instagramAppId);
 
       if (authCode == null) {
         throw Exception('Failed to get Instagram authorization code');
@@ -1619,12 +1666,110 @@ class AuthService extends ChangeNotifier {
     }
   }
 
-  /// Step 1: Get Instagram authorization code
-  Future<String?> _getInstagramAuthorizationCode(String instagramAppId,
-      [BuildContext? context]) async {
+  /// Start a local HTTP server to handle Instagram OAuth callback
+  Future<Stream<String>> _startInstagramCallbackServer() async {
+    final controller = StreamController<String>.broadcast();
+
     try {
-      final redirectUri =
-          'https://visionary-paprenjak-16cc41.netlify.app/instagram-callback';
+      final server = await HttpServer.bind('localhost', 8585);
+
+      if (kDebugMode) {
+        print('🌐 Instagram callback server started on localhost:8585');
+      }
+
+      server.listen((HttpRequest request) async {
+        try {
+          final uri = request.uri;
+
+          if (kDebugMode) {
+            print('📥 Received callback request: $uri');
+          }
+
+          // Check if this is the Instagram callback
+          if (uri.path == '/' && uri.queryParameters.containsKey('code')) {
+            final code = uri.queryParameters['code']!;
+            final state = uri.queryParameters['state'];
+
+            if (kDebugMode) {
+              print('📷 Instagram authorization code received: $code');
+              print('📷 State parameter: $state');
+            }
+
+            // Send success response to browser
+            request.response
+              ..statusCode = 200
+              ..headers.contentType = ContentType.html
+              ..write('''
+                <!DOCTYPE html>
+                <html>
+                <head>
+                    <title>Instagram Authorization Complete</title>
+                    <style>
+                        body { font-family: Arial, sans-serif; text-align: center; padding: 50px; }
+                        .success { color: #28a745; font-size: 24px; }
+                        .message { color: #666; margin-top: 20px; }
+                    </style>
+                </head>
+                <body>
+                    <div class="success">✅ Authorization Complete!</div>
+                    <div class="message">You can close this window and return to the app.</div>
+                    <script>
+                        setTimeout(() => window.close(), 3000);
+                    </script>
+                </body>
+                </html>
+              ''')
+              ..close();
+
+            // Add the code to the stream
+            controller.add(code);
+
+            // Close the server after receiving the code
+            await server.close();
+
+            if (kDebugMode) {
+              print('🌐 Instagram callback server closed');
+            }
+          } else {
+            // Handle other requests or errors
+            request.response
+              ..statusCode = 400
+              ..write('Invalid callback request')
+              ..close();
+          }
+        } catch (e) {
+          if (kDebugMode) {
+            print('❌ Error handling callback request: $e');
+          }
+          request.response
+            ..statusCode = 500
+            ..write('Internal server error')
+            ..close();
+        }
+      });
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ Failed to start Instagram callback server: $e');
+      }
+      controller.addError(e);
+    }
+
+    return controller.stream;
+  }
+
+  /// Step 1: Get Instagram authorization code using local HTTP server
+  Future<String?> _getInstagramAuthorizationCodeWithLocalServer(
+      String instagramAppId) async {
+    try {
+      if (kDebugMode) {
+        print('🌐 Starting Instagram OAuth with local HTTP server...');
+      }
+
+      // Start the callback server
+      final Stream<String> onCode = await _startInstagramCallbackServer();
+
+      // Build authorization URL with localhost redirect
+      final redirectUri = 'http://localhost:8585';
       final scope =
           'instagram_business_basic,instagram_business_content_publish,instagram_business_manage_comments';
       final state = _generateRandomString(32);
@@ -1642,52 +1787,32 @@ class AuthService extends ChangeNotifier {
 
       if (kDebugMode) {
         print('📷 Instagram authorization URL: $authUrl');
-        print('📷 Redirect URI: $redirectUri');
+        print('📷 Local redirect URI: $redirectUri');
         print('📷 State: $state');
       }
 
-      // Check if context is available for WebView dialog
-      if (context == null) {
-        if (kDebugMode) {
-          print('📷 No context provided, using simulated flow for development');
-        }
-        // Fallback to simulated flow for development
-        await Future.delayed(const Duration(seconds: 2));
-        final simulatedCode =
-            'simulated_instagram_auth_code_${DateTime.now().millisecondsSinceEpoch}';
-        if (kDebugMode) {
-          print('📷 Using simulated authorization code: $simulatedCode');
-        }
-        return simulatedCode;
-      }
+      // Launch the authorization URL in external browser
+      if (await canLaunchUrl(authUrl)) {
+        await launchUrl(authUrl, mode: LaunchMode.externalApplication);
 
-      // Show WebView dialog for Instagram OAuth
-      final authCode = await showDialog<String>(
-        context: context,
-        barrierDismissible: false,
-        builder: (BuildContext dialogContext) {
-          return InstagramOAuthDialog(
-            authUrl: authUrl.toString(),
-            redirectUri: redirectUri,
-            state: state,
-          );
-        },
-      );
-
-      if (authCode != null) {
         if (kDebugMode) {
-          print('📷 Authorization code received: $authCode');
+          print('🌐 Instagram OAuth URL launched in external browser');
         }
-        return authCode;
+
+        // Wait for the authorization code from the callback server
+        final code = await onCode.first;
+
+        if (kDebugMode) {
+          print('📷 Authorization code received via local server: $code');
+        }
+
+        return code;
       } else {
-        if (kDebugMode) {
-          print('📷 Authorization was cancelled or failed');
-        }
-        return null;
+        throw Exception('Could not launch Instagram authorization URL');
       }
     } catch (e) {
       if (kDebugMode) {
-        print('❌ Error getting Instagram authorization code: $e');
+        print('❌ Error in local server Instagram OAuth: $e');
       }
       return null;
     }
@@ -1700,8 +1825,7 @@ class AuthService extends ChangeNotifier {
     String authCode,
   ) async {
     try {
-      final redirectUri =
-          'https://visionary-paprenjak-16cc41.netlify.app/instagram-callback';
+      final redirectUri = 'http://localhost:8585';
 
       final response = await http.post(
         Uri.parse('https://api.instagram.com/oauth/access_token'),

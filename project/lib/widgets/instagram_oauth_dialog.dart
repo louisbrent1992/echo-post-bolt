@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
-import 'package:webview_flutter/webview_flutter.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 class InstagramOAuthDialog extends StatefulWidget {
   final String authUrl;
@@ -19,83 +19,56 @@ class InstagramOAuthDialog extends StatefulWidget {
 }
 
 class _InstagramOAuthDialogState extends State<InstagramOAuthDialog> {
-  late WebViewController _controller;
-  bool _isLoading = true;
+  bool _isLoading = false;
   String? _error;
 
   @override
   void initState() {
     super.initState();
-    _controller = WebViewController()
-      ..setJavaScriptMode(JavaScriptMode.unrestricted)
-      ..setNavigationDelegate(
-        NavigationDelegate(
-          onPageStarted: (String url) {
-            setState(() {
-              _isLoading = true;
-            });
-          },
-          onPageFinished: (String url) {
-            setState(() {
-              _isLoading = false;
-            });
-          },
-          onNavigationRequest: (NavigationRequest request) {
-            // Check if the URL is our redirect URI
-            if (request.url.startsWith(widget.redirectUri)) {
-              final uri = Uri.parse(request.url);
-              final code = uri.queryParameters['code'];
-              final error = uri.queryParameters['error'];
-              final returnedState = uri.queryParameters['state'];
+    // Automatically open external browser on initialization
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _openInExternalBrowser();
+    });
+  }
 
-              if (kDebugMode) {
-                print('📷 Instagram OAuth callback received:');
-                print('  URL: ${request.url}');
-                print('  Code: $code');
-                print('  Error: $error');
-                print('  State: $returnedState');
-              }
+  Future<void> _openInExternalBrowser() async {
+    setState(() {
+      _isLoading = true;
+    });
 
-              // Validate state parameter
-              if (returnedState != widget.state) {
-                setState(() {
-                  _error = 'State parameter mismatch';
-                });
-                return NavigationDecision.prevent;
-              }
+    try {
+      if (kDebugMode) {
+        print('🌐 Opening Instagram OAuth in external browser...');
+        print('📷 Auth URL: ${widget.authUrl}');
+      }
 
-              // Handle error response
-              if (error != null) {
-                setState(() {
-                  _error = 'Instagram authorization failed: $error';
-                });
-                return NavigationDecision.prevent;
-              }
+      final url = Uri.parse(widget.authUrl);
+      if (await canLaunchUrl(url)) {
+        await launchUrl(url, mode: LaunchMode.externalApplication);
 
-              // Handle success response
-              if (code != null) {
-                Navigator.of(context).pop(code);
-                return NavigationDecision.prevent;
-              }
+        if (kDebugMode) {
+          print('✅ External browser launched successfully');
+        }
 
-              setState(() {
-                _error = 'No authorization code received';
-              });
-              return NavigationDecision.prevent;
-            }
-            return NavigationDecision.navigate;
-          },
-          onWebResourceError: (WebResourceError error) {
-            if (kDebugMode) {
-              print('❌ WebView error: ${error.description}');
-            }
-            setState(() {
-              _error = 'WebView error: ${error.description}';
-            });
-          },
-        ),
-      )
-      ..loadRequest(Uri.parse(widget.authUrl));
+        // Close the dialog and return the external browser signal
+        if (mounted) {
+          Navigator.of(context).pop('external_browser_launched');
+        }
+      } else {
+        setState(() {
+          _error = 'Could not open external browser';
+          _isLoading = false;
+        });
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ Error opening external browser: $e');
+      }
+      setState(() {
+        _error = 'Error opening external browser: $e';
+        _isLoading = false;
+      });
+    }
   }
 
   @override
@@ -103,7 +76,7 @@ class _InstagramOAuthDialogState extends State<InstagramOAuthDialog> {
     return Dialog(
       child: Container(
         width: MediaQuery.of(context).size.width * 0.9,
-        height: MediaQuery.of(context).size.height * 0.8,
+        height: MediaQuery.of(context).size.height * 0.6,
         child: Column(
           children: [
             // Header
@@ -136,51 +109,164 @@ class _InstagramOAuthDialogState extends State<InstagramOAuthDialog> {
                 ],
               ),
             ),
-            // WebView
+            // Content
             Expanded(
-              child: Stack(
+              child: _buildContent(),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildContent() {
+    if (_error != null) {
+      return _buildErrorContent();
+    }
+
+    if (_isLoading) {
+      return _buildLoadingContent();
+    }
+
+    return _buildInstructionsContent();
+  }
+
+  Widget _buildLoadingContent() {
+    return const Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          CircularProgressIndicator(),
+          SizedBox(height: 16),
+          Text(
+            'Opening Instagram authorization...',
+            style: TextStyle(fontSize: 16),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildErrorContent() {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(
+              Icons.error_outline,
+              color: Colors.red,
+              size: 64,
+            ),
+            const SizedBox(height: 16),
+            const Text(
+              'Error Opening Browser',
+              style: TextStyle(
+                fontSize: 20,
+                fontWeight: FontWeight.bold,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              _error!,
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 16, color: Colors.red),
+            ),
+            const SizedBox(height: 24),
+            ElevatedButton.icon(
+              onPressed: _openInExternalBrowser,
+              icon: const Icon(Icons.refresh),
+              label: const Text('Try Again'),
+              style: ElevatedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 24,
+                  vertical: 12,
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Cancel'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildInstructionsContent() {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(
+              Icons.open_in_browser,
+              color: Colors.blue,
+              size: 64,
+            ),
+            const SizedBox(height: 16),
+            const Text(
+              'Instagram Authorization',
+              style: TextStyle(
+                fontSize: 20,
+                fontWeight: FontWeight.bold,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 16),
+            const Text(
+              'Instagram authorization will open in your external browser.',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 16),
+            ),
+            const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.blue[50],
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.blue[200]!),
+              ),
+              child: const Column(
                 children: [
-                  WebViewWidget(controller: _controller),
-                  if (_isLoading)
-                    const Center(
-                      child: CircularProgressIndicator(),
+                  Icon(
+                    Icons.info_outline,
+                    color: Colors.blue,
+                    size: 24,
+                  ),
+                  SizedBox(height: 8),
+                  Text(
+                    'After completing authorization in your browser, you will be automatically redirected back to this app.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 14,
+                      color: Colors.blue,
                     ),
-                  if (_error != null)
-                    Center(
-                      child: Container(
-                        padding: const EdgeInsets.all(16),
-                        margin: const EdgeInsets.all(16),
-                        decoration: BoxDecoration(
-                          color: Colors.red[50],
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: Colors.red[200]!),
-                        ),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            const Icon(Icons.error, color: Colors.red),
-                            const SizedBox(height: 8),
-                            Text(
-                              _error!,
-                              textAlign: TextAlign.center,
-                              style: const TextStyle(color: Colors.red),
-                            ),
-                            const SizedBox(height: 16),
-                            ElevatedButton(
-                              onPressed: () {
-                                setState(() {
-                                  _error = null;
-                                });
-                                _controller.reload();
-                              },
-                              child: const Text('Retry'),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
+                  ),
                 ],
               ),
+            ),
+            const SizedBox(height: 24),
+            ElevatedButton.icon(
+              onPressed: _openInExternalBrowser,
+              icon: const Icon(Icons.open_in_browser),
+              label: const Text('Open in Browser'),
+              style: ElevatedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 24,
+                  vertical: 12,
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Cancel'),
             ),
           ],
         ),
