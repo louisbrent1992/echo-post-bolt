@@ -2537,10 +2537,14 @@ class SocialActionPostCoordinator extends ChangeNotifier {
           platform.substring(0, 1).toUpperCase() + platform.substring(1);
       String message;
 
-      if (contentType == 'text') {
+      if (platform == 'youtube') {
+        message =
+            'YouTube requires a video file to post. Please select a video.';
+      } else if (contentType == 'text') {
         message = '$platformName requires media content to post';
       } else if (contentType == 'image' && platform == 'youtube') {
-        message = '$platformName requires video content, not just images';
+        message =
+            'YouTube requires a video file to post. Please select a video.';
       } else {
         message = '$platformName is not compatible with current content type';
       }
