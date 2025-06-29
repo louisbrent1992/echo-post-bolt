@@ -7,13 +7,18 @@ import 'dart:convert';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import '../platform_document_service.dart';
 
-/// YouTube Data API login - OAuth 2.0 (separate from Google sign-in)
+/// YouTube Data API login - OAuth 2.0 (unified with Firebase project)
+///
+/// This service now uses the same Google Cloud project as Firebase (794380832661)
+/// with YouTube Data API v3 enabled. This is Google's recommended approach for
+/// applications that use multiple Google services.
 class YouTubeAuthService {
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final String youtubeApiKey = dotenv.env['YOUTUBE_API_KEY'] ?? '';
 
   // YouTube-specific Google Sign-In with YouTube scopes
+  // Uses the same project as Firebase but with YouTube-specific scopes
   final GoogleSignIn _youtubeGoogleSignIn = GoogleSignIn(
     scopes: [
       'https://www.googleapis.com/auth/youtube',
@@ -36,7 +41,7 @@ class YouTubeAuthService {
       // Validate environment variables
       if (youtubeApiKey.isEmpty) {
         throw Exception(
-            'YOUTUBE_API_KEY not found in .env.local file. Please check ENVIRONMENT_SETUP.md for configuration instructions.');
+            'YOUTUBE_API_KEY not found in .env.local file. Please check YOUTUBE_SETUP_GUIDE.md for configuration instructions.');
       }
 
       // Sign in with YouTube-specific scopes
@@ -99,6 +104,15 @@ class YouTubeAuthService {
     } catch (e) {
       if (kDebugMode) {
         print('❌ YouTube authentication error: $e');
+
+        // Provide specific guidance for common 403 errors
+        if (e.toString().contains('403') ||
+            e.toString().contains('YouTube Data API')) {
+          print('🔧 SETUP REQUIRED: Please follow YOUTUBE_SETUP_GUIDE.md to:');
+          print('   1. Enable YouTube Data API v3 in your Firebase project');
+          print('   2. Configure OAuth consent screen with YouTube scopes');
+          print('   3. Verify your API credentials are properly configured');
+        }
       }
       // Clean up on error
       await _youtubeGoogleSignIn.signOut();
