@@ -243,76 +243,62 @@ class EmailAuthService {
   /// Automatically creates account if email doesn't exist
   Future<void> signInWithEmail(String email, String password) async {
     try {
-      // Validate input
-      if (email.trim().isEmpty || password.isEmpty) {
-        throw Exception('Email and password are required');
-      }
+      email = email.trim();
 
+      // 1. Basic local validation
       if (!_isValidEmail(email)) {
-        throw Exception('Please enter a valid email address');
+        throw Exception('Enter a valid email address');
       }
-
       if (password.length < 6) {
-        throw Exception('Password must be at least 6 characters long');
+        throw Exception('Password must be at least 6 characters');
       }
 
-      // Check if email exists with any provider first
-      try {
-        // Try to sign in with a dummy password to check if email exists
-        await _auth.signInWithEmailAndPassword(
-          email: email.trim(),
-          password: 'dummy-password-that-will-fail',
-        );
-        // If we get here, the email/password is valid - should never happen with dummy password
-        throw Exception('Unexpected authentication state');
-      } on FirebaseAuthException catch (e) {
-        if (e.code == 'wrong-password') {
-          // Email exists with password - try to sign in with provided password
-          try {
-            final userCredential = await _auth.signInWithEmailAndPassword(
-              email: email.trim(),
-              password: password,
-            );
+      // 2. Get sign-in methods for this e-mail from Firebase
+      final methods = await _auth.fetchSignInMethodsForEmail(email);
 
-            if (userCredential.user != null) {
-              await _createUserDocIfNotExists(userCredential.user!, 'password');
-            }
-          } on FirebaseAuthException catch (e) {
-            if (e.code == 'wrong-password') {
-              throw Exception('Incorrect password. Please try again.');
-            }
-            rethrow;
+      if (methods.contains('password')) {
+        // Existing email / password user → authenticate
+        try {
+          final cred = await _auth.signInWithEmailAndPassword(
+              email: email, password: password);
+          if (cred.user != null) {
+            await _createUserDocIfNotExists(cred.user!, 'password');
           }
-        } else if (e.code == 'user-not-found') {
-          // Email doesn't exist - create new account
-          if (kDebugMode) {
-            print('Email not found, creating new account for: $email');
+        } on FirebaseAuthException catch (e) {
+          if (e.code == 'wrong-password') {
+            throw Exception('Incorrect password. Please try again.');
           }
-
-          try {
-            final userCredential = await _auth.createUserWithEmailAndPassword(
-              email: email.trim(),
-              password: password,
-            );
-
-            if (userCredential.user != null) {
-              await _createUserDocIfNotExists(userCredential.user!, 'password');
-            }
-          } on FirebaseAuthException catch (e) {
-            if (e.code == 'weak-password') {
-              throw Exception(
-                  'Password is too weak. Please choose a stronger password.');
-            } else if (e.code == 'email-already-in-use') {
-              // Race condition - email was created between our check and create attempt
-              throw Exception(
-                  'This email was just registered. Please try signing in instead.');
-            } else {
-              throw Exception('Account creation failed: ${e.message}');
-            }
-          }
-        } else {
-          throw Exception('Sign in failed: ${e.message}');
+          rethrow;
         }
+      } else if (methods.isEmpty) {
+        // Brand-new user → create account
+        try {
+          final cred = await _auth.createUserWithEmailAndPassword(
+              email: email, password: password);
+          if (cred.user != null) {
+            await _createUserDocIfNotExists(cred.user!, 'password');
+          }
+        } on FirebaseAuthException catch (e) {
+          switch (e.code) {
+            case 'weak-password':
+              throw Exception('Password is too weak.');
+            case 'email-already-in-use':
+              // Rare race condition – treat as existing password path next run
+              throw Exception('This email is already registered.');
+            default:
+              throw Exception('Account creation failed: ${e.message}');
+          }
+        }
+      } else if (methods.length == 1 && methods.first == 'google.com') {
+        // Google-only account – alert UI and stop
+        throw GoogleAccountExistsException(
+          'This email is linked to Google Sign-In. Sign in with Google, then add a password from Settings.',
+          email,
+        );
+      } else {
+        // Any other combination (future Facebook, etc.)
+        throw Exception(
+            'This email is linked to a different sign-in method. Please use your original sign-in.');
       }
     } catch (e) {
       if (kDebugMode) {
