@@ -78,6 +78,7 @@ class FirestoreService {
           .doc(actionId)
           .update({
         'status': 'posted',
+        'posted_at': FieldValue.serverTimestamp(),
         'last_attempt': FieldValue.serverTimestamp(),
         'action_json': updatedJson,
         'posted_ids': postIds,

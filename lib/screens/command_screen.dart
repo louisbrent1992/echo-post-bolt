@@ -1511,6 +1511,10 @@ class _CommandScreenState extends State<CommandScreen>
       // Phase 1: Use coordinator state transition, mirror in widget
       _postCoordinator!.stopRecording();
 
+      // CRITICAL FIX: Save action to Firestore BEFORE posting starts
+      // This ensures the document exists when postBatch tries to update it
+      await _postCoordinator!.uploadFinalizedPost();
+
       // Create SocialPostService instance
       final socialPostService = SocialPostService(
         coordinator: _postCoordinator,
@@ -1523,6 +1527,9 @@ class _CommandScreenState extends State<CommandScreen>
 
       final results = <String, bool>{};
       final errors = <String, String>{};
+
+      // FIXED: Create stable progress overlay entry once instead of setState
+      OverlayEntry? progressOverlay;
 
       await for (final progress in progressStream) {
         if (kDebugMode) {
@@ -1559,7 +1566,34 @@ class _CommandScreenState extends State<CommandScreen>
             // Do nothing for pending state
             break;
         }
+
+        // FIXED: Use stable overlay instead of setState to prevent flickering
+        if (progress.state == PostState.inFlight &&
+            progress.progress != null &&
+            progress.progress! > 0 &&
+            progress.progress! < 1.0) {
+          // Create or update progress overlay
+          if (progressOverlay == null && mounted) {
+            progressOverlay =
+                _createProgressOverlay(progress.progress!, progress.platform);
+            Overlay.of(context).insert(progressOverlay!);
+          } else if (progressOverlay != null && mounted) {
+            // Remove old overlay and create new one with updated progress
+            progressOverlay!.remove();
+            progressOverlay =
+                _createProgressOverlay(progress.progress!, progress.platform);
+            Overlay.of(context).insert(progressOverlay!);
+          }
+        } else if (progress.state == PostState.success ||
+            progress.state == PostState.error) {
+          // Remove progress overlay
+          progressOverlay?.remove();
+          progressOverlay = null;
+        }
       }
+
+      // Ensure overlay is removed
+      progressOverlay?.remove();
 
       final allSucceeded = results.values.every((success) => success);
 
@@ -1674,6 +1708,8 @@ class _CommandScreenState extends State<CommandScreen>
               ),
               (route) => route.isFirst,
             );
+
+            // NOTE: uploadFinalizedPost() already called above, no need to call again
           } else {
             // Some posts failed - coordinator handles error state, widget mirrors
             if (kDebugMode) {
@@ -1701,6 +1737,112 @@ class _CommandScreenState extends State<CommandScreen>
         );
       }
     }
+  }
+
+  /// Create a stable progress overlay that doesn't trigger rebuilds
+  OverlayEntry _createProgressOverlay(double progress, String platform) {
+    return OverlayEntry(
+      builder: (context) => Material(
+        color: Colors.black, // Fully opaque black background
+        child: Container(
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              stops: [0.0, 0.4, 0.8, 1.0],
+              colors: [
+                Color(0xFF000000), // Pure black at top
+                Color(0xFF1A1A1A), // Dark gray
+                Color(0xFF2A2A2A), // Medium dark gray
+                Color(0xFF1A1A1A), // Dark gray at bottom
+              ],
+            ),
+          ),
+          child: Center(
+            child: Container(
+              margin: const EdgeInsets.symmetric(horizontal: 32),
+              padding: const EdgeInsets.all(32),
+              decoration: BoxDecoration(
+                color: Colors.black.withValues(alpha: 0.8),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(
+                  color: const Color(0xFFFF0055).withValues(alpha: 0.3),
+                  width: 1.5,
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.5),
+                    blurRadius: 20,
+                    offset: const Offset(0, 8),
+                  ),
+                ],
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Progress indicator
+                  SizedBox(
+                    width: 80,
+                    height: 80,
+                    child: CircularProgressIndicator(
+                      value: progress,
+                      color: const Color(0xFFFF0055),
+                      strokeWidth: 6,
+                      backgroundColor: Colors.white.withValues(alpha: 0.1),
+                    ),
+                  ),
+                  const SizedBox(height: 24),
+
+                  // Platform name with proper typography
+                  Text(
+                    'Uploading to ${platform[0].toUpperCase()}${platform.substring(1)}',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: AppTypography.large,
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: 0.5,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 8),
+
+                  // Progress percentage with proper constraints
+                  Container(
+                    constraints: const BoxConstraints(maxWidth: 200),
+                    child: Text(
+                      '${(progress * 100).toStringAsFixed(0)}% complete',
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.7),
+                        fontSize: AppTypography.body,
+                        fontWeight: FontWeight.w400,
+                      ),
+                      textAlign: TextAlign.center,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+
+                  // Progress details
+                  Container(
+                    constraints: const BoxConstraints(maxWidth: 240),
+                    child: Text(
+                      'Please wait while your video is being uploaded...',
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.5),
+                        fontSize: AppTypography.small,
+                        fontWeight: FontWeight.w400,
+                      ),
+                      textAlign: TextAlign.center,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   @override

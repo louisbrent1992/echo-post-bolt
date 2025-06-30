@@ -17,6 +17,7 @@ import '../models/post_progress.dart';
 import '../services/social_action_post_coordinator.dart';
 import 'package:path/path.dart' as path;
 import 'auth/youtube_auth_service.dart';
+import 'firestore_service.dart';
 
 class SocialPostService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
@@ -1791,6 +1792,9 @@ class SocialPostService {
           '🚀 SocialPostService: Starting batch post to ${targets.length} platforms');
     }
 
+    final postIds = <String, String>{};
+    final results = <String, bool>{};
+
     for (final target in targets) {
       // Special handling for YouTube to surface granular progress
       if (target.platform.toLowerCase() == 'youtube') {
@@ -1798,8 +1802,20 @@ class SocialPostService {
         await for (final ytProgress
             in _postToYouTubeWithProgress(action, target)) {
           yield ytProgress;
+
+          // Track success and store post ID
+          if (ytProgress.state == PostState.success) {
+            results[target.platform] = true;
+            // Get the stored post ID from the previous _storePostId call
+            final storedPostId =
+                await _getStoredPostId(action.actionId, target.platform);
+            if (storedPostId != null) {
+              postIds[target.platform] = storedPostId;
+            }
+          } else if (ytProgress.state == PostState.error) {
+            results[target.platform] = false;
+          }
         }
-        // Continue to next platform after YouTube finishes (success or error handled inside)
         continue;
       }
 
@@ -1822,6 +1838,16 @@ class SocialPostService {
         // Post to the platform
         await _postToPlatform(tempAction, target.platform, _authService);
 
+        // Track success
+        results[target.platform] = true;
+
+        // Get the stored post ID
+        final storedPostId =
+            await _getStoredPostId(action.actionId, target.platform);
+        if (storedPostId != null) {
+          postIds[target.platform] = storedPostId;
+        }
+
         // Emit success state
         yield PostProgress(
           platform: target.platform,
@@ -1837,6 +1863,9 @@ class SocialPostService {
           print('❌ Failed to post to ${target.platform}: $e');
         }
 
+        // Track failure
+        results[target.platform] = false;
+
         // Emit error state
         yield PostProgress(
           platform: target.platform,
@@ -1844,6 +1873,59 @@ class SocialPostService {
           error: e.toString(),
           targetName: target.targetName,
         );
+      }
+    }
+
+    // After all platforms complete, mark action as posted if any succeeded
+    final anySucceeded = results.values.any((success) => success);
+    if (anySucceeded) {
+      await _markActionPostedWithIds(action.actionId, action.toJson(), postIds);
+    }
+  }
+
+  /// Get stored post ID from Firestore
+  Future<String?> _getStoredPostId(String actionId, String platform) async {
+    try {
+      final uid = _auth.currentUser?.uid;
+      if (uid == null) return null;
+
+      final doc = await _firestore
+          .collection('users')
+          .doc(uid)
+          .collection('actions')
+          .doc(actionId)
+          .get();
+
+      if (doc.exists) {
+        final data = doc.data()!;
+        final postIds = data['post_ids'] as Map<String, dynamic>?;
+        return postIds?[platform] as String?;
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ Error getting stored post ID: $e');
+      }
+    }
+    return null;
+  }
+
+  /// Mark action as posted with post IDs using the FirestoreService method
+  Future<void> _markActionPostedWithIds(String actionId,
+      Map<String, dynamic> updatedJson, Map<String, String> postIds) async {
+    try {
+      final uid = _auth.currentUser?.uid;
+      if (uid == null) return;
+
+      // Use the FirestoreService method for consistency
+      final firestoreService = FirestoreService();
+      await firestoreService.markActionPosted(actionId, updatedJson, postIds);
+
+      if (kDebugMode) {
+        print('✅ Action $actionId marked as posted with IDs: $postIds');
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ Error marking action as posted with IDs: $e');
       }
     }
   }
