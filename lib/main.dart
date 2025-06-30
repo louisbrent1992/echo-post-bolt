@@ -1,7 +1,6 @@
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:provider/provider.dart';
 import 'route_observer.dart';
 import 'services/account_auth_service.dart';
@@ -13,6 +12,7 @@ import 'services/natural_language_parser.dart';
 import 'services/social_action_post_coordinator.dart';
 import 'services/app_settings_service.dart';
 import 'services/permission_manager.dart';
+import 'services/json_env_service.dart';
 import 'screens/command_screen.dart';
 import 'screens/login_screen.dart';
 import 'firebase_options.dart';
@@ -20,17 +20,18 @@ import 'firebase_options.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Load environment variables from .env.local (optional for development)
+  // Initialize JSON environment service
   try {
-    await dotenv.load(fileName: ".env.local");
+    await JsonEnvService.initialize();
     if (kDebugMode) {
-      print('✅ Environment variables loaded from .env.local');
+      print('✅ Environment variables loaded from .env_local.json');
+      final status = JsonEnvService.getEnvironmentStatus();
+      print('📊 Environment Status: ${status['totalVars']} variables loaded');
     }
   } catch (e) {
     if (kDebugMode) {
-      print('⚠️ .env.local not found, using development defaults');
-      print(
-          '   Create .env.local file with your API keys for full functionality');
+      print('⚠️ Failed to load .env_local.json: $e');
+      print('   Using default environment values');
     }
   }
 
@@ -50,11 +51,12 @@ Future<void> main() async {
   }
 
   // Get API key with fallback for development
-  final apiKey = dotenv.env['OPENAI_API_KEY'] ?? 'development_key';
+  final apiKey = JsonEnvService.get('OPENAI_API_KEY') ?? 'development_key';
   if (apiKey == 'development_key') {
     if (kDebugMode) {
       print('⚠️ Using development API key - AI features will be limited');
-      print('   Set OPENAI_API_KEY in .env.local for full AI functionality');
+      print(
+          '   Set OPENAI_API_KEY in .env_local.json for full AI functionality');
     }
   }
 

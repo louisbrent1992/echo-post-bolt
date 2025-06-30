@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import '../json_env_service.dart';
 
 /// Web-specific OAuth configuration for social platform authentication
 class WebOAuthConfig {
@@ -8,9 +9,11 @@ class WebOAuthConfig {
       // Development: Use localhost with proper port
       return 'http://localhost:8080';
     } else {
-      // Production: Use your actual domain
-      // TODO: Replace with your actual deployed domain
-      return 'https://echopost-app.web.app'; // Default Firebase hosting domain
+      // Production: Use domain from environment or fallback
+      final envDomain = JsonEnvService.get('NETLIFY_DOMAIN') ??
+          JsonEnvService.get('WEB_DOMAIN') ??
+          'https://visionary-paprenjak-16cc41.netlify.app';
+      return envDomain;
     }
   }
 
@@ -141,7 +144,7 @@ Web OAuth Setup Required:
 3. Ensure your domain is added to each platform's allowed domains
 4. For production, use HTTPS URLs only
 
-See WEB_DEPLOYMENT.md for detailed instructions.
+See WEB_OAUTH_SETUP.md for detailed instructions.
 ''';
   }
 }

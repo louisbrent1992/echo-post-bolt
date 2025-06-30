@@ -116,6 +116,6 @@ flutter_icons:
 flutter:
   uses-material-design: true
   assets:
-    - .env.local
+    - .env_local.json
     - assets/images/
     - assets/icons/

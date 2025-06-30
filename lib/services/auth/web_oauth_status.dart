@@ -1,5 +1,5 @@
 import 'package:flutter/foundation.dart';
-import 'package:flutter_dotenv/flutter_dotenv.dart';
+import '../json_env_service.dart';
 import 'web_oauth_config.dart';
 
 /// Web OAuth status checker and diagnostic tool
@@ -52,9 +52,9 @@ class WebOAuthStatus {
     };
 
     for (final entry in requiredVars.entries) {
-      final value = dotenv.env[entry.key];
+      final value = JsonEnvService.get(entry.key);
       if (value == null || value.isEmpty) {
-        status['issues'].add('Missing ${entry.value} in .env.local');
+        status['issues'].add('Missing ${entry.value} in .env_local.json');
       } else if (value.contains('your_') || value.contains('placeholder')) {
         status['warnings']
             .add('${entry.value} appears to be a placeholder value');
@@ -98,8 +98,8 @@ class WebOAuthStatus {
   /// Check Twitter-specific configuration
   static void _checkTwitterConfiguration(
       Map<String, dynamic> platformStatus, Map<String, dynamic> status) {
-    final clientId = dotenv.env['TWITTER_CLIENT_ID'];
-    final clientSecret = dotenv.env['TWITTER_CLIENT_SECRET'];
+    final clientId = JsonEnvService.get('TWITTER_CLIENT_ID');
+    final clientSecret = JsonEnvService.get('TWITTER_CLIENT_SECRET');
 
     if (clientId == null || clientSecret == null) {
       platformStatus['configured'] = false;
@@ -118,8 +118,8 @@ class WebOAuthStatus {
   /// Check TikTok-specific configuration
   static void _checkTikTokConfiguration(
       Map<String, dynamic> platformStatus, Map<String, dynamic> status) {
-    final clientKey = dotenv.env['TIKTOK_CLIENT_KEY'];
-    final clientSecret = dotenv.env['TIKTOK_CLIENT_SECRET'];
+    final clientKey = JsonEnvService.get('TIKTOK_CLIENT_KEY');
+    final clientSecret = JsonEnvService.get('TIKTOK_CLIENT_SECRET');
 
     if (clientKey == null || clientSecret == null) {
       platformStatus['configured'] = false;
@@ -171,9 +171,9 @@ Web OAuth Setup Instructions:
    - YouTube: Add redirect URI to Google Cloud Console
 
 3. Set Environment Variables:
-   - Create .env.local file
+   - Create .env_local.json file
    - Add Twitter and TikTok credentials
-   - Never commit .env.local to version control
+   - Never commit .env_local.json to version control
 
 4. Test OAuth Flows:
    - Run flutter run -d chrome --web-port=8080
@@ -199,7 +199,8 @@ See WEB_OAUTH_SETUP.md for detailed instructions.
         steps.writeln(
             '  → Update web_oauth_config.dart with your actual domain');
       } else if (issue.contains('Missing')) {
-        steps.writeln('  → Add the missing environment variable to .env.local');
+        steps.writeln(
+            '  → Add the missing environment variable to .env_local.json');
       } else if (issue.contains('redirect URI')) {
         steps.writeln(
             '  → Configure redirect URI in platform developer console');

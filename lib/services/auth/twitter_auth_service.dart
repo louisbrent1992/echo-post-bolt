@@ -2,12 +2,12 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_web_auth_2/flutter_web_auth_2.dart';
-import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:crypto/crypto.dart';
 import 'dart:convert';
 import 'dart:math';
 import 'package:http/http.dart' as http;
 import '../platform_document_service.dart';
+import '../json_env_service.dart';
 import 'web_oauth_config.dart';
 import 'web_oauth_handler.dart';
 
@@ -28,12 +28,12 @@ class TwitterAuthService {
         throw Exception('User must be signed in with Google or email first');
       }
 
-      final clientId = dotenv.env['TWITTER_CLIENT_ID'] ?? '';
-      final clientSecret = dotenv.env['TWITTER_CLIENT_SECRET'] ?? '';
+      final clientId = JsonEnvService.get('TWITTER_CLIENT_ID') ?? '';
+      final clientSecret = JsonEnvService.get('TWITTER_CLIENT_SECRET') ?? '';
 
       if (clientId.isEmpty || clientSecret.isEmpty) {
         throw Exception(
-            'Twitter OAuth 2.0 credentials not found in .env.local file. Please check ENVIRONMENT_SETUP.md for configuration instructions.');
+            'Twitter OAuth 2.0 credentials not found in .env_local.json file. Please check ENVIRONMENT_SETUP.md for configuration instructions.');
       }
 
       // Use web OAuth handler for web platform
@@ -81,8 +81,8 @@ class TwitterAuthService {
   Future<void> _signInWithTwitterMobile(
       String clientId, String clientSecret) async {
     // Use platform-appropriate redirect URI
-    final redirectUri =
-        dotenv.env['TWITTER_REDIRECT_URI'] ?? 'echopost://twitter-callback';
+    final redirectUri = JsonEnvService.get('TWITTER_REDIRECT_URI') ??
+        'echopost://twitter-callback';
 
     if (kDebugMode) {
       print('🐦 Using redirect URI: $redirectUri');
@@ -479,8 +479,8 @@ class TwitterAuthService {
       final refreshToken = tokenData['refresh_token'] as String?;
       if (refreshToken == null) return false;
 
-      final clientId = dotenv.env['TWITTER_CLIENT_ID'] ?? '';
-      final clientSecret = dotenv.env['TWITTER_CLIENT_SECRET'] ?? '';
+      final clientId = JsonEnvService.get('TWITTER_CLIENT_ID') ?? '';
+      final clientSecret = JsonEnvService.get('TWITTER_CLIENT_SECRET') ?? '';
 
       final refreshResponse = await http.post(
         Uri.parse('https://api.twitter.com/2/oauth2/token'),

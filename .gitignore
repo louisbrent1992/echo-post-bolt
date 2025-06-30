@@ -48,6 +48,7 @@ app.*.map.json
 # Environment files
 .env
 .env.local
+.env_local.json
 .env.production
 
 # Firebase configuration
