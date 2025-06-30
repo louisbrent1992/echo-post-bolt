@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:share_plus/share_plus.dart';
@@ -11,8 +12,12 @@ import 'auth/facebook_auth_service.dart';
 import 'auth/instagram_auth_service.dart';
 import 'platform_connection_service.dart';
 import '../models/social_action.dart';
+import '../models/platform_target.dart';
+import '../models/post_progress.dart';
 import '../services/social_action_post_coordinator.dart';
 import 'package:path/path.dart' as path;
+import 'auth/youtube_auth_service.dart';
+import 'firestore_service.dart';
 
 class SocialPostService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
@@ -213,17 +218,7 @@ class SocialPostService {
           await _postToFacebook(action, authService);
           break;
         case 'instagram':
-          // Check if user has Instagram access
-          final instagramAuth = InstagramAuthService();
-          final hasInstagramAccess = await instagramAuth.isInstagramConnected();
-
-          if (hasInstagramAccess) {
-            // Use automated posting via Instagram API with Instagram Login
-            await _postToInstagram(action);
-          } else {
-            // Fall back to SharePlus for manual sharing
-            await _shareToInstagramViaSharePlus(action);
-          }
+          await _postToInstagram(action);
           break;
         case 'youtube':
           await _postToYouTube(action);
@@ -287,35 +282,6 @@ class SocialPostService {
       print('  Media count: ${action.content.media.length}');
     }
 
-    // --- PATCH: Use share_plus for user timeline (manual sharing) ---
-    final fbData = action.platformData.facebook;
-    final postAsPage = fbData?.postAsPage == true;
-    if (!postAsPage) {
-      // User selected to post to their own timeline: use share_plus
-      if (kDebugMode) {
-        print(
-            '🔗 User selected My Timeline. Using share_plus for manual sharing.');
-      }
-      // Prepare text and media for sharing
-      final text = formattedContent;
-      if (action.content.media.isNotEmpty) {
-        // Only share the first image for simplicity
-        final media = action.content.media.first;
-        final fileUri = media.fileUri;
-        if (fileUri.startsWith('file://')) {
-          final filePath = fileUri.replaceFirst('file://', '');
-          await Share.shareXFiles([XFile(filePath)], text: text);
-        } else {
-          // If not a file URI, just share the text
-          await Share.share(text);
-        }
-      } else {
-        await Share.share(text);
-      }
-      return;
-    }
-    // --- END PATCH ---
-
     try {
       // Get Facebook access token from Firestore
       final uid = _auth.currentUser?.uid;
@@ -353,6 +319,7 @@ class SocialPostService {
       bool isPagePost = false;
 
       // Use user selection to determine if posting as page or user
+      final fbData = action.platformData.facebook;
       if (fbData?.postAsPage == true &&
           fbData?.pageId != null &&
           fbData!.pageId.isNotEmpty) {
@@ -1076,16 +1043,21 @@ class SocialPostService {
   }
 
   /// Post to YouTube with proper API integration
-  Future<void> _postToYouTube(SocialAction action) async {
+  Future<void> _postToYouTube(SocialAction action,
+      {void Function(double progress)? onProgress}) async {
     final formattedContent = _formatPostForPlatform(action, 'youtube');
 
     if (kDebugMode) {
       print('📺 Posting to YouTube...');
-      print('  Original text: ${action.content.text}');
+      print('  Original text: [1m${action.content.text}[0m');
       print('  Hashtags: ${action.content.hashtags.join(', ')}');
       print('  Formatted content: $formattedContent');
       print('  Media count: ${action.content.media.length}');
     }
+
+    // Force re-authentication to ensure a fresh token
+    final youtubeAuth = YouTubeAuthService();
+    await youtubeAuth.signInWithYouTube();
 
     try {
       // Get YouTube access token from Firestore
@@ -1120,45 +1092,26 @@ class SocialPostService {
       }
 
       // Get video file path
-      final videoPath = mediaItem.fileUri;
-      if (videoPath.isEmpty) {
-        throw Exception('Video file path not found');
+      final videoPath = mediaItem.fileUri.startsWith('file://')
+          ? Uri.parse(mediaItem.fileUri).path
+          : mediaItem.fileUri;
+
+      final file = File(videoPath);
+      if (!await file.exists()) {
+        throw Exception('Video file does not exist on device: $videoPath');
       }
 
-      // Upload video to YouTube
-      final response = await http.post(
-        Uri.parse('https://www.googleapis.com/upload/youtube/v3/videos')
-            .replace(queryParameters: {
-          'part': 'snippet,status',
-          'uploadType': 'multipart',
-          'access_token': accessToken,
-        }),
-        headers: {
-          'Authorization': 'Bearer $accessToken',
-          'Content-Type': 'application/json; charset=UTF-8',
-        },
-        body: jsonEncode({
-          'snippet': {
-            'title': action.content.text.split('\n')[0], // First line as title
-            'description': formattedContent,
-            'tags': action.content.hashtags,
-            'categoryId': '22', // People & Blogs
-          },
-          'status': {
-            'privacyStatus': 'public',
-            'selfDeclaredMadeForKids': false,
-          },
-        }),
+      final videoId = await _uploadVideoResumable(
+        file: file,
+        accessToken: accessToken,
+        title: action.content.text.split('\n').first,
+        description: formattedContent,
+        tags: action.content.hashtags,
+        mimeType: mediaItem.mimeType,
+        onProgress: onProgress,
       );
 
-      if (response.statusCode != 200) {
-        throw Exception('Failed to upload video to YouTube: ${response.body}');
-      }
-
-      final responseData = jsonDecode(response.body);
-      final videoId = responseData['id'];
-
-      // Store video ID for verification
+      // Persist video ID for downstream verification / analytics
       await _storePostId(action.actionId, 'youtube', videoId);
 
       if (kDebugMode) {
@@ -1173,12 +1126,135 @@ class SocialPostService {
     }
   }
 
-  /// Post to Twitter/X with proper API integration
+  /// Handles the resumable upload session flow for the YouTube Data API v3.
+  /// Returns the uploaded video's ID once the upload is complete.
+  Future<String> _uploadVideoResumable({
+    required File file,
+    required String accessToken,
+    required String title,
+    required String description,
+    required List<String> tags,
+    required String mimeType,
+    void Function(double progress)? onProgress,
+  }) async {
+    final fileSize = await file.length();
+
+    // 1. Initiate resumable upload session
+    final initiateUri = Uri.parse(
+        'https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status');
+
+    final initiateResponse = await http.post(
+      initiateUri,
+      headers: {
+        'Authorization': 'Bearer $accessToken',
+        'Content-Type': 'application/json; charset=UTF-8',
+        'X-Upload-Content-Length': fileSize.toString(),
+        'X-Upload-Content-Type': mimeType,
+      },
+      body: jsonEncode({
+        'snippet': {
+          'title': title,
+          'description': description,
+          'tags': tags,
+          'categoryId': '22',
+        },
+        'status': {
+          'privacyStatus': 'public',
+          'selfDeclaredMadeForKids': false,
+        },
+      }),
+    );
+
+    if (initiateResponse.statusCode != 200 &&
+        initiateResponse.statusCode != 201) {
+      throw Exception(
+          'Failed to initiate YouTube upload: ${initiateResponse.body}');
+    }
+
+    final uploadUrl = initiateResponse.headers['location'];
+    if (uploadUrl == null) {
+      throw Exception('Upload URL missing from YouTube initiate response');
+    }
+
+    const chunkSize = 1024 * 1024; // 1 MB chunks
+    int offset = 0;
+
+    final stream = file.openRead();
+    final buffer = <int>[];
+
+    // Helper to send a chunk
+    Future<String?> _sendChunk(List<int> chunkBytes, bool isLast) async {
+      final startByte = offset;
+      final endByte = offset + chunkBytes.length - 1;
+      final contentRange = 'bytes $startByte-$endByte/${fileSize.toString()}';
+
+      final response = await http.put(
+        Uri.parse(uploadUrl),
+        headers: {
+          'Authorization': 'Bearer $accessToken',
+          'Content-Length': chunkBytes.length.toString(),
+          'Content-Type': mimeType,
+          'Content-Range': contentRange,
+        },
+        body: chunkBytes,
+      );
+
+      // 308 means resume incomplete, final success is 200 or 201
+      if (response.statusCode == 308) {
+        // Successful chunk upload, continue
+        return null;
+      } else if (response.statusCode == 200 || response.statusCode == 201) {
+        // Final response contains video resource JSON
+        final data = jsonDecode(response.body);
+        if (data is Map && data.containsKey('id')) {
+          onProgress?.call(1.0);
+          return data['id'];
+        } else {
+          throw Exception('Unexpected response from YouTube: ${response.body}');
+        }
+      } else {
+        throw Exception('YouTube upload failed: ${response.body}');
+      }
+    }
+
+    String? videoId;
+
+    try {
+      await for (final data in stream) {
+        buffer.addAll(data);
+        while (buffer.length >= chunkSize) {
+          final chunk = buffer.sublist(0, chunkSize);
+          buffer.removeRange(0, chunkSize);
+          videoId = await _sendChunk(chunk, false);
+          offset += chunk.length;
+          onProgress?.call(offset / fileSize);
+        }
+      }
+
+      // Send remaining bytes as final chunk
+      if (buffer.isNotEmpty) {
+        videoId = await _sendChunk(buffer, true);
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ Error during YouTube chunk upload: $e');
+      }
+      rethrow;
+    }
+
+    if (videoId == null) {
+      throw Exception('Failed to retrieve YouTube video ID after upload');
+    }
+
+    return videoId;
+  }
+
+  /// Post to Twitter/X with robust error handling and token reuse
   Future<void> _postToTwitter(SocialAction action) async {
     final formattedContent = _formatPostForPlatform(action, 'twitter');
 
     if (kDebugMode) {
-      print('🐦 Posting to Twitter/X...');
+      print('🐦 Starting Twitter/X API integration...');
       print('  Original text: ${action.content.text}');
       print('  Hashtags: ${action.content.hashtags.join(', ')}');
       print('  Formatted content: $formattedContent');
@@ -1186,16 +1262,387 @@ class SocialPostService {
       print('  Media count: ${action.content.media.length}');
     }
 
-    // Simulate processing time
-    await Future.delayed(const Duration(milliseconds: 600));
+    try {
+      // Get Twitter access token from Firestore
+      final uid = _auth.currentUser?.uid;
+      if (uid == null) {
+        throw Exception('User not authenticated');
+      }
 
-    // Simulate occasional API failures (7% chance)
-    if (DateTime.now().millisecond % 14 == 0) {
-      throw Exception('Twitter API authentication error');
+      final tokenDoc = await _firestore
+          .collection('users')
+          .doc(uid)
+          .collection('tokens')
+          .doc('twitter')
+          .get();
+
+      if (!tokenDoc.exists) {
+        throw Exception(
+            'Twitter credentials not found. Please authenticate with Twitter first.');
+      }
+
+      final tokenData = tokenDoc.data()!;
+      final accessToken = tokenData['access_token'] as String;
+      final userId = tokenData['user_id'] as String;
+
+      // Check if token is expired
+      final expiresAt = tokenData['expires_at'] as String?;
+      if (expiresAt != null) {
+        final expiryDate = DateTime.parse(expiresAt);
+        if (expiryDate.isBefore(DateTime.now())) {
+          if (kDebugMode) {
+            print(
+                '❌ Twitter access token expired. Need to refresh or re-authenticate.');
+          }
+          throw Exception(
+              'Twitter access token expired. Please re-authenticate with Twitter.');
+        }
+      }
+
+      if (kDebugMode) {
+        print('✅ Twitter access token validated');
+        print('  User ID: $userId');
+        print('  Token expires: $expiresAt');
+      }
+
+      // Handle media uploads if present
+      List<String> mediaIds = [];
+      if (action.content.media.isNotEmpty) {
+        if (kDebugMode) {
+          print(
+              '📸 Processing ${action.content.media.length} media files for Twitter...');
+        }
+
+        for (int i = 0; i < action.content.media.length; i++) {
+          final media = action.content.media[i];
+          final mediaFile = File(Uri.parse(media.fileUri).path);
+
+          if (!await mediaFile.exists()) {
+            throw Exception('Media file not found: ${media.fileUri}');
+          }
+
+          final mediaId = await _uploadMediaToTwitter(mediaFile, accessToken);
+          mediaIds.add(mediaId);
+
+          if (kDebugMode) {
+            print(
+                '  ✅ Media ${i + 1}/${action.content.media.length} uploaded with ID: $mediaId');
+          }
+        }
+      }
+
+      // Create the tweet
+      final tweetData = <String, dynamic>{
+        'text': formattedContent,
+      };
+
+      // Add media if present
+      if (mediaIds.isNotEmpty) {
+        tweetData['media'] = {
+          'media_ids': mediaIds,
+        };
+      }
+
+      final tweetUrl = 'https://api.twitter.com/2/tweets';
+      final tweetHeaders = {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer $accessToken',
+      };
+      final tweetBody = jsonEncode(tweetData);
+
+      if (kDebugMode) {
+        print('🐦 Creating tweet with:');
+        print('  URL: $tweetUrl');
+        print('  Headers: $tweetHeaders');
+        print('  Body: $tweetBody');
+      }
+
+      // Post tweet using Twitter API v2
+      final response = await http.post(
+        Uri.parse(tweetUrl),
+        headers: tweetHeaders,
+        body: tweetBody,
+      );
+
+      if (kDebugMode) {
+        print('🐦 Twitter API response status: ${response.statusCode}');
+        print('🐦 Twitter API response headers: ${response.headers}');
+        print('🐦 Twitter API raw body: >>${response.body}<<');
+      }
+
+      // Guard: Check for empty or non-JSON response
+      if (response.body.isEmpty) {
+        print('❌ Twitter returned no body (status ${response.statusCode})');
+        throw Exception(
+            'Twitter returned no body (status ${response.statusCode})');
+      }
+      if (!(response.headers['content-type']?.contains('application/json') ??
+          false)) {
+        print(
+            '❌ Twitter returned non-JSON response: ${response.body.substring(0, response.body.length > 200 ? 200 : response.body.length)}');
+        throw Exception(
+            'Twitter returned non-JSON response (status ${response.statusCode})');
+      }
+
+      if (response.statusCode == 201 || response.statusCode == 200) {
+        try {
+          final responseData = jsonDecode(response.body);
+          final tweetId = responseData['data']['id'] as String;
+          if (kDebugMode) {
+            print('✅ Tweet posted successfully!');
+            print('  Tweet ID: $tweetId');
+            print('  Tweet URL: https://twitter.com/user/status/$tweetId');
+          }
+          await _storePostId(action.actionId, 'twitter', tweetId);
+        } catch (e) {
+          print('❌ Error parsing Twitter response JSON: $e');
+          print('❌ Raw response: "${response.body}"');
+          throw Exception('Twitter API returned malformed JSON.');
+        }
+      } else {
+        print('❌ Twitter API error: ${response.statusCode} "${response.body}"');
+        String errorMsg = 'Twitter API error: ${response.statusCode}';
+        if (response.body.isNotEmpty) {
+          errorMsg +=
+              ' - ${response.body.substring(0, response.body.length > 200 ? 200 : response.body.length)}';
+        }
+        throw Exception(errorMsg);
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ Twitter posting failed: $e');
+      }
+      throw Exception('Failed to post to Twitter: $e');
+    }
+  }
+
+  /// Upload media to Twitter using chunked upload for large files
+  Future<String> _uploadMediaToTwitter(
+      File mediaFile, String accessToken) async {
+    final fileSize = await mediaFile.length();
+    final fileName = mediaFile.path.split('/').last;
+    final mimeType = _getMimeTypeFromPath(mediaFile.path);
+
+    if (kDebugMode) {
+      print('📤 Uploading media to Twitter:');
+      print('  File: $fileName');
+      print('  Size: ${(fileSize / 1024 / 1024).toStringAsFixed(2)} MB');
+      print('  MIME type: $mimeType');
+    }
+
+    // Twitter supports up to 5MB for images, 512MB for videos
+    const maxImageSize = 5 * 1024 * 1024; // 5MB
+    const maxVideoSize = 512 * 1024 * 1024; // 512MB
+
+    if (mimeType.startsWith('image/') && fileSize > maxImageSize) {
+      throw Exception(
+          'Image file too large. Twitter supports up to 5MB for images.');
+    } else if (mimeType.startsWith('video/') && fileSize > maxVideoSize) {
+      throw Exception(
+          'Video file too large. Twitter supports up to 512MB for videos.');
+    }
+
+    // For files larger than 5MB, use chunked upload
+    if (fileSize > 5 * 1024 * 1024) {
+      return await _uploadMediaChunked(mediaFile, accessToken, mimeType);
+    } else {
+      return await _uploadMediaSimple(mediaFile, accessToken, mimeType);
+    }
+  }
+
+  /// Simple media upload for files under 5MB
+  Future<String> _uploadMediaSimple(
+      File mediaFile, String accessToken, String mimeType) async {
+    if (kDebugMode) {
+      print('📤 Using simple upload (file < 5MB)');
+    }
+
+    final bytes = await mediaFile.readAsBytes();
+    final base64Data = base64Encode(bytes);
+
+    final requestBody = {
+      'media_category':
+          mimeType.startsWith('video/') ? 'tweet_video' : 'tweet_image',
+      'media_data': base64Data,
+    };
+
+    final response = await http.post(
+      Uri.parse('https://upload.twitter.com/1.1/media/upload.json'),
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer $accessToken',
+      },
+      body: jsonEncode(requestBody),
+    );
+
+    if (kDebugMode) {
+      print('📤 Simple upload response status: ${response.statusCode}');
+      print('📤 Simple upload response body: ${response.body}');
+    }
+
+    if (response.statusCode == 200) {
+      final responseData = jsonDecode(response.body);
+      final mediaId = responseData['media_id_string'] as String;
+
+      if (kDebugMode) {
+        print('✅ Simple upload successful. Media ID: $mediaId');
+      }
+
+      return mediaId;
+    } else {
+      final errorData = jsonDecode(response.body);
+      final errorMessage =
+          errorData['errors']?[0]?['message'] ?? 'Unknown upload error';
+      throw Exception('Media upload failed: $errorMessage');
+    }
+  }
+
+  /// Chunked media upload for files over 5MB
+  Future<String> _uploadMediaChunked(
+      File mediaFile, String accessToken, String mimeType) async {
+    if (kDebugMode) {
+      print('📤 Using chunked upload (file > 5MB)');
+    }
+
+    final fileSize = await mediaFile.length();
+    const chunkSize = 1024 * 1024; // 1MB chunks
+    final totalChunks = (fileSize / chunkSize).ceil();
+
+    // Step 1: Initialize upload
+    final initResponse = await http.post(
+      Uri.parse('https://upload.twitter.com/1.1/media/upload.json'),
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer $accessToken',
+      },
+      body: jsonEncode({
+        'command': 'INIT',
+        'total_bytes': fileSize,
+        'media_type': mimeType,
+        'media_category':
+            mimeType.startsWith('video/') ? 'tweet_video' : 'tweet_image',
+      }),
+    );
+
+    if (initResponse.statusCode != 200) {
+      final errorData = jsonDecode(initResponse.body);
+      final errorMessage =
+          errorData['errors']?[0]?['message'] ?? 'Unknown init error';
+      throw Exception('Media upload init failed: $errorMessage');
+    }
+
+    final initData = jsonDecode(initResponse.body);
+    final mediaId = initData['media_id_string'] as String;
+
+    if (kDebugMode) {
+      print('📤 Upload initialized. Media ID: $mediaId');
+      print('📤 Total chunks: $totalChunks');
+    }
+
+    // Step 2: Upload chunks
+    final fileStream = mediaFile.openRead();
+    int chunkIndex = 0;
+
+    await for (final chunk in fileStream.transform(
+      StreamTransformer<List<int>, List<int>>.fromHandlers(
+        handleData: (data, sink) {
+          final chunks = <List<int>>[];
+          for (int i = 0; i < data.length; i += chunkSize) {
+            final end =
+                (i + chunkSize < data.length) ? i + chunkSize : data.length;
+            chunks.add(data.sublist(i, end));
+          }
+          for (final chunk in chunks) {
+            sink.add(chunk);
+          }
+        },
+      ),
+    )) {
+      chunkIndex++;
+
+      if (kDebugMode) {
+        print(
+            '📤 Uploading chunk $chunkIndex/$totalChunks (${chunk.length} bytes)');
+      }
+
+      final chunkResponse = await http.post(
+        Uri.parse('https://upload.twitter.com/1.1/media/upload.json'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $accessToken',
+        },
+        body: jsonEncode({
+          'command': 'APPEND',
+          'media_id': mediaId,
+          'segment_index': chunkIndex - 1,
+          'media_data': base64Encode(chunk),
+        }),
+      );
+
+      if (chunkResponse.statusCode != 200) {
+        final errorData = jsonDecode(chunkResponse.body);
+        final errorMessage =
+            errorData['errors']?[0]?['message'] ?? 'Unknown chunk upload error';
+        throw Exception('Chunk upload failed: $errorMessage');
+      }
+    }
+
+    // Step 3: Finalize upload
+    final finalizeResponse = await http.post(
+      Uri.parse('https://upload.twitter.com/1.1/media/upload.json'),
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer $accessToken',
+      },
+      body: jsonEncode({
+        'command': 'FINALIZE',
+        'media_id': mediaId,
+      }),
+    );
+
+    if (finalizeResponse.statusCode != 200) {
+      final errorData = jsonDecode(finalizeResponse.body);
+      final errorMessage =
+          errorData['errors']?[0]?['message'] ?? 'Unknown finalize error';
+      throw Exception('Media upload finalize failed: $errorMessage');
     }
 
     if (kDebugMode) {
-      print('  ✅ Successfully posted to Twitter/X');
+      print('✅ Chunked upload successful. Media ID: $mediaId');
+    }
+
+    return mediaId;
+  }
+
+  /// Get MIME type from file path
+  String _getMimeTypeFromPath(String path) {
+    final extension = path.toLowerCase().split('.').last;
+    switch (extension) {
+      case 'jpg':
+      case 'jpeg':
+        return 'image/jpeg';
+      case 'png':
+        return 'image/png';
+      case 'gif':
+        return 'image/gif';
+      case 'webp':
+        return 'image/webp';
+      case 'mp4':
+        return 'video/mp4';
+      case 'mov':
+        return 'video/quicktime';
+      case 'avi':
+        return 'video/x-msvideo';
+      case 'wmv':
+        return 'video/x-ms-wmv';
+      case 'flv':
+        return 'video/x-flv';
+      case 'webm':
+        return 'video/webm';
+      case 'mkv':
+        return 'video/x-matroska';
+      default:
+        return 'application/octet-stream';
     }
   }
 
@@ -1422,8 +1869,11 @@ class SocialPostService {
               print('❌ Instagram access token expired during verification');
             }
             return false;
+          case '200':
+            throw Exception(
+                'Instagram app requires review for posting permissions. Please contact support.');
           default:
-            return false;
+            throw Exception('Instagram verification failed: $errorMessage');
         }
       }
 
@@ -1453,13 +1903,91 @@ class SocialPostService {
   Future<bool> _verifyTwitterPost(String? postId) async {
     if (postId == null) return false;
 
-    // Simulate verification check
-    await Future.delayed(const Duration(milliseconds: 250));
+    try {
+      if (kDebugMode) {
+        print('🔍 Verifying Twitter post: $postId');
+      }
 
-    // In a real implementation, this would call Twitter API v2
-    // GET /2/tweets/{tweet_id}
+      // Get Twitter access token from Firestore
+      final uid = _auth.currentUser?.uid;
+      if (uid == null) return false;
 
-    return true; // Simulate success for now
+      final tokenDoc = await _firestore
+          .collection('users')
+          .doc(uid)
+          .collection('tokens')
+          .doc('twitter')
+          .get();
+
+      if (!tokenDoc.exists) {
+        if (kDebugMode) {
+          print('❌ Twitter credentials not found during verification');
+        }
+        return false;
+      }
+
+      final tokenData = tokenDoc.data()!;
+      final accessToken = tokenData['access_token'] as String;
+
+      // Check if token is expired
+      final expiresAt = tokenData['expires_at'] as String?;
+      if (expiresAt != null) {
+        final expiryDate = DateTime.parse(expiresAt);
+        if (expiryDate.isBefore(DateTime.now())) {
+          if (kDebugMode) {
+            print('❌ Twitter access token expired during verification');
+          }
+          return false;
+        }
+      }
+
+      // Verify tweet exists using Twitter API v2
+      final response = await http.get(
+        Uri.parse(
+            'https://api.twitter.com/2/tweets/$postId?tweet.fields=id,created_at,text'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $accessToken',
+        },
+      );
+
+      if (kDebugMode) {
+        print('🔍 Twitter verification response: ${response.statusCode}');
+        print('🔍 Response body: ${response.body}');
+      }
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        final verifiedTweetId = data['data']['id'];
+
+        if (verifiedTweetId == postId) {
+          if (kDebugMode) {
+            print('✅ Twitter post verified successfully');
+          }
+          return true;
+        }
+      } else if (response.statusCode == 404) {
+        if (kDebugMode) {
+          print('❌ Twitter post not found (404)');
+        }
+        return false;
+      } else {
+        final errorData = jsonDecode(response.body);
+        final errorMessage =
+            errorData['errors']?[0]?['message'] ?? 'Unknown error';
+        if (kDebugMode) {
+          print('❌ Twitter verification error: $errorMessage');
+        }
+        return false;
+      }
+
+      return false;
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ Twitter verification failed: $e');
+      }
+      return false;
+    }
   }
 
   /// Verify TikTok post exists
@@ -1708,53 +2236,206 @@ class SocialPostService {
     }
   }
 
-  /// Share to Instagram via SharePlus (manual sharing for consumer accounts)
-  Future<void> _shareToInstagramViaSharePlus(SocialAction action) async {
-    final formattedContent = _formatPostForPlatform(action, 'instagram');
-
+  /// Post content to multiple platforms in sequence with progress tracking
+  Stream<PostProgress> postBatch(
+      List<PlatformTarget> targets, SocialAction action) async* {
     if (kDebugMode) {
-      print('📷 Sharing to Instagram via SharePlus (manual sharing)...');
-      print('  Original text: ${action.content.text}');
-      print('  Hashtags: ${action.content.hashtags.join(', ')}');
-      print('  Formatted content: $formattedContent');
-      print('  Media count: ${action.content.media.length}');
+      print(
+          '🚀 SocialPostService: Starting batch post to ${targets.length} platforms');
     }
 
-    try {
-      // Instagram requires media, so we need at least one media file
-      List<XFile> mediaFiles = [];
-      if (action.content.media.isNotEmpty) {
-        for (final mediaItem in action.content.media) {
-          if (mediaItem.fileUri.startsWith('file://')) {
-            final filePath = Uri.parse(mediaItem.fileUri).path;
-            if (await File(filePath).exists()) {
-              mediaFiles.add(XFile(filePath));
+    final postIds = <String, String>{};
+    final results = <String, bool>{};
+
+    for (final target in targets) {
+      // Special handling for YouTube to surface granular progress
+      if (target.platform.toLowerCase() == 'youtube') {
+        // Delegate to specialized stream that reports chunk progress
+        await for (final ytProgress
+            in _postToYouTubeWithProgress(action, target)) {
+          yield ytProgress;
+
+          // Track success and store post ID
+          if (ytProgress.state == PostState.success) {
+            results[target.platform] = true;
+            // Get the stored post ID from the previous _storePostId call
+            final storedPostId =
+                await _getStoredPostId(action.actionId, target.platform);
+            if (storedPostId != null) {
+              postIds[target.platform] = storedPostId;
             }
+          } else if (ytProgress.state == PostState.error) {
+            results[target.platform] = false;
           }
         }
+        continue;
       }
 
-      if (mediaFiles.isEmpty) {
-        throw Exception('Instagram requires media content for sharing');
+      try {
+        if (kDebugMode) {
+          print(
+              '📤 Posting to ${target.platform} (${target.targetName ?? target.targetId})');
+        }
+
+        // Emit in-flight state
+        yield PostProgress(
+          platform: target.platform,
+          state: PostState.inFlight,
+          targetName: target.targetName,
+        );
+
+        // Create a temporary SocialAction with the target's credentials
+        final tempAction = _createActionWithTarget(action, target);
+
+        // Post to the platform
+        await _postToPlatform(tempAction, target.platform, _authService);
+
+        // Track success
+        results[target.platform] = true;
+
+        // Get the stored post ID
+        final storedPostId =
+            await _getStoredPostId(action.actionId, target.platform);
+        if (storedPostId != null) {
+          postIds[target.platform] = storedPostId;
+        }
+
+        // Emit success state
+        yield PostProgress(
+          platform: target.platform,
+          state: PostState.success,
+          targetName: target.targetName,
+        );
+
+        if (kDebugMode) {
+          print('✅ Successfully posted to ${target.platform}');
+        }
+      } catch (e) {
+        if (kDebugMode) {
+          print('❌ Failed to post to ${target.platform}: $e');
+        }
+
+        // Track failure
+        results[target.platform] = false;
+
+        // Emit error state
+        yield PostProgress(
+          platform: target.platform,
+          state: PostState.error,
+          error: e.toString(),
+          targetName: target.targetName,
+        );
       }
+    }
 
-      // Share using SharePlus with media
-      await Share.shareXFiles(
-        mediaFiles,
-        text: formattedContent,
-        subject: 'Instagram Post',
-      );
+    // After all platforms complete, mark action as posted if any succeeded
+    final anySucceeded = results.values.any((success) => success);
+    if (anySucceeded) {
+      await _markActionPostedWithIds(action.actionId, action.toJson(), postIds);
+    }
+  }
 
-      if (kDebugMode) {
-        print('  ✅ Successfully shared to Instagram via SharePlus');
-        print(
-            '  📝 Note: This is manual sharing. User needs to open Instagram app to complete posting.');
+  /// Get stored post ID from Firestore
+  Future<String?> _getStoredPostId(String actionId, String platform) async {
+    try {
+      final uid = _auth.currentUser?.uid;
+      if (uid == null) return null;
+
+      final doc = await _firestore
+          .collection('users')
+          .doc(uid)
+          .collection('actions')
+          .doc(actionId)
+          .get();
+
+      if (doc.exists) {
+        final data = doc.data()!;
+        final postIds = data['post_ids'] as Map<String, dynamic>?;
+        return postIds?[platform] as String?;
       }
     } catch (e) {
       if (kDebugMode) {
-        print('  ❌ SharePlus sharing failed: $e');
+        print('❌ Error getting stored post ID: $e');
       }
-      rethrow;
     }
+    return null;
+  }
+
+  /// Mark action as posted with post IDs using the FirestoreService method
+  Future<void> _markActionPostedWithIds(String actionId,
+      Map<String, dynamic> updatedJson, Map<String, String> postIds) async {
+    try {
+      final uid = _auth.currentUser?.uid;
+      if (uid == null) return;
+
+      // Use the FirestoreService method for consistency
+      final firestoreService = FirestoreService();
+      await firestoreService.markActionPosted(actionId, updatedJson, postIds);
+
+      if (kDebugMode) {
+        print('✅ Action $actionId marked as posted with IDs: $postIds');
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ Error marking action as posted with IDs: $e');
+      }
+    }
+  }
+
+  /// Helper that uploads a YouTube video with granular progress updates
+  Stream<PostProgress> _postToYouTubeWithProgress(
+      SocialAction originalAction, PlatformTarget target) {
+    final controller = StreamController<PostProgress>();
+
+    // Kick off async work without blocking the caller
+    () async {
+      final action = _createActionWithTarget(originalAction, target);
+
+      // Initial progress (0%)
+      controller.add(PostProgress(
+        platform: 'youtube',
+        state: PostState.inFlight,
+        progress: 0.0,
+        targetName: target.targetName,
+      ));
+
+      try {
+        await _postToYouTube(action, onProgress: (double p) {
+          final clamped = p.clamp(0.0, 1.0);
+          controller.add(PostProgress(
+            platform: 'youtube',
+            state: PostState.inFlight,
+            progress: clamped.toDouble(),
+            targetName: target.targetName,
+          ));
+        });
+
+        controller.add(PostProgress(
+          platform: 'youtube',
+          state: PostState.success,
+          progress: 1.0,
+          targetName: target.targetName,
+        ));
+      } catch (e) {
+        controller.add(PostProgress(
+          platform: 'youtube',
+          state: PostState.error,
+          error: e.toString(),
+          targetName: target.targetName,
+        ));
+      } finally {
+        await controller.close();
+      }
+    }();
+
+    return controller.stream;
+  }
+
+  /// Create a temporary SocialAction with the target's credentials
+  SocialAction _createActionWithTarget(
+      SocialAction originalAction, PlatformTarget target) {
+    // For now, we'll use the original action and rely on the stored credentials
+    // In a more sophisticated implementation, we might inject the access token
+    return originalAction;
   }
 }

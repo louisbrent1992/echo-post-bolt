@@ -77,6 +77,7 @@ class SocialPlatforms {
       maxHashtags: 30,
       supportsAutomatedPosting: false,
       requiresBusinessAccount: true,
+      canManualShare: true,
       postingRequirements:
           'Requires Facebook Business or Creator account for automated posting. Personal accounts will use native sharing.',
     ),
@@ -89,6 +90,7 @@ class SocialPlatforms {
       maxHashtags: 30,
       supportsAutomatedPosting: false,
       requiresBusinessAccount: true,
+      canManualShare: true,
       postingRequirements:
           'Requires Instagram Business or Creator account for automated posting. Personal accounts will use native sharing.',
     ),
@@ -101,6 +103,7 @@ class SocialPlatforms {
       maxHashtags: 15,
       supportsAutomatedPosting: true,
       requiresBusinessAccount: false,
+      canManualShare: true,
       postingRequirements:
           'Supports automated posting via YouTube Data API v3.',
     ),
@@ -113,6 +116,7 @@ class SocialPlatforms {
       maxHashtags: 10,
       supportsAutomatedPosting: true,
       requiresBusinessAccount: false,
+      canManualShare: false,
       postingRequirements: 'Supports automated posting via Twitter API v2.',
     ),
     'tiktok': PlatformCapabilities(
@@ -124,6 +128,7 @@ class SocialPlatforms {
       maxHashtags: 20,
       supportsAutomatedPosting: true,
       requiresBusinessAccount: false,
+      canManualShare: false,
       postingRequirements: 'Supports automated posting via TikTok API.',
     ),
   };
@@ -436,6 +441,7 @@ class PlatformCapabilities {
   final int maxHashtags;
   final bool supportsAutomatedPosting;
   final bool requiresBusinessAccount;
+  final bool canManualShare;
   final String? postingRequirements;
 
   const PlatformCapabilities({
@@ -447,6 +453,7 @@ class PlatformCapabilities {
     required this.maxHashtags,
     required this.supportsAutomatedPosting,
     required this.requiresBusinessAccount,
+    required this.canManualShare,
     required this.postingRequirements,
   });
 }

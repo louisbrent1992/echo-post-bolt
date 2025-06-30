@@ -9,11 +9,14 @@ import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:record/record.dart';
 import '../models/social_action.dart';
 import '../models/status_message.dart';
+import '../models/post_progress.dart';
 import '../services/media_coordinator.dart';
 import '../services/social_action_post_coordinator.dart';
 import '../services/app_settings_service.dart';
 import '../services/permission_manager.dart';
 import '../services/native_video_player.dart';
+import '../services/social_post_service.dart';
+import '../services/account_auth_service.dart';
 import '../widgets/social_icon.dart';
 import '../widgets/post_content_box.dart';
 import '../widgets/transcription_status.dart';
@@ -21,6 +24,8 @@ import '../widgets/unified_media_buttons.dart';
 import '../widgets/enhanced_media_preview.dart';
 import '../widgets/native_video_widget.dart';
 import '../widgets/posting_strategy_info.dart';
+import '../widgets/business_account_warning.dart';
+import '../widgets/manual_share_button.dart';
 import '../screens/media_selection_screen.dart';
 import '../screens/history_screen.dart';
 import '../screens/directory_selection_screen.dart';
@@ -1473,7 +1478,7 @@ class _CommandScreenState extends State<CommandScreen>
 
     try {
       if (kDebugMode) {
-        print('🚀 Confirming and posting...');
+        print('🚀 Starting automated posting...');
       }
 
       // Check post readiness
@@ -1488,11 +1493,108 @@ class _CommandScreenState extends State<CommandScreen>
         return;
       }
 
+      // Get platform targets for automated posting
+      final targets =
+          await _postCoordinator!.getPlatformTargetsForAutomatedPosting();
+
+      if (targets.isEmpty) {
+        if (mounted) {
+          _postCoordinator?.requestStatusUpdate(
+            'No platforms available for automated posting',
+            StatusMessageType.warning,
+            duration: const Duration(seconds: 4),
+          );
+        }
+        return;
+      }
+
       // Phase 1: Use coordinator state transition, mirror in widget
       _postCoordinator!.stopRecording();
 
-      // Execute posting through coordinator
-      final results = await _postCoordinator!.finalizeAndExecutePost();
+      // CRITICAL FIX: Save action to Firestore BEFORE posting starts
+      // This ensures the document exists when postBatch tries to update it
+      await _postCoordinator!.uploadFinalizedPost();
+
+      // Create SocialPostService instance
+      final socialPostService = SocialPostService(
+        coordinator: _postCoordinator,
+        authService: Provider.of<AccountAuthService>(context, listen: false),
+      );
+
+      // Execute batch posting with progress tracking
+      final progressStream =
+          socialPostService.postBatch(targets, _postCoordinator!.currentPost);
+
+      final results = <String, bool>{};
+      final errors = <String, String>{};
+
+      // FIXED: Create stable progress overlay entry once instead of setState
+      OverlayEntry? progressOverlay;
+
+      await for (final progress in progressStream) {
+        if (kDebugMode) {
+          print('📊 Progress: ${progress.platform} - ${progress.state}');
+        }
+
+        // Update status based on progress
+        switch (progress.state) {
+          case PostState.inFlight:
+            _postCoordinator?.requestStatusUpdate(
+              'Posting to ${progress.targetName ?? progress.platform}...',
+              StatusMessageType.info,
+              duration: const Duration(seconds: 2),
+            );
+            break;
+          case PostState.success:
+            results[progress.platform] = true;
+            _postCoordinator?.requestStatusUpdate(
+              '✅ Posted to ${progress.targetName ?? progress.platform}',
+              StatusMessageType.success,
+              duration: const Duration(seconds: 2),
+            );
+            break;
+          case PostState.error:
+            results[progress.platform] = false;
+            errors[progress.platform] = progress.error ?? 'Unknown error';
+            _postCoordinator?.requestStatusUpdate(
+              '❌ Failed to post to ${progress.targetName ?? progress.platform}',
+              StatusMessageType.error,
+              duration: const Duration(seconds: 3),
+            );
+            break;
+          case PostState.pending:
+            // Do nothing for pending state
+            break;
+        }
+
+        // FIXED: Use stable overlay instead of setState to prevent flickering
+        if (progress.state == PostState.inFlight &&
+            progress.progress != null &&
+            progress.progress! > 0 &&
+            progress.progress! < 1.0) {
+          // Create or update progress overlay
+          if (progressOverlay == null && mounted) {
+            progressOverlay =
+                _createProgressOverlay(progress.progress!, progress.platform);
+            Overlay.of(context).insert(progressOverlay!);
+          } else if (progressOverlay != null && mounted) {
+            // Remove old overlay and create new one with updated progress
+            progressOverlay!.remove();
+            progressOverlay =
+                _createProgressOverlay(progress.progress!, progress.platform);
+            Overlay.of(context).insert(progressOverlay!);
+          }
+        } else if (progress.state == PostState.success ||
+            progress.state == PostState.error) {
+          // Remove progress overlay
+          progressOverlay?.remove();
+          progressOverlay = null;
+        }
+      }
+
+      // Ensure overlay is removed
+      progressOverlay?.remove();
+
       final allSucceeded = results.values.every((success) => success);
 
       if (kDebugMode) {
@@ -1531,24 +1633,45 @@ class _CommandScreenState extends State<CommandScreen>
                 for (final platform in results.keys)
                   Padding(
                     padding: const EdgeInsets.only(bottom: 8.0),
-                    child: Row(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Icon(
-                          results[platform]! ? Icons.check_circle : Icons.error,
-                          color: results[platform]! ? Colors.green : Colors.red,
+                        Row(
+                          children: [
+                            Icon(
+                              results[platform]!
+                                  ? Icons.check_circle
+                                  : Icons.error,
+                              color: results[platform]!
+                                  ? Colors.green
+                                  : Colors.red,
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              platform.substring(0, 1).toUpperCase() +
+                                  platform.substring(1),
+                              style: const TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.white),
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              results[platform]! ? 'Posted' : 'Failed',
+                              style: const TextStyle(color: Colors.white70),
+                            ),
+                          ],
                         ),
-                        const SizedBox(width: 8),
-                        Text(
-                          platform.substring(0, 1).toUpperCase() +
-                              platform.substring(1),
-                          style: const TextStyle(
-                              fontWeight: FontWeight.bold, color: Colors.white),
-                        ),
-                        const SizedBox(width: 8),
-                        Text(
-                          results[platform]! ? 'Posted' : 'Failed',
-                          style: const TextStyle(color: Colors.white70),
-                        ),
+                        if (!results[platform]! && errors.containsKey(platform))
+                          Padding(
+                            padding: const EdgeInsets.only(left: 32, top: 4),
+                            child: Text(
+                              errors[platform]!,
+                              style: const TextStyle(
+                                color: Colors.red,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ),
                       ],
                     ),
                   ),
@@ -1585,6 +1708,8 @@ class _CommandScreenState extends State<CommandScreen>
               ),
               (route) => route.isFirst,
             );
+
+            // NOTE: uploadFinalizedPost() already called above, no need to call again
           } else {
             // Some posts failed - coordinator handles error state, widget mirrors
             if (kDebugMode) {
@@ -1612,6 +1737,112 @@ class _CommandScreenState extends State<CommandScreen>
         );
       }
     }
+  }
+
+  /// Create a stable progress overlay that doesn't trigger rebuilds
+  OverlayEntry _createProgressOverlay(double progress, String platform) {
+    return OverlayEntry(
+      builder: (context) => Material(
+        color: Colors.black, // Fully opaque black background
+        child: Container(
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              stops: [0.0, 0.4, 0.8, 1.0],
+              colors: [
+                Color(0xFF000000), // Pure black at top
+                Color(0xFF1A1A1A), // Dark gray
+                Color(0xFF2A2A2A), // Medium dark gray
+                Color(0xFF1A1A1A), // Dark gray at bottom
+              ],
+            ),
+          ),
+          child: Center(
+            child: Container(
+              margin: const EdgeInsets.symmetric(horizontal: 32),
+              padding: const EdgeInsets.all(32),
+              decoration: BoxDecoration(
+                color: Colors.black.withValues(alpha: 0.8),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(
+                  color: const Color(0xFFFF0055).withValues(alpha: 0.3),
+                  width: 1.5,
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.5),
+                    blurRadius: 20,
+                    offset: const Offset(0, 8),
+                  ),
+                ],
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Progress indicator
+                  SizedBox(
+                    width: 80,
+                    height: 80,
+                    child: CircularProgressIndicator(
+                      value: progress,
+                      color: const Color(0xFFFF0055),
+                      strokeWidth: 6,
+                      backgroundColor: Colors.white.withValues(alpha: 0.1),
+                    ),
+                  ),
+                  const SizedBox(height: 24),
+
+                  // Platform name with proper typography
+                  Text(
+                    'Uploading to ${platform[0].toUpperCase()}${platform.substring(1)}',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: AppTypography.large,
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: 0.5,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 8),
+
+                  // Progress percentage with proper constraints
+                  Container(
+                    constraints: const BoxConstraints(maxWidth: 200),
+                    child: Text(
+                      '${(progress * 100).toStringAsFixed(0)}% complete',
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.7),
+                        fontSize: AppTypography.body,
+                        fontWeight: FontWeight.w400,
+                      ),
+                      textAlign: TextAlign.center,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+
+                  // Progress details
+                  Container(
+                    constraints: const BoxConstraints(maxWidth: 240),
+                    child: Text(
+                      'Please wait while your video is being uploaded...',
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.5),
+                        fontSize: AppTypography.small,
+                        fontWeight: FontWeight.w400,
+                      ),
+                      textAlign: TextAlign.center,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   @override
@@ -1716,20 +1947,9 @@ class _CommandScreenState extends State<CommandScreen>
                     children: [
                       const SizedBox(height: spacing4),
                       if (coordinator.currentPost.platforms.isNotEmpty)
-                        PostingStrategyInfo(coordinator: coordinator),
+                        PostStrategyInfo(coordinator: coordinator),
                       if (coordinator.currentPost.platforms.isNotEmpty)
-                        FutureBuilder<List<String>>(
-                          future: coordinator
-                              .getPlatformsRequiringBusinessAccount(),
-                          builder: (context, snapshot) {
-                            if (snapshot.hasData && snapshot.data!.isNotEmpty) {
-                              return BusinessAccountWarning(
-                                platformsRequiringBusiness: snapshot.data!,
-                              );
-                            }
-                            return const SizedBox.shrink();
-                          },
-                        ),
+                        BusinessAccountWarning(coordinator: coordinator),
                       _buildCommandMediaSection(coordinator),
                       PostContentBox(
                         onVoiceEdit: _startVoiceEditing,
@@ -1737,6 +1957,7 @@ class _CommandScreenState extends State<CommandScreen>
                         onEditHashtags: _editPostHashtags,
                         onEditSchedule: _editPostSchedule,
                       ),
+                      ManualShareButton(coordinator: coordinator),
                       const SizedBox(height: 12),
                     ],
                   ),

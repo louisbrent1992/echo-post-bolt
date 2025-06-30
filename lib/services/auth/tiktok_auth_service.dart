@@ -9,10 +9,18 @@ import 'dart:convert';
 import 'dart:math';
 import '../platform_document_service.dart';
 
-/// TikTok (OAuth 2.0 with PKCE) - for video uploads
+/// TikTok (OAuth 2.0 with PKCE) - Updated for 2024 API requirements
 class TikTokAuthService {
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+
+  /// Updated TikTok OAuth endpoints (2024)
+  static const String _authorizationEndpoint =
+      'https://www.tiktok.com/v2/auth/authorize/';
+  static const String _tokenEndpoint =
+      'https://open.tiktokapis.com/v2/oauth/token/';
+  static const String _userInfoEndpoint =
+      'https://open.tiktokapis.com/v2/user/info/';
 
   /// Sign in with TikTok using OAuth 2.0 with PKCE
   Future<void> signInWithTikTok() async {
@@ -38,16 +46,18 @@ class TikTokAuthService {
       final codeChallenge = _generateCodeChallenge(codeVerifier);
       final state = _generateRandomString(32);
 
-      // Step 2: Build authorization URL
-      final authUrl = Uri.https('www.tiktok.com', '/v2/auth/authorize', {
-        'client_key': clientKey,
-        'scope': 'user.info.basic,video.upload',
-        'response_type': 'code',
-        'redirect_uri': 'echopost://tiktok-callback',
-        'state': state,
-        'code_challenge': codeChallenge,
-        'code_challenge_method': 'S256',
-      });
+      // Step 2: Build authorization URL (CORRECTED)
+      final authUrl = Uri.parse(_authorizationEndpoint).replace(
+        queryParameters: {
+          'client_key': clientKey,
+          'scope': 'user.info.basic,video.upload',
+          'response_type': 'code',
+          'redirect_uri': 'echopost://tiktok-callback',
+          'state': state,
+          'code_challenge': codeChallenge,
+          'code_challenge_method': 'S256',
+        },
+      );
 
       if (kDebugMode) {
         print('🎵 TikTok Auth URL: $authUrl');
@@ -78,7 +88,7 @@ class TikTokAuthService {
             '🎵 Authorization code received: ${authCode.substring(0, 10)}...');
       }
 
-      // Step 5: Exchange authorization code for access token
+      // Step 5: Exchange authorization code for access token (CORRECTED)
       final tokenData = await _exchangeCodeForToken(
         clientKey,
         clientSecret,
@@ -91,7 +101,7 @@ class TikTokAuthService {
             'Failed to exchange authorization code for access token');
       }
 
-      // Step 6: Get user information
+      // Step 6: Get user information (CORRECTED)
       final userInfo = await _getTikTokUserInfo(tokenData['access_token']);
 
       if (userInfo == null) {
@@ -107,10 +117,10 @@ class TikTokAuthService {
           .set({
         'access_token': tokenData['access_token'],
         'refresh_token': tokenData['refresh_token'],
-        'token_type': 'Bearer',
+        'token_type': tokenData['token_type'] ?? 'Bearer',
         'expires_in': tokenData['expires_in'],
-        'scope': 'user.info.basic,video.upload',
-        'user_id': userInfo['open_id'],
+        'scope': tokenData['scope'] ?? 'user.info.basic,video.upload',
+        'user_id': tokenData['open_id'] ?? userInfo['open_id'],
         'username': userInfo['username'],
         'display_name': userInfo['display_name'],
         'avatar_url': userInfo['avatar_url'],
@@ -124,7 +134,7 @@ class TikTokAuthService {
 
       if (kDebugMode) {
         print('✅ TikTok authentication completed successfully');
-        print('🎵 User ID: ${userInfo['open_id']}');
+        print('🎵 Open ID: ${tokenData['open_id'] ?? userInfo['open_id']}');
         print('🎵 Username: ${userInfo['username']}');
         print('🎵 Display Name: ${userInfo['display_name']}');
         print('🎵 Followers: ${userInfo['follower_count']}');
@@ -287,7 +297,7 @@ class TikTokAuthService {
         .join();
   }
 
-  /// Exchange authorization code for access token
+  /// Exchange authorization code for access token (CORRECTED)
   Future<Map<String, dynamic>?> _exchangeCodeForToken(
     String clientKey,
     String clientSecret,
@@ -296,7 +306,7 @@ class TikTokAuthService {
   ) async {
     try {
       final response = await http.post(
-        Uri.parse('https://open-api.tiktok.com/oauth/access_token/'),
+        Uri.parse(_tokenEndpoint),
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded',
           'Cache-Control': 'no-cache',
@@ -314,24 +324,31 @@ class TikTokAuthService {
       if (kDebugMode) {
         print(
             '📥 TikTok token exchange response status: ${response.statusCode}');
+        print('📥 TikTok token exchange response body: ${response.body}');
       }
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
 
-        if (data['data']['error_code'] == 0) {
-          return {
-            'access_token': data['data']['access_token'],
-            'refresh_token': data['data']['refresh_token'],
-            'expires_in': data['data']['expires_in'],
-            'token_type': data['data']['token_type'],
-          };
-        } else {
+        // Check for error in response (TikTok 2024 format)
+        if (data.containsKey('error')) {
           throw Exception(
-              'TikTok token exchange error: ${data['data']['description']}');
+              'TikTok token exchange error: ${data['error_description'] ?? data['error']}');
         }
+
+        // CORRECTED: Direct access to response fields (no nested 'data' object)
+        return {
+          'access_token': data['access_token'],
+          'refresh_token': data['refresh_token'],
+          'expires_in': data['expires_in'],
+          'token_type': data['token_type'],
+          'scope': data['scope'],
+          'open_id': data['open_id'],
+        };
       } else {
-        throw Exception('TikTok token exchange failed: ${response.body}');
+        final errorData = jsonDecode(response.body);
+        throw Exception(
+            'TikTok token exchange failed: ${errorData['error_description'] ?? response.body}');
       }
     } catch (e) {
       if (kDebugMode) {
@@ -341,11 +358,14 @@ class TikTokAuthService {
     }
   }
 
-  /// Get TikTok user info
+  /// Get TikTok user info (CORRECTED)
   Future<Map<String, dynamic>?> _getTikTokUserInfo(String accessToken) async {
     try {
       final response = await http.get(
-        Uri.parse('https://open-api.tiktok.com/user/info/'),
+        Uri.parse(_userInfoEndpoint).replace(queryParameters: {
+          'fields':
+              'open_id,union_id,avatar_url,display_name,username,follower_count,following_count,likes_count,video_count',
+        }),
         headers: {
           'Authorization': 'Bearer $accessToken',
         },
@@ -353,29 +373,34 @@ class TikTokAuthService {
 
       if (kDebugMode) {
         print('📥 TikTok user info response status: ${response.statusCode}');
+        print('📥 TikTok user info response body: ${response.body}');
       }
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
 
-        if (data['data']['error_code'] == 0) {
-          final user = data['data']['user'];
-          return {
-            'open_id': user['open_id'],
-            'username': user['username'],
-            'display_name': user['display_name'],
-            'avatar_url': user['avatar_url'],
-            'follower_count': user['follower_count'] ?? 0,
-            'following_count': user['following_count'] ?? 0,
-            'likes_count': user['likes_count'] ?? 0,
-            'video_count': user['video_count'] ?? 0,
-          };
-        } else {
+        // Check for error in response
+        if (data.containsKey('error')) {
           throw Exception(
-              'TikTok user info error: ${data['data']['description']}');
+              'TikTok user info error: ${data['error_description'] ?? data['error']}');
         }
+
+        // CORRECTED: Access user data from 'data.user' structure
+        final user = data['data']['user'];
+        return {
+          'open_id': user['open_id'],
+          'username': user['username'] ?? '',
+          'display_name': user['display_name'] ?? '',
+          'avatar_url': user['avatar_url'] ?? '',
+          'follower_count': user['follower_count'] ?? 0,
+          'following_count': user['following_count'] ?? 0,
+          'likes_count': user['likes_count'] ?? 0,
+          'video_count': user['video_count'] ?? 0,
+        };
       } else {
-        throw Exception('TikTok user info request failed: ${response.body}');
+        final errorData = jsonDecode(response.body);
+        throw Exception(
+            'TikTok user info request failed: ${errorData['error_description'] ?? response.body}');
       }
     } catch (e) {
       if (kDebugMode) {
