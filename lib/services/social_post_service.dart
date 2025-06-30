@@ -1249,12 +1249,12 @@ class SocialPostService {
     return videoId;
   }
 
-  /// Post to Twitter/X with proper API integration
+  /// Post to Twitter/X with robust error handling and token reuse
   Future<void> _postToTwitter(SocialAction action) async {
     final formattedContent = _formatPostForPlatform(action, 'twitter');
 
     if (kDebugMode) {
-      print('🐦 Posting to Twitter/X...');
+      print('🐦 Starting Twitter/X API integration...');
       print('  Original text: ${action.content.text}');
       print('  Hashtags: ${action.content.hashtags.join(', ')}');
       print('  Formatted content: $formattedContent');
@@ -1262,16 +1262,387 @@ class SocialPostService {
       print('  Media count: ${action.content.media.length}');
     }
 
-    // Simulate processing time
-    await Future.delayed(const Duration(milliseconds: 600));
+    try {
+      // Get Twitter access token from Firestore
+      final uid = _auth.currentUser?.uid;
+      if (uid == null) {
+        throw Exception('User not authenticated');
+      }
 
-    // Simulate occasional API failures (7% chance)
-    if (DateTime.now().millisecond % 14 == 0) {
-      throw Exception('Twitter API authentication error');
+      final tokenDoc = await _firestore
+          .collection('users')
+          .doc(uid)
+          .collection('tokens')
+          .doc('twitter')
+          .get();
+
+      if (!tokenDoc.exists) {
+        throw Exception(
+            'Twitter credentials not found. Please authenticate with Twitter first.');
+      }
+
+      final tokenData = tokenDoc.data()!;
+      final accessToken = tokenData['access_token'] as String;
+      final userId = tokenData['user_id'] as String;
+
+      // Check if token is expired
+      final expiresAt = tokenData['expires_at'] as String?;
+      if (expiresAt != null) {
+        final expiryDate = DateTime.parse(expiresAt);
+        if (expiryDate.isBefore(DateTime.now())) {
+          if (kDebugMode) {
+            print(
+                '❌ Twitter access token expired. Need to refresh or re-authenticate.');
+          }
+          throw Exception(
+              'Twitter access token expired. Please re-authenticate with Twitter.');
+        }
+      }
+
+      if (kDebugMode) {
+        print('✅ Twitter access token validated');
+        print('  User ID: $userId');
+        print('  Token expires: $expiresAt');
+      }
+
+      // Handle media uploads if present
+      List<String> mediaIds = [];
+      if (action.content.media.isNotEmpty) {
+        if (kDebugMode) {
+          print(
+              '📸 Processing ${action.content.media.length} media files for Twitter...');
+        }
+
+        for (int i = 0; i < action.content.media.length; i++) {
+          final media = action.content.media[i];
+          final mediaFile = File(Uri.parse(media.fileUri).path);
+
+          if (!await mediaFile.exists()) {
+            throw Exception('Media file not found: ${media.fileUri}');
+          }
+
+          final mediaId = await _uploadMediaToTwitter(mediaFile, accessToken);
+          mediaIds.add(mediaId);
+
+          if (kDebugMode) {
+            print(
+                '  ✅ Media ${i + 1}/${action.content.media.length} uploaded with ID: $mediaId');
+          }
+        }
+      }
+
+      // Create the tweet
+      final tweetData = <String, dynamic>{
+        'text': formattedContent,
+      };
+
+      // Add media if present
+      if (mediaIds.isNotEmpty) {
+        tweetData['media'] = {
+          'media_ids': mediaIds,
+        };
+      }
+
+      final tweetUrl = 'https://api.twitter.com/2/tweets';
+      final tweetHeaders = {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer $accessToken',
+      };
+      final tweetBody = jsonEncode(tweetData);
+
+      if (kDebugMode) {
+        print('🐦 Creating tweet with:');
+        print('  URL: $tweetUrl');
+        print('  Headers: $tweetHeaders');
+        print('  Body: $tweetBody');
+      }
+
+      // Post tweet using Twitter API v2
+      final response = await http.post(
+        Uri.parse(tweetUrl),
+        headers: tweetHeaders,
+        body: tweetBody,
+      );
+
+      if (kDebugMode) {
+        print('🐦 Twitter API response status: ${response.statusCode}');
+        print('🐦 Twitter API response headers: ${response.headers}');
+        print('🐦 Twitter API raw body: >>${response.body}<<');
+      }
+
+      // Guard: Check for empty or non-JSON response
+      if (response.body.isEmpty) {
+        print('❌ Twitter returned no body (status ${response.statusCode})');
+        throw Exception(
+            'Twitter returned no body (status ${response.statusCode})');
+      }
+      if (!(response.headers['content-type']?.contains('application/json') ??
+          false)) {
+        print(
+            '❌ Twitter returned non-JSON response: ${response.body.substring(0, response.body.length > 200 ? 200 : response.body.length)}');
+        throw Exception(
+            'Twitter returned non-JSON response (status ${response.statusCode})');
+      }
+
+      if (response.statusCode == 201 || response.statusCode == 200) {
+        try {
+          final responseData = jsonDecode(response.body);
+          final tweetId = responseData['data']['id'] as String;
+          if (kDebugMode) {
+            print('✅ Tweet posted successfully!');
+            print('  Tweet ID: $tweetId');
+            print('  Tweet URL: https://twitter.com/user/status/$tweetId');
+          }
+          await _storePostId(action.actionId, 'twitter', tweetId);
+        } catch (e) {
+          print('❌ Error parsing Twitter response JSON: $e');
+          print('❌ Raw response: "${response.body}"');
+          throw Exception('Twitter API returned malformed JSON.');
+        }
+      } else {
+        print('❌ Twitter API error: ${response.statusCode} "${response.body}"');
+        String errorMsg = 'Twitter API error: ${response.statusCode}';
+        if (response.body.isNotEmpty) {
+          errorMsg +=
+              ' - ${response.body.substring(0, response.body.length > 200 ? 200 : response.body.length)}';
+        }
+        throw Exception(errorMsg);
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ Twitter posting failed: $e');
+      }
+      throw Exception('Failed to post to Twitter: $e');
+    }
+  }
+
+  /// Upload media to Twitter using chunked upload for large files
+  Future<String> _uploadMediaToTwitter(
+      File mediaFile, String accessToken) async {
+    final fileSize = await mediaFile.length();
+    final fileName = mediaFile.path.split('/').last;
+    final mimeType = _getMimeTypeFromPath(mediaFile.path);
+
+    if (kDebugMode) {
+      print('📤 Uploading media to Twitter:');
+      print('  File: $fileName');
+      print('  Size: ${(fileSize / 1024 / 1024).toStringAsFixed(2)} MB');
+      print('  MIME type: $mimeType');
+    }
+
+    // Twitter supports up to 5MB for images, 512MB for videos
+    const maxImageSize = 5 * 1024 * 1024; // 5MB
+    const maxVideoSize = 512 * 1024 * 1024; // 512MB
+
+    if (mimeType.startsWith('image/') && fileSize > maxImageSize) {
+      throw Exception(
+          'Image file too large. Twitter supports up to 5MB for images.');
+    } else if (mimeType.startsWith('video/') && fileSize > maxVideoSize) {
+      throw Exception(
+          'Video file too large. Twitter supports up to 512MB for videos.');
+    }
+
+    // For files larger than 5MB, use chunked upload
+    if (fileSize > 5 * 1024 * 1024) {
+      return await _uploadMediaChunked(mediaFile, accessToken, mimeType);
+    } else {
+      return await _uploadMediaSimple(mediaFile, accessToken, mimeType);
+    }
+  }
+
+  /// Simple media upload for files under 5MB
+  Future<String> _uploadMediaSimple(
+      File mediaFile, String accessToken, String mimeType) async {
+    if (kDebugMode) {
+      print('📤 Using simple upload (file < 5MB)');
+    }
+
+    final bytes = await mediaFile.readAsBytes();
+    final base64Data = base64Encode(bytes);
+
+    final requestBody = {
+      'media_category':
+          mimeType.startsWith('video/') ? 'tweet_video' : 'tweet_image',
+      'media_data': base64Data,
+    };
+
+    final response = await http.post(
+      Uri.parse('https://upload.twitter.com/1.1/media/upload.json'),
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer $accessToken',
+      },
+      body: jsonEncode(requestBody),
+    );
+
+    if (kDebugMode) {
+      print('📤 Simple upload response status: ${response.statusCode}');
+      print('📤 Simple upload response body: ${response.body}');
+    }
+
+    if (response.statusCode == 200) {
+      final responseData = jsonDecode(response.body);
+      final mediaId = responseData['media_id_string'] as String;
+
+      if (kDebugMode) {
+        print('✅ Simple upload successful. Media ID: $mediaId');
+      }
+
+      return mediaId;
+    } else {
+      final errorData = jsonDecode(response.body);
+      final errorMessage =
+          errorData['errors']?[0]?['message'] ?? 'Unknown upload error';
+      throw Exception('Media upload failed: $errorMessage');
+    }
+  }
+
+  /// Chunked media upload for files over 5MB
+  Future<String> _uploadMediaChunked(
+      File mediaFile, String accessToken, String mimeType) async {
+    if (kDebugMode) {
+      print('📤 Using chunked upload (file > 5MB)');
+    }
+
+    final fileSize = await mediaFile.length();
+    const chunkSize = 1024 * 1024; // 1MB chunks
+    final totalChunks = (fileSize / chunkSize).ceil();
+
+    // Step 1: Initialize upload
+    final initResponse = await http.post(
+      Uri.parse('https://upload.twitter.com/1.1/media/upload.json'),
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer $accessToken',
+      },
+      body: jsonEncode({
+        'command': 'INIT',
+        'total_bytes': fileSize,
+        'media_type': mimeType,
+        'media_category':
+            mimeType.startsWith('video/') ? 'tweet_video' : 'tweet_image',
+      }),
+    );
+
+    if (initResponse.statusCode != 200) {
+      final errorData = jsonDecode(initResponse.body);
+      final errorMessage =
+          errorData['errors']?[0]?['message'] ?? 'Unknown init error';
+      throw Exception('Media upload init failed: $errorMessage');
+    }
+
+    final initData = jsonDecode(initResponse.body);
+    final mediaId = initData['media_id_string'] as String;
+
+    if (kDebugMode) {
+      print('📤 Upload initialized. Media ID: $mediaId');
+      print('📤 Total chunks: $totalChunks');
+    }
+
+    // Step 2: Upload chunks
+    final fileStream = mediaFile.openRead();
+    int chunkIndex = 0;
+
+    await for (final chunk in fileStream.transform(
+      StreamTransformer<List<int>, List<int>>.fromHandlers(
+        handleData: (data, sink) {
+          final chunks = <List<int>>[];
+          for (int i = 0; i < data.length; i += chunkSize) {
+            final end =
+                (i + chunkSize < data.length) ? i + chunkSize : data.length;
+            chunks.add(data.sublist(i, end));
+          }
+          for (final chunk in chunks) {
+            sink.add(chunk);
+          }
+        },
+      ),
+    )) {
+      chunkIndex++;
+
+      if (kDebugMode) {
+        print(
+            '📤 Uploading chunk $chunkIndex/$totalChunks (${chunk.length} bytes)');
+      }
+
+      final chunkResponse = await http.post(
+        Uri.parse('https://upload.twitter.com/1.1/media/upload.json'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $accessToken',
+        },
+        body: jsonEncode({
+          'command': 'APPEND',
+          'media_id': mediaId,
+          'segment_index': chunkIndex - 1,
+          'media_data': base64Encode(chunk),
+        }),
+      );
+
+      if (chunkResponse.statusCode != 200) {
+        final errorData = jsonDecode(chunkResponse.body);
+        final errorMessage =
+            errorData['errors']?[0]?['message'] ?? 'Unknown chunk upload error';
+        throw Exception('Chunk upload failed: $errorMessage');
+      }
+    }
+
+    // Step 3: Finalize upload
+    final finalizeResponse = await http.post(
+      Uri.parse('https://upload.twitter.com/1.1/media/upload.json'),
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer $accessToken',
+      },
+      body: jsonEncode({
+        'command': 'FINALIZE',
+        'media_id': mediaId,
+      }),
+    );
+
+    if (finalizeResponse.statusCode != 200) {
+      final errorData = jsonDecode(finalizeResponse.body);
+      final errorMessage =
+          errorData['errors']?[0]?['message'] ?? 'Unknown finalize error';
+      throw Exception('Media upload finalize failed: $errorMessage');
     }
 
     if (kDebugMode) {
-      print('  ✅ Successfully posted to Twitter/X');
+      print('✅ Chunked upload successful. Media ID: $mediaId');
+    }
+
+    return mediaId;
+  }
+
+  /// Get MIME type from file path
+  String _getMimeTypeFromPath(String path) {
+    final extension = path.toLowerCase().split('.').last;
+    switch (extension) {
+      case 'jpg':
+      case 'jpeg':
+        return 'image/jpeg';
+      case 'png':
+        return 'image/png';
+      case 'gif':
+        return 'image/gif';
+      case 'webp':
+        return 'image/webp';
+      case 'mp4':
+        return 'video/mp4';
+      case 'mov':
+        return 'video/quicktime';
+      case 'avi':
+        return 'video/x-msvideo';
+      case 'wmv':
+        return 'video/x-ms-wmv';
+      case 'flv':
+        return 'video/x-flv';
+      case 'webm':
+        return 'video/webm';
+      case 'mkv':
+        return 'video/x-matroska';
+      default:
+        return 'application/octet-stream';
     }
   }
 
@@ -1498,8 +1869,11 @@ class SocialPostService {
               print('❌ Instagram access token expired during verification');
             }
             return false;
+          case '200':
+            throw Exception(
+                'Instagram app requires review for posting permissions. Please contact support.');
           default:
-            return false;
+            throw Exception('Instagram verification failed: $errorMessage');
         }
       }
 
@@ -1529,13 +1903,91 @@ class SocialPostService {
   Future<bool> _verifyTwitterPost(String? postId) async {
     if (postId == null) return false;
 
-    // Simulate verification check
-    await Future.delayed(const Duration(milliseconds: 250));
+    try {
+      if (kDebugMode) {
+        print('🔍 Verifying Twitter post: $postId');
+      }
 
-    // In a real implementation, this would call Twitter API v2
-    // GET /2/tweets/{tweet_id}
+      // Get Twitter access token from Firestore
+      final uid = _auth.currentUser?.uid;
+      if (uid == null) return false;
 
-    return true; // Simulate success for now
+      final tokenDoc = await _firestore
+          .collection('users')
+          .doc(uid)
+          .collection('tokens')
+          .doc('twitter')
+          .get();
+
+      if (!tokenDoc.exists) {
+        if (kDebugMode) {
+          print('❌ Twitter credentials not found during verification');
+        }
+        return false;
+      }
+
+      final tokenData = tokenDoc.data()!;
+      final accessToken = tokenData['access_token'] as String;
+
+      // Check if token is expired
+      final expiresAt = tokenData['expires_at'] as String?;
+      if (expiresAt != null) {
+        final expiryDate = DateTime.parse(expiresAt);
+        if (expiryDate.isBefore(DateTime.now())) {
+          if (kDebugMode) {
+            print('❌ Twitter access token expired during verification');
+          }
+          return false;
+        }
+      }
+
+      // Verify tweet exists using Twitter API v2
+      final response = await http.get(
+        Uri.parse(
+            'https://api.twitter.com/2/tweets/$postId?tweet.fields=id,created_at,text'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $accessToken',
+        },
+      );
+
+      if (kDebugMode) {
+        print('🔍 Twitter verification response: ${response.statusCode}');
+        print('🔍 Response body: ${response.body}');
+      }
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        final verifiedTweetId = data['data']['id'];
+
+        if (verifiedTweetId == postId) {
+          if (kDebugMode) {
+            print('✅ Twitter post verified successfully');
+          }
+          return true;
+        }
+      } else if (response.statusCode == 404) {
+        if (kDebugMode) {
+          print('❌ Twitter post not found (404)');
+        }
+        return false;
+      } else {
+        final errorData = jsonDecode(response.body);
+        final errorMessage =
+            errorData['errors']?[0]?['message'] ?? 'Unknown error';
+        if (kDebugMode) {
+          print('❌ Twitter verification error: $errorMessage');
+        }
+        return false;
+      }
+
+      return false;
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ Twitter verification failed: $e');
+      }
+      return false;
+    }
   }
 
   /// Verify TikTok post exists
