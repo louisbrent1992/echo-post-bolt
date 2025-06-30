@@ -24,6 +24,8 @@ class FacebookAuthService {
 
       final LoginResult result = await FacebookAuth.instance.login(
         permissions: [
+          'public_profile',
+          'email',
           'business_management',
           'pages_show_list',
           'pages_read_engagement',
@@ -41,6 +43,14 @@ class FacebookAuthService {
           print('🔵 Facebook login successful for user: ${userData['name']}');
         }
 
+        // Calculate a safe expiration date
+        final DateTime safeExpiryDate =
+            DateTime.now().add(const Duration(days: 60));
+        final DateTime tokenExpiryDate = accessToken.expires
+                .isBefore(DateTime.fromMillisecondsSinceEpoch(8640000000000))
+            ? accessToken.expires
+            : safeExpiryDate;
+
         // Save token to Firestore
         await _firestore
             .collection('users')
@@ -50,7 +60,7 @@ class FacebookAuthService {
             .set({
           'access_token': accessToken.token,
           'user_id': userData['id'],
-          'expires_at': Timestamp.fromDate(accessToken.expires),
+          'expires_at': Timestamp.fromDate(tokenExpiryDate),
           'user_name': userData['name'],
           'user_email': userData['email'],
           'created_at': FieldValue.serverTimestamp(),

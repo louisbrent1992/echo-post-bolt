@@ -18,15 +18,15 @@ import '../platform_document_service.dart';
 /// Facebook App ID already present in android/iOS config files.
 class InstagramAuthService {
   final _auth = FirebaseAuth.instance;
-  final _db   = FirebaseFirestore.instance;
+  final _db = FirebaseFirestore.instance;
 
   /* ─────────────────────────  PUBLIC API  ───────────────────────── */
 
   Future<void> signInWithInstagram() async {
     _assertPrimaryAuth();
     final fbToken = await _facebookLogin();
-    final page    = await _findPageWithIgAccount(fbToken);
-    final igInfo  = await _fetchIgAccountInfo(page);
+    final page = await _findPageWithIgAccount(fbToken);
+    final igInfo = await _fetchIgAccountInfo(page);
 
     await _persistTokens(page, igInfo, fbToken.token);
   }
@@ -35,27 +35,25 @@ class InstagramAuthService {
     final doc = await _tokenDoc().get();
     if (!doc.exists) return false;
     final data = doc.data()!;
-    final exp  = data['expires_at'] as int?;
-    return exp != null && DateTime.now().isBefore(
-      DateTime.fromMillisecondsSinceEpoch(exp)
-    );
+    final exp = data['expires_at'] as int?;
+    return exp != null &&
+        DateTime.now().isBefore(DateTime.fromMillisecondsSinceEpoch(exp));
   }
 
   Future<String> getInstagramAccessToken() async {
     final doc = await _tokenDoc().get();
     if (!doc.exists) throw Exception('IG not connected');
     final data = doc.data()!;
-    final exp  = data['expires_at'] as int?;
-    if (exp != null && DateTime.now().isAfter(
-          DateTime.fromMillisecondsSinceEpoch(exp))) {
+    final exp = data['expires_at'] as int?;
+    if (exp != null &&
+        DateTime.now().isAfter(DateTime.fromMillisecondsSinceEpoch(exp))) {
       throw Exception('IG token expired');
     }
     return data['access_token'];
   }
 
-  Future<void> signOutOfInstagram() async =>
-      _tokenDoc().set(PlatformDocumentService
-          .getNullifiedFieldsForPlatform('instagram'));
+  Future<void> signOutOfInstagram() async => _tokenDoc()
+      .set(PlatformDocumentService.getNullifiedFieldsForPlatform('instagram'));
 
   /* ─────────────────────────  INTERNALS  ───────────────────────── */
 
@@ -66,9 +64,7 @@ class InstagramAuthService {
   }
 
   CollectionReference<Map<String, dynamic>> _tokenCol() =>
-      _db.collection('users')
-          .doc(_auth.currentUser!.uid)
-         .collection('tokens');
+      _db.collection('users').doc(_auth.currentUser!.uid).collection('tokens');
 
   DocumentReference<Map<String, dynamic>> _tokenDoc() =>
       _tokenCol().doc('instagram');
@@ -101,9 +97,9 @@ class InstagramAuthService {
       throw Exception('Could not list pages: ${res.body}');
     }
 
-    final pages = (jsonDecode(res.body)['data'] as List)
-        .cast<Map<String, dynamic>>();
-    final page  = pages.firstWhere(
+    final pages =
+        (jsonDecode(res.body)['data'] as List).cast<Map<String, dynamic>>();
+    final page = pages.firstWhere(
       (p) => p['instagram_business_account'] != null,
       orElse: () => throw Exception(
           'No FB Page linked to an Instagram Business account.\n'
@@ -115,10 +111,10 @@ class InstagramAuthService {
   Future<Map<String, dynamic>> _fetchIgAccountInfo(
       Map<String, dynamic> page) async {
     final igId = page['instagram_business_account']['id'];
-    final uri  = Uri.https('graph.facebook.com', '/v18.0/$igId', {
+    final uri = Uri.https('graph.facebook.com', '/v18.0/$igId', {
       'fields':
           'id,username,name,biography,website,followers_count,follows_count,'
-          'media_count,profile_picture_url',
+              'media_count,profile_picture_url',
       'access_token': page['access_token'],
     });
     final res = await http.get(uri);
@@ -128,38 +124,45 @@ class InstagramAuthService {
     return jsonDecode(res.body) as Map<String, dynamic>;
   }
 
-  Future<void> _persistTokens(
-      Map<String, dynamic> page,
-      Map<String, dynamic> ig,
-      String fbUserToken) async {
-    final expiry = DateTime.now().add(const Duration(days: 60));
+  Future<void> _persistTokens(Map<String, dynamic> page,
+      Map<String, dynamic> ig, String fbUserToken) async {
+    // Calculate a safe expiration date that won't exceed Firestore's limits
+    final now = DateTime.now();
+    final maxAllowedTimestamp =
+        DateTime.fromMillisecondsSinceEpoch(8640000000000);
+    final desiredExpiry = now.add(const Duration(days: 60));
+    final safeExpiry = desiredExpiry.isBefore(maxAllowedTimestamp)
+        ? desiredExpiry
+        : now.add(const Duration(days: 60));
+
     await _tokenDoc().set({
-      'access_token'          : page['access_token'],   // page token
-      'facebook_user_token'   : fbUserToken,
-      'expires_at'            : expiry.millisecondsSinceEpoch,
-      'token_type'            : 'Bearer',
-      'scope'                 : 'instagram_basic,instagram_content_publish,instagram_manage_comments',
+      'access_token': page['access_token'], // page token
+      'facebook_user_token': fbUserToken,
+      'expires_at': safeExpiry.millisecondsSinceEpoch,
+      'token_type': 'Bearer',
+      'scope':
+          'instagram_basic,instagram_content_publish,instagram_manage_comments',
 
       // IG account info
-      'account_id'            : ig['id'],
-      'username'              : ig['username'],
-      'name'                  : ig['name'],
-      'biography'             : ig['biography'],
-      'website'               : ig['website'],
-      'followers_count'       : ig['followers_count'],
-      'follows_count'         : ig['follows_count'],
-      'media_count'           : ig['media_count'],
-      'profile_picture_url'   : ig['profile_picture_url'],
+      'account_id': ig['id'],
+      'username': ig['username'],
+      'name': ig['name'],
+      'biography': ig['biography'],
+      'website': ig['website'],
+      'followers_count': ig['followers_count'],
+      'follows_count': ig['follows_count'],
+      'media_count': ig['media_count'],
+      'profile_picture_url': ig['profile_picture_url'],
 
       // FB page info
-      'facebook_page_id'      : page['id'],
-      'facebook_page_name'    : page['name'],
+      'facebook_page_id': page['id'],
+      'facebook_page_name': page['name'],
 
-      'api_version'           : 'v18.0',
-      'authentication_method' : 'facebook_login',
-      'account_type'          : 'business',
-      'created_at'            : FieldValue.serverTimestamp(),
-      'last_updated'          : FieldValue.serverTimestamp(),
+      'api_version': 'v18.0',
+      'authentication_method': 'facebook_login',
+      'account_type': 'business',
+      'created_at': FieldValue.serverTimestamp(),
+      'last_updated': FieldValue.serverTimestamp(),
     });
   }
 }

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
@@ -6,9 +7,11 @@ import 'package:photo_manager/photo_manager.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:http/http.dart' as http;
 
 import '../models/social_action.dart';
 import '../models/media_validation.dart';
+import '../models/platform_target.dart';
 import '../services/media_coordinator.dart';
 import '../services/firestore_service.dart';
 import '../services/ai_service.dart';
@@ -2997,5 +3000,304 @@ class SocialActionPostCoordinator extends ChangeNotifier {
   Future<void> _authenticateTikTok() async {
     final tiktokAuth = TikTokAuthService();
     await tiktokAuth.signInWithTikTok();
+  }
+
+  // NEW: Sub-account management and platform bucket computation
+
+  /// Store selected sub-accounts for each platform
+  final Map<String, SubAccount> _selectedSubAccounts = {};
+
+  /// Compute which platforms belong in automated vs manual buckets
+  Future<Map<String, List<String>>> computePlatformBuckets() async {
+    // 1. Start from user's selected platforms
+    final List<String> chosen = _currentPost.platforms;
+
+    // 2. Filter by credential status
+    List<String> authenticated =
+        chosen.where((p) => _platformAuthenticationState[p] == true).toList();
+
+    // 3. Separate business-required platforms
+    List<String> automated = [];
+    List<String> manual = [];
+
+    for (final p in chosen) {
+      final bool isBizReq = SocialPlatforms.requiresBusinessAccount(p);
+      final bool hasBiz = !isBizReq || await _hasBusinessAccountAccess(p);
+
+      if (SocialPlatforms.supportsAutomatedPosting(p) &&
+          authenticated.contains(p) &&
+          hasBiz) {
+        automated.add(p);
+      } else {
+        manual.add(p);
+      }
+    }
+
+    return {'automated': automated, 'manual': manual};
+  }
+
+  /// Check if user has business account access for a platform
+  Future<bool> _hasBusinessAccountAccess(String platform) async {
+    if (!SocialPlatforms.requiresBusinessAccount(platform)) return true;
+
+    // 1. If the user already picked a sub-account → good to go
+    if (_selectedSubAccounts.containsKey(platform)) return true;
+
+    // 2. Otherwise look at stored token metadata
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) return false;
+
+    try {
+      final doc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(uid)
+          .collection('tokens')
+          .doc(platform)
+          .get();
+
+      if (!doc.exists) return false;
+
+      final accountType = doc.data()?['account_type']
+          as String?; // "BUSINESS", "CREATOR", "PERSONAL"
+      return accountType != null &&
+          (accountType == 'BUSINESS' || accountType == 'CREATOR');
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ Error checking business account access for $platform: $e');
+      }
+      return false;
+    }
+  }
+
+  /// Get sub-accounts (Facebook Pages, Instagram Business Accounts) for a platform
+  Future<List<SubAccount>> getSubAccounts(String platform) async {
+    try {
+      switch (platform.toLowerCase()) {
+        case 'facebook':
+          return await _getFacebookPages();
+        case 'instagram':
+          return await _getInstagramBusinessAccounts();
+        default:
+          return [];
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ Error getting sub-accounts for $platform: $e');
+      }
+      return [];
+    }
+  }
+
+  /// Get Facebook Pages the user manages
+  Future<List<SubAccount>> _getFacebookPages() async {
+    try {
+      final uid = FirebaseAuth.instance.currentUser?.uid;
+      if (uid == null) return [];
+
+      final tokenDoc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(uid)
+          .collection('tokens')
+          .doc('facebook')
+          .get();
+
+      if (!tokenDoc.exists) return [];
+
+      final tokenData = tokenDoc.data()!;
+      final userAccessToken = tokenData['access_token'] as String;
+
+      final response = await http.get(
+        Uri.parse('https://graph.facebook.com/v18.0/me/accounts'
+            '?fields=id,name,access_token,instagram_business_account'
+            '&access_token=$userAccessToken'),
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        final pages = data['data'] as List<dynamic>;
+
+        return pages.map((page) {
+          final pageData = page as Map<String, dynamic>;
+          return SubAccount(
+            targetId: pageData['id'] as String,
+            name: pageData['name'] as String,
+            accessToken: pageData['access_token'] as String,
+            igUserId: pageData['instagram_business_account']?['id'] as String?,
+          );
+        }).toList();
+      }
+
+      return [];
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ Error getting Facebook pages: $e');
+      }
+      return [];
+    }
+  }
+
+  /// Get Instagram Business Accounts linked to Facebook Pages
+  Future<List<SubAccount>> _getInstagramBusinessAccounts() async {
+    try {
+      // Get Facebook pages first
+      final facebookPages = await _getFacebookPages();
+
+      // Filter pages that have Instagram Business Accounts
+      return facebookPages.where((page) => page.igUserId != null).toList();
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ Error getting Instagram Business Accounts: $e');
+      }
+      return [];
+    }
+  }
+
+  /// Set selected sub-account for a platform
+  void setSelectedSubAccount(String platform, SubAccount account) {
+    _selectedSubAccounts[platform] = account;
+
+    // Update the current post's platform data
+    _updatePlatformDataWithSubAccount(platform, account);
+
+    _safeNotifyListeners();
+  }
+
+  /// Get selected sub-account for a platform
+  SubAccount? getSelectedSubAccount(String platform) {
+    return _selectedSubAccounts[platform];
+  }
+
+  /// Update platform data with selected sub-account
+  void _updatePlatformDataWithSubAccount(String platform, SubAccount account) {
+    switch (platform.toLowerCase()) {
+      case 'facebook':
+        final currentFacebook = _currentPost.platformData.facebook;
+        final updatedFacebook = FacebookData(
+          postHere: currentFacebook?.postHere ?? false,
+          postAsPage: true,
+          pageId: account.targetId,
+          postType: currentFacebook?.postType,
+          mediaFileUri: currentFacebook?.mediaFileUri,
+          videoFileUri: currentFacebook?.videoFileUri,
+          audioFileUri: currentFacebook?.audioFileUri,
+          thumbnailUri: currentFacebook?.thumbnailUri,
+          scheduledTime: currentFacebook?.scheduledTime,
+          additionalFields: currentFacebook?.additionalFields,
+        );
+
+        _currentPost = _currentPost.copyWith(
+          platformData: PlatformData(
+            facebook: updatedFacebook,
+            instagram: _currentPost.platformData.instagram,
+            youtube: _currentPost.platformData.youtube,
+            twitter: _currentPost.platformData.twitter,
+            tiktok: _currentPost.platformData.tiktok,
+          ),
+        );
+        break;
+      case 'instagram':
+        final currentInstagram = _currentPost.platformData.instagram;
+        final updatedInstagram = InstagramData(
+          postHere: currentInstagram?.postHere ?? false,
+          postType: currentInstagram?.postType,
+          carousel: currentInstagram?.carousel,
+          igUserId: account.targetId,
+          mediaType: currentInstagram?.mediaType,
+          mediaFileUri: currentInstagram?.mediaFileUri,
+          videoThumbnailUri: currentInstagram?.videoThumbnailUri,
+          videoFileUri: currentInstagram?.videoFileUri,
+          audioFileUri: currentInstagram?.audioFileUri,
+          scheduledTime: currentInstagram?.scheduledTime,
+        );
+
+        _currentPost = _currentPost.copyWith(
+          platformData: PlatformData(
+            facebook: _currentPost.platformData.facebook,
+            instagram: updatedInstagram,
+            youtube: _currentPost.platformData.youtube,
+            twitter: _currentPost.platformData.twitter,
+            tiktok: _currentPost.platformData.tiktok,
+          ),
+        );
+        break;
+    }
+  }
+
+  /// Get platforms that will use automated posting (with business account validation)
+  Future<List<String>> getAutomatedPostingPlatformsWithValidation() async {
+    final buckets = await computePlatformBuckets();
+    return buckets['automated'] ?? [];
+  }
+
+  /// Get platforms that will use manual sharing
+  Future<List<String>> getManualSharingPlatformsWithValidation() async {
+    final buckets = await computePlatformBuckets();
+    return buckets['manual'] ?? [];
+  }
+
+  /// Get platform targets for automated posting
+  Future<List<PlatformTarget>> getPlatformTargetsForAutomatedPosting() async {
+    final automatedPlatforms =
+        await getAutomatedPostingPlatformsWithValidation();
+    final targets = <PlatformTarget>[];
+
+    for (final platform in automatedPlatforms) {
+      final target = await _buildPlatformTarget(platform);
+      if (target != null) {
+        targets.add(target);
+      }
+    }
+
+    return targets;
+  }
+
+  /// Build a platform target for automated posting
+  Future<PlatformTarget?> _buildPlatformTarget(String platform) async {
+    // A. Facebook / IG need a chosen sub-account
+    if (SocialPlatforms.requiresBusinessAccount(platform)) {
+      final subAccount = getSelectedSubAccount(platform);
+      if (subAccount == null) return null; // still manual
+      return PlatformTarget(
+        platform: platform,
+        accessToken: subAccount.accessToken,
+        targetId: subAccount.targetId,
+        targetName: subAccount.name,
+      );
+    }
+
+    // B. All others use stored user token / channel id
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) return null;
+
+    try {
+      final doc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(uid)
+          .collection('tokens')
+          .doc(platform)
+          .get();
+
+      if (!doc.exists) return null; // unauthenticated
+
+      final tokenData = doc.data()!;
+      final accessToken = tokenData['access_token'] as String?;
+      final targetId = tokenData['default_target'] as String? ?? '';
+      final targetName = tokenData['display_name'] as String? ??
+          SocialPlatforms.getDisplayName(platform);
+
+      if (accessToken == null) return null; // no token
+
+      return PlatformTarget(
+        platform: platform,
+        accessToken: accessToken,
+        targetId: targetId,
+        targetName: targetName,
+      );
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ Error building platform target for $platform: $e');
+      }
+      return null;
+    }
   }
 }

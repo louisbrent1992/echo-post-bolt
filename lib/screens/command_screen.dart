@@ -9,11 +9,14 @@ import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:record/record.dart';
 import '../models/social_action.dart';
 import '../models/status_message.dart';
+import '../models/post_progress.dart';
 import '../services/media_coordinator.dart';
 import '../services/social_action_post_coordinator.dart';
 import '../services/app_settings_service.dart';
 import '../services/permission_manager.dart';
 import '../services/native_video_player.dart';
+import '../services/social_post_service.dart';
+import '../services/account_auth_service.dart';
 import '../widgets/social_icon.dart';
 import '../widgets/post_content_box.dart';
 import '../widgets/transcription_status.dart';
@@ -21,6 +24,8 @@ import '../widgets/unified_media_buttons.dart';
 import '../widgets/enhanced_media_preview.dart';
 import '../widgets/native_video_widget.dart';
 import '../widgets/posting_strategy_info.dart';
+import '../widgets/business_account_warning.dart';
+import '../widgets/manual_share_button.dart';
 import '../screens/media_selection_screen.dart';
 import '../screens/history_screen.dart';
 import '../screens/directory_selection_screen.dart';
@@ -1473,7 +1478,7 @@ class _CommandScreenState extends State<CommandScreen>
 
     try {
       if (kDebugMode) {
-        print('🚀 Confirming and posting...');
+        print('🚀 Starting automated posting...');
       }
 
       // Check post readiness
@@ -1488,11 +1493,74 @@ class _CommandScreenState extends State<CommandScreen>
         return;
       }
 
+      // Get platform targets for automated posting
+      final targets =
+          await _postCoordinator!.getPlatformTargetsForAutomatedPosting();
+
+      if (targets.isEmpty) {
+        if (mounted) {
+          _postCoordinator?.requestStatusUpdate(
+            'No platforms available for automated posting',
+            StatusMessageType.warning,
+            duration: const Duration(seconds: 4),
+          );
+        }
+        return;
+      }
+
       // Phase 1: Use coordinator state transition, mirror in widget
       _postCoordinator!.stopRecording();
 
-      // Execute posting through coordinator
-      final results = await _postCoordinator!.finalizeAndExecutePost();
+      // Create SocialPostService instance
+      final socialPostService = SocialPostService(
+        coordinator: _postCoordinator,
+        authService: Provider.of<AccountAuthService>(context, listen: false),
+      );
+
+      // Execute batch posting with progress tracking
+      final progressStream =
+          socialPostService.postBatch(targets, _postCoordinator!.currentPost);
+
+      final results = <String, bool>{};
+      final errors = <String, String>{};
+
+      await for (final progress in progressStream) {
+        if (kDebugMode) {
+          print('📊 Progress: ${progress.platform} - ${progress.state}');
+        }
+
+        // Update status based on progress
+        switch (progress.state) {
+          case PostState.inFlight:
+            _postCoordinator?.requestStatusUpdate(
+              'Posting to ${progress.targetName ?? progress.platform}...',
+              StatusMessageType.info,
+              duration: const Duration(seconds: 2),
+            );
+            break;
+          case PostState.success:
+            results[progress.platform] = true;
+            _postCoordinator?.requestStatusUpdate(
+              '✅ Posted to ${progress.targetName ?? progress.platform}',
+              StatusMessageType.success,
+              duration: const Duration(seconds: 2),
+            );
+            break;
+          case PostState.error:
+            results[progress.platform] = false;
+            errors[progress.platform] = progress.error ?? 'Unknown error';
+            _postCoordinator?.requestStatusUpdate(
+              '❌ Failed to post to ${progress.targetName ?? progress.platform}',
+              StatusMessageType.error,
+              duration: const Duration(seconds: 3),
+            );
+            break;
+          case PostState.pending:
+            // Do nothing for pending state
+            break;
+        }
+      }
+
       final allSucceeded = results.values.every((success) => success);
 
       if (kDebugMode) {
@@ -1531,24 +1599,45 @@ class _CommandScreenState extends State<CommandScreen>
                 for (final platform in results.keys)
                   Padding(
                     padding: const EdgeInsets.only(bottom: 8.0),
-                    child: Row(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Icon(
-                          results[platform]! ? Icons.check_circle : Icons.error,
-                          color: results[platform]! ? Colors.green : Colors.red,
+                        Row(
+                          children: [
+                            Icon(
+                              results[platform]!
+                                  ? Icons.check_circle
+                                  : Icons.error,
+                              color: results[platform]!
+                                  ? Colors.green
+                                  : Colors.red,
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              platform.substring(0, 1).toUpperCase() +
+                                  platform.substring(1),
+                              style: const TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.white),
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              results[platform]! ? 'Posted' : 'Failed',
+                              style: const TextStyle(color: Colors.white70),
+                            ),
+                          ],
                         ),
-                        const SizedBox(width: 8),
-                        Text(
-                          platform.substring(0, 1).toUpperCase() +
-                              platform.substring(1),
-                          style: const TextStyle(
-                              fontWeight: FontWeight.bold, color: Colors.white),
-                        ),
-                        const SizedBox(width: 8),
-                        Text(
-                          results[platform]! ? 'Posted' : 'Failed',
-                          style: const TextStyle(color: Colors.white70),
-                        ),
+                        if (!results[platform]! && errors.containsKey(platform))
+                          Padding(
+                            padding: const EdgeInsets.only(left: 32, top: 4),
+                            child: Text(
+                              errors[platform]!,
+                              style: const TextStyle(
+                                color: Colors.red,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ),
                       ],
                     ),
                   ),
@@ -1716,20 +1805,9 @@ class _CommandScreenState extends State<CommandScreen>
                     children: [
                       const SizedBox(height: spacing4),
                       if (coordinator.currentPost.platforms.isNotEmpty)
-                        PostingStrategyInfo(coordinator: coordinator),
+                        PostStrategyInfo(coordinator: coordinator),
                       if (coordinator.currentPost.platforms.isNotEmpty)
-                        FutureBuilder<List<String>>(
-                          future: coordinator
-                              .getPlatformsRequiringBusinessAccount(),
-                          builder: (context, snapshot) {
-                            if (snapshot.hasData && snapshot.data!.isNotEmpty) {
-                              return BusinessAccountWarning(
-                                platformsRequiringBusiness: snapshot.data!,
-                              );
-                            }
-                            return const SizedBox.shrink();
-                          },
-                        ),
+                        BusinessAccountWarning(coordinator: coordinator),
                       _buildCommandMediaSection(coordinator),
                       PostContentBox(
                         onVoiceEdit: _startVoiceEditing,
@@ -1737,6 +1815,7 @@ class _CommandScreenState extends State<CommandScreen>
                         onEditHashtags: _editPostHashtags,
                         onEditSchedule: _editPostSchedule,
                       ),
+                      ManualShareButton(coordinator: coordinator),
                       const SizedBox(height: 12),
                     ],
                   ),
