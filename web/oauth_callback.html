@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<title>EchoPost OAuth Callback</title>
+		<style>
+			body {
+				font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+					sans-serif;
+				background: linear-gradient(
+					135deg,
+					#000000 0%,
+					#1a1a1a 50%,
+					#2a2a2a 100%
+				);
+				color: white;
+				margin: 0;
+				padding: 20px;
+				display: flex;
+				justify-content: center;
+				align-items: center;
+				min-height: 100vh;
+			}
+			.container {
+				text-align: center;
+				max-width: 400px;
+			}
+			.logo {
+				width: 80px;
+				height: 80px;
+				margin-bottom: 20px;
+			}
+			.spinner {
+				border: 3px solid rgba(255, 255, 255, 0.1);
+				border-top: 3px solid #ff0055;
+				border-radius: 50%;
+				width: 40px;
+				height: 40px;
+				animation: spin 1s linear infinite;
+				margin: 20px auto;
+			}
+			@keyframes spin {
+				0% {
+					transform: rotate(0deg);
+				}
+				100% {
+					transform: rotate(360deg);
+				}
+			}
+			.message {
+				margin: 20px 0;
+				font-size: 16px;
+			}
+			.error {
+				color: #ff6b6b;
+			}
+			.success {
+				color: #51cf66;
+			}
+		</style>
+	</head>
+	<body>
+		<div class="container">
+			<div class="spinner"></div>
+			<div id="message" class="message">Processing authentication...</div>
+		</div>
+
+		<script>
+			// OAuth callback handler
+			(function () {
+				const urlParams = new URLSearchParams(window.location.search);
+				const hashParams = new URLSearchParams(
+					window.location.hash.substring(1)
+				);
+
+				// Combine URL parameters and hash parameters
+				const allParams = {};
+				for (const [key, value] of urlParams) {
+					allParams[key] = value;
+				}
+				for (const [key, value] of hashParams) {
+					allParams[key] = value;
+				}
+
+				const messageEl = document.getElementById("message");
+
+				// Check for OAuth errors
+				if (allParams.error) {
+					messageEl.textContent = `Authentication failed: ${allParams.error}`;
+					messageEl.className = "message error";
+
+					// Try to communicate with Flutter app
+					if (window.flutter_inappwebview) {
+						window.flutter_inappwebview.callHandler("oauthError", {
+							error: allParams.error,
+							error_description: allParams.error_description || "Unknown error",
+						});
+					}
+
+					// Close window after delay
+					setTimeout(() => {
+						window.close();
+					}, 3000);
+					return;
+				}
+
+				// Check for authorization code
+				if (allParams.code) {
+					messageEl.textContent = "Authentication successful! Redirecting...";
+					messageEl.className = "message success";
+
+					// Try to communicate with Flutter app
+					if (window.flutter_inappwebview) {
+						window.flutter_inappwebview.callHandler("oauthSuccess", {
+							code: allParams.code,
+							state: allParams.state,
+						});
+					}
+
+					// Close window after delay
+					setTimeout(() => {
+						window.close();
+					}, 2000);
+					return;
+				}
+
+				// No code or error found
+				messageEl.textContent = "Invalid OAuth response";
+				messageEl.className = "message error";
+
+				setTimeout(() => {
+					window.close();
+				}, 3000);
+			})();
+		</script>
+	</body>
+</html>

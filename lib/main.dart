@@ -15,29 +15,47 @@ import 'services/app_settings_service.dart';
 import 'services/permission_manager.dart';
 import 'screens/command_screen.dart';
 import 'screens/login_screen.dart';
+import 'firebase_options.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Load environment variables from .env.local
-  await dotenv.load(fileName: ".env.local");
-
-  // Try to initialize Firebase - if it fails, continue without it
+  // Load environment variables from .env.local (optional for development)
   try {
-    await Firebase.initializeApp();
+    await dotenv.load(fileName: ".env.local");
     if (kDebugMode) {
-      print('Firebase initialized successfully');
+      print('✅ Environment variables loaded from .env.local');
     }
   } catch (e) {
     if (kDebugMode) {
-      print('Firebase initialization failed: $e');
-      print('Continuing without Firebase...');
+      print('⚠️ .env.local not found, using development defaults');
+      print(
+          '   Create .env.local file with your API keys for full functionality');
     }
   }
 
-  final apiKey = dotenv.env['OPENAI_API_KEY'];
-  if (apiKey == null || apiKey.isEmpty) {
-    throw Exception('OPENAI_API_KEY not found in .env.local file');
+  // Try to initialize Firebase with proper options
+  try {
+    await Firebase.initializeApp(
+      options: DefaultFirebaseOptions.currentPlatform,
+    );
+    if (kDebugMode) {
+      print('✅ Firebase initialized successfully');
+    }
+  } catch (e) {
+    if (kDebugMode) {
+      print('⚠️ Firebase initialization failed: $e');
+      print('   Continuing without Firebase...');
+    }
+  }
+
+  // Get API key with fallback for development
+  final apiKey = dotenv.env['OPENAI_API_KEY'] ?? 'development_key';
+  if (apiKey == 'development_key') {
+    if (kDebugMode) {
+      print('⚠️ Using development API key - AI features will be limited');
+      print('   Set OPENAI_API_KEY in .env.local for full AI functionality');
+    }
   }
 
   runApp(
@@ -188,10 +206,11 @@ class _ServiceInitializationWrapperState
     try {
       if (kDebugMode) {
         print('🚀 Starting service initialization...');
+        print('🌐 Platform: ${kIsWeb ? 'Web' : 'Mobile'}');
       }
 
       setState(() {
-        _initializationStatus = 'Initializing media services...';
+        _initializationStatus = 'Initializing services...';
       });
 
       // Capture all providers before any async operations
@@ -201,10 +220,19 @@ class _ServiceInitializationWrapperState
           Provider.of<MediaCoordinator>(context, listen: false);
 
       // Initialize AppSettingsService first
-      await appSettingsService.initialize();
+      try {
+        await appSettingsService.initialize();
+        if (kDebugMode) {
+          print('✅ AppSettingsService initialized');
+        }
+      } catch (e) {
+        if (kDebugMode) {
+          print('⚠️ AppSettingsService initialization failed: $e');
+        }
+      }
 
       // Wait a bit to ensure all providers are ready
-      await Future.delayed(const Duration(milliseconds: 100));
+      await Future.delayed(const Duration(milliseconds: 50));
 
       if (!mounted) {
         if (kDebugMode) {
@@ -213,32 +241,54 @@ class _ServiceInitializationWrapperState
         return;
       }
 
-      // Initialize permission manager and request permissions FIRST
-      final permissionManager = PermissionManager();
-      if (kDebugMode) {
-        print('🔐 Requesting media permissions...');
-      }
-      final hasPermissions = await permissionManager.requestAllPermissions();
+      // Initialize permission manager (skip on web)
+      if (!kIsWeb) {
+        try {
+          final permissionManager = PermissionManager();
+          if (kDebugMode) {
+            print('🔐 Requesting media permissions...');
+          }
+          final hasPermissions =
+              await permissionManager.requestAllPermissions();
 
-      if (!hasPermissions) {
-        if (kDebugMode) {
-          print(
-              '⚠️ Permissions not granted, but continuing with limited functionality');
+          if (!hasPermissions) {
+            if (kDebugMode) {
+              print(
+                  '⚠️ Permissions not granted, but continuing with limited functionality');
+            }
+          } else {
+            if (kDebugMode) {
+              print('✅ All permissions granted successfully');
+            }
+          }
+        } catch (e) {
+          if (kDebugMode) {
+            print('⚠️ Permission initialization failed: $e');
+          }
         }
       } else {
         if (kDebugMode) {
-          print('✅ All permissions granted successfully');
+          print('🌐 Web platform - skipping permission requests');
         }
       }
 
       // Initialize media coordinator
-      if (kDebugMode) {
-        print('🎛️ Initializing MediaCoordinator...');
+      try {
+        if (kDebugMode) {
+          print('🎛️ Initializing MediaCoordinator...');
+        }
+        await mediaCoordinator.initialize();
+        if (kDebugMode) {
+          print('✅ MediaCoordinator initialized');
+        }
+      } catch (e) {
+        if (kDebugMode) {
+          print('⚠️ MediaCoordinator initialization failed: $e');
+        }
       }
-      await mediaCoordinator.initialize();
 
       if (kDebugMode) {
-        print('✅ All services initialized with constructor injection');
+        print('✅ Service initialization completed');
       }
 
       if (!mounted) return;
@@ -253,8 +303,10 @@ class _ServiceInitializationWrapperState
 
       if (!mounted) return;
 
+      // Even if initialization fails, show the app
       setState(() {
-        _initializationStatus = 'Initialization failed: $e';
+        _isInitialized = true;
+        _initializationStatus = 'Initialization completed with warnings';
       });
     }
   }

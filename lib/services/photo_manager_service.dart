@@ -8,6 +8,15 @@ class PhotoManagerService extends ChangeNotifier {
   Future<List<AssetEntity>> findAssetCandidates(
       Map<String, dynamic> searchParams) async {
     try {
+      // Web: Return empty list as file access is handled differently
+      if (kIsWeb) {
+        if (kDebugMode) {
+          print(
+              '🌐 Web: Photo manager not supported - use file picker instead');
+        }
+        return [];
+      }
+
       final Map<String, AssetEntity> uniqueAssets =
           {}; // Use Map for deduplication
 
@@ -62,7 +71,7 @@ class PhotoManagerService extends ChangeNotifier {
       }
 
       // If directory is specified, only search in that directory
-      if (directory != null) {
+      if (directory != null && !kIsWeb) {
         final targetAlbum = albums.firstWhere(
           (album) => album.name == directory.split(Platform.pathSeparator).last,
           orElse: () => albums.first,
@@ -152,6 +161,15 @@ class PhotoManagerService extends ChangeNotifier {
 
     if (candidates.isEmpty) return results;
 
+    // Web: Not supported
+    if (kIsWeb) {
+      if (kDebugMode) {
+        print(
+            '🌐 Web: Asset processing not supported - use file picker instead');
+      }
+      return results;
+    }
+
     // FIXED: Process assets in batches with timeout and error isolation
     const int batchSize = 5;
     const Duration timeout = Duration(seconds: 3);
@@ -190,6 +208,9 @@ class PhotoManagerService extends ChangeNotifier {
   Future<Map<String, dynamic>?> _processAssetSafely(
       AssetEntity asset, Duration timeout) async {
     try {
+      // Web: Not supported
+      if (kIsWeb) return null;
+
       // Get the actual file from the asset using PhotoManager's API
       final file = await asset.file;
       if (file != null) {

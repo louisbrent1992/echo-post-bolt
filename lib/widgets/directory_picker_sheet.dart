@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'dart:io';
+import 'package:flutter/foundation.dart';
 
 class DirectoryPickerSheet extends StatelessWidget {
   final List<String> suggestions;
@@ -168,7 +169,9 @@ class DirectoryPickerSheet extends StatelessWidget {
     final pathController = TextEditingController();
 
     // Pre-fill with platform-appropriate example
-    if (Platform.isAndroid) {
+    if (kIsWeb) {
+      pathController.text = '';
+    } else if (Platform.isAndroid) {
       pathController.text = '/storage/emulated/0/Pictures/';
     } else if (Platform.isIOS) {
       pathController.text = 'NSDocumentDirectory/Photos/';
@@ -212,9 +215,11 @@ class DirectoryPickerSheet extends StatelessWidget {
                 labelText: 'Directory Path',
                 labelStyle: TextStyle(
                     color: Colors.white.withAlpha((0.7 * 255).round())),
-                hintText: Platform.isAndroid
-                    ? '/storage/emulated/0/Pictures/YourFolder'
-                    : 'NSDocumentDirectory/YourFolder',
+                hintText: kIsWeb
+                    ? 'Select files using the web file picker'
+                    : Platform.isAndroid
+                        ? '/storage/emulated/0/Pictures/YourFolder'
+                        : 'NSDocumentDirectory/YourFolder',
                 hintStyle: TextStyle(
                     color: Colors.white.withAlpha((0.5 * 255).round())),
                 enabledBorder: OutlineInputBorder(

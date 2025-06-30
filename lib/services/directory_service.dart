@@ -82,7 +82,23 @@ class DirectoryService extends ChangeNotifier {
   static List<MediaDirectory> getPlatformDefaults() {
     final List<MediaDirectory> defaults = [];
 
-    if (Platform.isAndroid) {
+    if (kIsWeb) {
+      // Web: Virtual directories for file picker
+      defaults.add(const MediaDirectory(
+        id: 'default_web_picker',
+        path: 'web_file_picker',
+        displayName: 'File Picker',
+        isDefault: true,
+        isEnabled: true,
+      ));
+      defaults.add(const MediaDirectory(
+        id: 'default_web_downloads',
+        path: 'web_downloads',
+        displayName: 'Downloads',
+        isDefault: true,
+        isEnabled: true,
+      ));
+    } else if (Platform.isAndroid) {
       defaults.add(const MediaDirectory(
         id: 'default_android_camera',
         path: '/storage/emulated/0/DCIM/Camera',
@@ -143,10 +159,12 @@ class DirectoryService extends ChangeNotifier {
       final defaults = getPlatformDefaults();
       _directories = [...defaults];
 
-      // Add non-default saved directories
-      for (final dir in savedDirectories) {
-        if (!dir.isDefault && !_directories.any((d) => d.path == dir.path)) {
-          _directories.add(dir);
+      // Add non-default saved directories (only for non-web platforms)
+      if (!kIsWeb) {
+        for (final dir in savedDirectories) {
+          if (!dir.isDefault && !_directories.any((d) => d.path == dir.path)) {
+            _directories.add(dir);
+          }
         }
       }
 
@@ -171,6 +189,15 @@ class DirectoryService extends ChangeNotifier {
 
   /// Toggle custom directories mode
   Future<void> setCustomDirectoriesEnabled(bool enabled) async {
+    // Web: Custom directories not supported in the same way
+    if (kIsWeb) {
+      if (kDebugMode) {
+        print(
+            '🌐 Web: Custom directory mode not applicable - files accessed via picker');
+      }
+      return;
+    }
+
     _isCustomDirectoriesEnabled = enabled;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_enabledKey, enabled);
@@ -194,6 +221,12 @@ class DirectoryService extends ChangeNotifier {
 
   /// Add a custom directory
   Future<void> addCustomDirectory(String displayName, String path) async {
+    // Web: Not supported
+    if (kIsWeb) {
+      throw Exception(
+          'Custom directories not supported on web platform. Files are accessed via file picker.');
+    }
+
     // Check if directory already exists
     final exists = _directories.any((dir) => dir.path == path);
     if (exists) {
@@ -260,13 +293,13 @@ class DirectoryService extends ChangeNotifier {
 
   /// Check if a directory path exists and is accessible
   Future<bool> isDirectoryAccessible(String path) async {
+    if (kIsWeb) return false; // Web: not applicable
     try {
       if (Platform.isIOS) {
         // On iOS, we can't directly check file system paths
         // This would need to be handled through the Photos framework
         return true; // Assume accessible for iOS
       }
-
       final dir = Directory(path);
       return await dir.exists();
     } catch (e) {
@@ -279,6 +312,10 @@ class DirectoryService extends ChangeNotifier {
 
   /// Get suggested directories based on common patterns
   Future<List<String>> getSuggestedDirectories() async {
+    if (kIsWeb) {
+      // Web: Suggest nothing, or a web-appropriate message
+      return [];
+    }
     if (Platform.isAndroid) {
       final suggestions = <String>[
         '/storage/emulated/0/DCIM/Camera',
@@ -291,7 +328,6 @@ class DirectoryService extends ChangeNotifier {
         '/storage/emulated/0/Pictures/Instagram',
         '/storage/emulated/0/Pictures/Facebook',
       ];
-
       // Filter to only existing directories
       final existing = <String>[];
       for (final suggestion in suggestions) {

@@ -3,30 +3,33 @@ import 'package:flutter/gestures.dart';
 import 'package:provider/provider.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../services/account_auth_service.dart';
-import 'signup_screen.dart';
 import 'terms_privacy_screen.dart';
 import 'welcome_screen.dart';
 
-class LoginScreen extends StatefulWidget {
-  const LoginScreen({super.key});
+class SignUpScreen extends StatefulWidget {
+  const SignUpScreen({super.key});
 
   @override
-  State<LoginScreen> createState() => _LoginScreenState();
+  State<SignUpScreen> createState() => _SignUpScreenState();
 }
 
-class _LoginScreenState extends State<LoginScreen> {
+class _SignUpScreenState extends State<SignUpScreen> {
   bool _isLoading = false;
   bool _isGoogleLoading = false;
   bool _isEmailLoading = false;
 
   // Form controllers
+  final _nameController = TextEditingController();
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
+  final _confirmPasswordController = TextEditingController();
   final _formKey = GlobalKey<FormState>();
 
   // UI state
   bool _obscurePassword = true;
+  bool _obscureConfirmPassword = true;
   bool _showEmailForm = false;
+  bool _agreeToTerms = false;
 
   @override
   void initState() {
@@ -36,8 +39,10 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   void dispose() {
+    _nameController.dispose();
     _emailController.dispose();
     _passwordController.dispose();
+    _confirmPasswordController.dispose();
     super.dispose();
   }
 
@@ -79,7 +84,7 @@ class _LoginScreenState extends State<LoginScreen> {
                   ),
                   const SizedBox(height: 24),
                   const Text(
-                    'EchoPost',
+                    'Join EchoPost',
                     style: TextStyle(
                       color: Colors.white,
                       fontSize: 32,
@@ -89,7 +94,7 @@ class _LoginScreenState extends State<LoginScreen> {
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    'Voice-driven social media posting',
+                    'Create your account to get started',
                     style: TextStyle(
                       color: Colors.white.withValues(alpha: 0.8),
                       fontSize: 16,
@@ -97,10 +102,10 @@ class _LoginScreenState extends State<LoginScreen> {
                   ),
                   const SizedBox(height: 48),
 
-                  // Main sign-in options
+                  // Main sign-up options
                   if (!_showEmailForm) ...[
-                    // Google Sign-In Button
-                    _buildGoogleSignInButton(),
+                    // Google Sign-Up Button
+                    _buildGoogleSignUpButton(),
 
                     const SizedBox(height: 16),
 
@@ -144,12 +149,12 @@ class _LoginScreenState extends State<LoginScreen> {
 
                   const SizedBox(height: 32),
 
-                  // Sign up link
+                  // Login link
                   Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
                       Text(
-                        'Don\'t have an account? ',
+                        'Already have an account? ',
                         style: TextStyle(
                           color: Colors.white.withValues(alpha: 0.6),
                           fontSize: 14,
@@ -157,15 +162,10 @@ class _LoginScreenState extends State<LoginScreen> {
                       ),
                       TextButton(
                         onPressed: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (context) => const SignUpScreen(),
-                            ),
-                          );
+                          Navigator.pop(context);
                         },
                         child: Text(
-                          'Sign Up',
+                          'Sign In',
                           style: TextStyle(
                             color: const Color(0xFFFF0055),
                             fontSize: 14,
@@ -188,7 +188,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       ),
                       children: [
                         const TextSpan(
-                            text: 'By signing in, you agree to our '),
+                            text: 'By creating an account, you agree to our '),
                         TextSpan(
                           text: 'Terms of Service',
                           style: const TextStyle(
@@ -248,7 +248,7 @@ class _LoginScreenState extends State<LoginScreen> {
     );
   }
 
-  Widget _buildGoogleSignInButton() {
+  Widget _buildGoogleSignUpButton() {
     return SizedBox(
       width: double.infinity,
       child: ElevatedButton.icon(
@@ -262,9 +262,9 @@ class _LoginScreenState extends State<LoginScreen> {
                 ),
               )
             : const Icon(Icons.g_mobiledata, size: 24),
-        label:
-            Text(_isGoogleLoading ? 'Signing in...' : 'Continue with Google'),
-        onPressed: (_isLoading || _isGoogleLoading) ? null : _signInWithGoogle,
+        label: Text(
+            _isGoogleLoading ? 'Creating account...' : 'Sign up with Google'),
+        onPressed: (_isLoading || _isGoogleLoading) ? null : _signUpWithGoogle,
         style: ElevatedButton.styleFrom(
           backgroundColor: Colors.white,
           foregroundColor: Colors.black87,
@@ -286,7 +286,7 @@ class _LoginScreenState extends State<LoginScreen> {
       width: double.infinity,
       child: OutlinedButton.icon(
         icon: const Icon(Icons.email_outlined, size: 20),
-        label: const Text('Continue with Email'),
+        label: const Text('Sign up with Email'),
         onPressed: _isLoading
             ? null
             : () {
@@ -325,8 +325,11 @@ class _LoginScreenState extends State<LoginScreen> {
                     : () {
                         setState(() {
                           _showEmailForm = false;
+                          _nameController.clear();
                           _emailController.clear();
                           _passwordController.clear();
+                          _confirmPasswordController.clear();
+                          _agreeToTerms = false;
                         });
                       },
                 icon: const Icon(Icons.arrow_back, color: Colors.white),
@@ -343,6 +346,58 @@ class _LoginScreenState extends State<LoginScreen> {
           ),
 
           const SizedBox(height: 24),
+
+          // Name field
+          TextFormField(
+            controller: _nameController,
+            keyboardType: TextInputType.name,
+            enabled: !_isEmailLoading,
+            style: const TextStyle(color: Colors.white),
+            decoration: InputDecoration(
+              labelText: 'Full Name',
+              labelStyle: TextStyle(color: Colors.white.withValues(alpha: 0.7)),
+              hintText: 'Enter your full name',
+              hintStyle: TextStyle(color: Colors.white.withValues(alpha: 0.5)),
+              prefixIcon: Icon(Icons.person_outlined,
+                  color: Colors.white.withValues(alpha: 0.7)),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide:
+                    BorderSide(color: Colors.white.withValues(alpha: 0.3)),
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide:
+                    BorderSide(color: Colors.white.withValues(alpha: 0.3)),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide:
+                    const BorderSide(color: Color(0xFFFF0055), width: 2),
+              ),
+              errorBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: const BorderSide(color: Colors.red),
+              ),
+              focusedErrorBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: const BorderSide(color: Colors.red, width: 2),
+              ),
+              filled: true,
+              fillColor: Colors.white.withValues(alpha: 0.05),
+            ),
+            validator: (value) {
+              if (value == null || value.trim().isEmpty) {
+                return 'Name is required';
+              }
+              if (value.trim().length < 2) {
+                return 'Name must be at least 2 characters';
+              }
+              return null;
+            },
+          ),
+
+          const SizedBox(height: 16),
 
           // Email field
           TextFormField(
@@ -406,7 +461,7 @@ class _LoginScreenState extends State<LoginScreen> {
             decoration: InputDecoration(
               labelText: 'Password',
               labelStyle: TextStyle(color: Colors.white.withValues(alpha: 0.7)),
-              hintText: 'Enter your password',
+              hintText: 'Create a strong password',
               hintStyle: TextStyle(color: Colors.white.withValues(alpha: 0.5)),
               prefixIcon: Icon(Icons.lock_outlined,
                   color: Colors.white.withValues(alpha: 0.7)),
@@ -453,31 +508,165 @@ class _LoginScreenState extends State<LoginScreen> {
               if (value == null || value.isEmpty) {
                 return 'Password is required';
               }
-              if (value.length < 6) {
-                return 'Password must be at least 6 characters';
+              if (value.length < 8) {
+                return 'Password must be at least 8 characters';
+              }
+              if (!RegExp(r'^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)').hasMatch(value)) {
+                return 'Password must contain uppercase, lowercase, and number';
               }
               return null;
             },
           ),
 
-          const SizedBox(height: 8),
+          const SizedBox(height: 16),
 
-          // Helper text
-          Text(
-            'Sign in with your existing account. New users should use the Sign Up option.',
-            style: TextStyle(
-              color: Colors.white.withValues(alpha: 0.6),
-              fontSize: 12,
+          // Confirm Password field
+          TextFormField(
+            controller: _confirmPasswordController,
+            obscureText: _obscureConfirmPassword,
+            enabled: !_isEmailLoading,
+            style: const TextStyle(color: Colors.white),
+            decoration: InputDecoration(
+              labelText: 'Confirm Password',
+              labelStyle: TextStyle(color: Colors.white.withValues(alpha: 0.7)),
+              hintText: 'Confirm your password',
+              hintStyle: TextStyle(color: Colors.white.withValues(alpha: 0.5)),
+              prefixIcon: Icon(Icons.lock_outlined,
+                  color: Colors.white.withValues(alpha: 0.7)),
+              suffixIcon: IconButton(
+                onPressed: () {
+                  setState(() {
+                    _obscureConfirmPassword = !_obscureConfirmPassword;
+                  });
+                },
+                icon: Icon(
+                  _obscureConfirmPassword
+                      ? Icons.visibility_outlined
+                      : Icons.visibility_off_outlined,
+                  color: Colors.white.withValues(alpha: 0.7),
+                ),
+              ),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide:
+                    BorderSide(color: Colors.white.withValues(alpha: 0.3)),
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide:
+                    BorderSide(color: Colors.white.withValues(alpha: 0.3)),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide:
+                    const BorderSide(color: Color(0xFFFF0055), width: 2),
+              ),
+              errorBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: const BorderSide(color: Colors.red),
+              ),
+              focusedErrorBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: const BorderSide(color: Colors.red, width: 2),
+              ),
+              filled: true,
+              fillColor: Colors.white.withValues(alpha: 0.05),
             ),
+            validator: (value) {
+              if (value == null || value.isEmpty) {
+                return 'Please confirm your password';
+              }
+              if (value != _passwordController.text) {
+                return 'Passwords do not match';
+              }
+              return null;
+            },
+          ),
+
+          const SizedBox(height: 16),
+
+          // Terms and conditions checkbox
+          Row(
+            children: [
+              Checkbox(
+                value: _agreeToTerms,
+                onChanged: _isEmailLoading
+                    ? null
+                    : (value) {
+                        setState(() {
+                          _agreeToTerms = value ?? false;
+                        });
+                      },
+                activeColor: const Color(0xFFFF0055),
+                checkColor: Colors.white,
+              ),
+              Expanded(
+                child: GestureDetector(
+                  onTap: _isEmailLoading
+                      ? null
+                      : () {
+                          setState(() {
+                            _agreeToTerms = !_agreeToTerms;
+                          });
+                        },
+                  child: RichText(
+                    text: TextSpan(
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.8),
+                        fontSize: 14,
+                      ),
+                      children: [
+                        const TextSpan(text: 'I agree to the '),
+                        TextSpan(
+                          text: 'Terms of Service',
+                          style: const TextStyle(
+                            color: Color(0xFFFF0055),
+                            decoration: TextDecoration.underline,
+                          ),
+                          recognizer: TapGestureRecognizer()
+                            ..onTap = () {
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (context) =>
+                                      const TermsPrivacyScreen(),
+                                ),
+                              );
+                            },
+                        ),
+                        const TextSpan(text: ' and '),
+                        TextSpan(
+                          text: 'Privacy Policy',
+                          style: const TextStyle(
+                            color: Color(0xFFFF0055),
+                            decoration: TextDecoration.underline,
+                          ),
+                          recognizer: TapGestureRecognizer()
+                            ..onTap = () {
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (context) =>
+                                      const TermsPrivacyScreen(),
+                                ),
+                              );
+                            },
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
 
           const SizedBox(height: 24),
 
-          // Sign in button
+          // Sign up button
           SizedBox(
             width: double.infinity,
             child: ElevatedButton(
-              onPressed: _isEmailLoading ? null : _signInWithEmailPassword,
+              onPressed: _isEmailLoading ? null : _signUpWithEmailPassword,
               style: ElevatedButton.styleFrom(
                 backgroundColor: const Color(0xFFFF0055),
                 foregroundColor: Colors.white,
@@ -499,23 +688,7 @@ class _LoginScreenState extends State<LoginScreen> {
                         valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
                       ),
                     )
-                  : const Text('Sign In'),
-            ),
-          ),
-
-          const SizedBox(height: 16),
-
-          // Forgot password link
-          Center(
-            child: TextButton(
-              onPressed: _isEmailLoading ? null : _showForgotPasswordDialog,
-              child: Text(
-                'Forgot your password?',
-                style: TextStyle(
-                  color: const Color(0xFFFF0055).withValues(alpha: 0.8),
-                  fontSize: 14,
-                ),
-              ),
+                  : const Text('Create Account'),
             ),
           ),
         ],
@@ -523,7 +696,7 @@ class _LoginScreenState extends State<LoginScreen> {
     );
   }
 
-  Future<void> _signInWithGoogle() async {
+  Future<void> _signUpWithGoogle() async {
     if (_isLoading || _isGoogleLoading) return;
 
     setState(() {
@@ -533,27 +706,15 @@ class _LoginScreenState extends State<LoginScreen> {
 
     try {
       final authService = context.read<AccountAuthService>();
-      final isNewUser = await authService.signInWithGoogle();
+      await authService.signInWithGoogle();
 
       if (mounted) {
-        if (isNewUser) {
-          // Navigate to welcome screen for new users
-          Navigator.pushReplacement(
-            context,
-            MaterialPageRoute(
-              builder: (context) => const WelcomeScreen(),
-            ),
-          );
-        } else {
-          // Show success message for existing users
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Welcome back to EchoPost! 🎉'),
-              duration: Duration(seconds: 2),
-              backgroundColor: Colors.green,
-            ),
-          );
-        }
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => const WelcomeScreen(),
+          ),
+        );
       }
     } on EmailPasswordAccountExistsException catch (e) {
       if (mounted) {
@@ -570,7 +731,7 @@ class _LoginScreenState extends State<LoginScreen> {
             action: SnackBarAction(
               label: 'Retry',
               textColor: Colors.white,
-              onPressed: _signInWithGoogle,
+              onPressed: _signUpWithGoogle,
             ),
           ),
         );
@@ -585,8 +746,19 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
-  Future<void> _signInWithEmailPassword() async {
+  Future<void> _signUpWithEmailPassword() async {
     if (_isEmailLoading || !_formKey.currentState!.validate()) return;
+
+    if (!_agreeToTerms) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content:
+              Text('Please agree to the Terms of Service and Privacy Policy'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
 
     setState(() {
       _isLoading = true;
@@ -595,30 +767,24 @@ class _LoginScreenState extends State<LoginScreen> {
 
     try {
       final authService = context.read<AccountAuthService>();
-      final isNewUser = await authService.signInWithEmailPassword(
+      await authService.signInWithEmailPassword(
         _emailController.text.trim(),
         _passwordController.text,
       );
 
+      // Update user display name if provided
+      final user = authService.currentUser;
+      if (user != null && _nameController.text.trim().isNotEmpty) {
+        await user.updateDisplayName(_nameController.text.trim());
+      }
+
       if (mounted) {
-        if (isNewUser) {
-          // Navigate to welcome screen for new users
-          Navigator.pushReplacement(
-            context,
-            MaterialPageRoute(
-              builder: (context) => const WelcomeScreen(),
-            ),
-          );
-        } else {
-          // Show success message for existing users
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Welcome back to EchoPost! 🎉'),
-              duration: Duration(seconds: 2),
-              backgroundColor: Colors.green,
-            ),
-          );
-        }
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => const WelcomeScreen(),
+          ),
+        );
       }
     } on GoogleAccountExistsException catch (e) {
       if (mounted) {
@@ -656,7 +822,7 @@ class _LoginScreenState extends State<LoginScreen> {
       builder: (context) => AlertDialog(
         backgroundColor: const Color(0xFF2A2A2A),
         title: const Text(
-          'Google Account Required',
+          'Account Already Exists',
           style: TextStyle(color: Colors.white),
         ),
         content: Column(
@@ -664,36 +830,13 @@ class _LoginScreenState extends State<LoginScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'This email address ($email) is linked to a Google account.',
+              'An account with this email ($email) already exists and is linked to Google Sign-In.',
               style: const TextStyle(color: Colors.white70),
             ),
             const SizedBox(height: 12),
             const Text(
-              'For security reasons, you must sign in with Google to access this account.',
+              'Please sign in instead of creating a new account.',
               style: TextStyle(color: Colors.white70),
-            ),
-            const SizedBox(height: 12),
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: const Color(0xFFFF0055).withValues(alpha: 0.1),
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(
-                  color: const Color(0xFFFF0055).withValues(alpha: 0.3),
-                ),
-              ),
-              child: const Row(
-                children: [
-                  Icon(Icons.security, color: Color(0xFFFF0055), size: 20),
-                  SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      'This ensures your Google credentials remain the authoritative authentication method.',
-                      style: TextStyle(color: Colors.white, fontSize: 12),
-                    ),
-                  ),
-                ],
-              ),
             ),
           ],
         ),
@@ -701,32 +844,12 @@ class _LoginScreenState extends State<LoginScreen> {
           TextButton(
             onPressed: () {
               Navigator.pop(context);
-              setState(() {
-                _showEmailForm = false;
-                _emailController.clear();
-                _passwordController.clear();
-              });
+              Navigator.pop(context); // Go back to login screen
             },
             child: const Text(
-              'Cancel',
-              style: TextStyle(color: Colors.white70),
+              'Go to Sign In',
+              style: TextStyle(color: Color(0xFFFF0055)),
             ),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              Navigator.pop(context);
-              setState(() {
-                _showEmailForm = false;
-                _emailController.clear();
-                _passwordController.clear();
-              });
-              _signInWithGoogle();
-            },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFFFF0055),
-              foregroundColor: Colors.white,
-            ),
-            child: const Text('Sign in with Google'),
           ),
         ],
       ),
@@ -741,7 +864,7 @@ class _LoginScreenState extends State<LoginScreen> {
       builder: (context) => AlertDialog(
         backgroundColor: const Color(0xFF2A2A2A),
         title: const Text(
-          'Account Linking Required',
+          'Account Already Exists',
           style: TextStyle(color: Colors.white),
         ),
         content: Column(
@@ -749,307 +872,24 @@ class _LoginScreenState extends State<LoginScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'This email address ($email) already has an account with email/password.',
+              'An account with this email ($email) already exists.',
               style: const TextStyle(color: Colors.white70),
             ),
             const SizedBox(height: 12),
             const Text(
-              'To link your Google account, you need to:',
-              style:
-                  TextStyle(color: Colors.white70, fontWeight: FontWeight.w500),
-            ),
-            const SizedBox(height: 8),
-            const Text(
-              '1. Sign in with your email and password\n2. Link your Google account from account settings',
-              style: TextStyle(color: Colors.white60, fontSize: 14),
-            ),
-            const SizedBox(height: 12),
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.orange.withValues(alpha: 0.1),
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(
-                  color: Colors.orange.withValues(alpha: 0.3),
-                ),
-              ),
-              child: const Row(
-                children: [
-                  Icon(Icons.info_outline, color: Colors.orange, size: 20),
-                  SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      'This ensures your account security and prevents unauthorized access.',
-                      style: TextStyle(color: Colors.white, fontSize: 12),
-                    ),
-                  ),
-                ],
-              ),
+              'Please sign in instead of creating a new account.',
+              style: TextStyle(color: Colors.white70),
             ),
           ],
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text(
-              'Cancel',
-              style: TextStyle(color: Colors.white70),
-            ),
-          ),
-          ElevatedButton(
             onPressed: () {
               Navigator.pop(context);
-              _showLinkAccountDialog(email);
-            },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFFFF0055),
-              foregroundColor: Colors.white,
-            ),
-            child: const Text('Link Accounts'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _showLinkAccountDialog(String email) {
-    final passwordController = TextEditingController();
-    bool isLinking = false;
-
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
-          backgroundColor: const Color(0xFF2A2A2A),
-          title: const Text(
-            'Link Google Account',
-            style: TextStyle(color: Colors.white),
-          ),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Enter your password for $email to link your Google account:',
-                style: const TextStyle(color: Colors.white70),
-              ),
-              const SizedBox(height: 16),
-              TextField(
-                controller: passwordController,
-                obscureText: true,
-                enabled: !isLinking,
-                style: const TextStyle(color: Colors.white),
-                decoration: InputDecoration(
-                  labelText: 'Password',
-                  labelStyle:
-                      TextStyle(color: Colors.white.withValues(alpha: 0.7)),
-                  prefixIcon: Icon(Icons.lock_outlined,
-                      color: Colors.white.withValues(alpha: 0.7)),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(8),
-                    borderSide:
-                        BorderSide(color: Colors.white.withValues(alpha: 0.3)),
-                  ),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(8),
-                    borderSide:
-                        BorderSide(color: Colors.white.withValues(alpha: 0.3)),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(8),
-                    borderSide: const BorderSide(color: Color(0xFFFF0055)),
-                  ),
-                  filled: true,
-                  fillColor: Colors.white.withValues(alpha: 0.05),
-                ),
-              ),
-              const SizedBox(height: 12),
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFFF0055).withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(
-                    color: const Color(0xFFFF0055).withValues(alpha: 0.3),
-                  ),
-                ),
-                child: const Text(
-                  'After linking, your Google credentials will become the primary authentication method for this account.',
-                  style: TextStyle(color: Colors.white, fontSize: 12),
-                ),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: isLinking ? null : () => Navigator.pop(context),
-              child: const Text(
-                'Cancel',
-                style: TextStyle(color: Colors.white70),
-              ),
-            ),
-            ElevatedButton(
-              onPressed: isLinking
-                  ? null
-                  : () async {
-                      if (passwordController.text.isEmpty) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content: Text('Please enter your password'),
-                            backgroundColor: Colors.red,
-                          ),
-                        );
-                        return;
-                      }
-
-                      setDialogState(() {
-                        isLinking = true;
-                      });
-
-                      try {
-                        final authService = context.read<AccountAuthService>();
-                        final currentContext = context;
-                        await authService.linkGoogleToEmailAccount(
-                            email, passwordController.text);
-
-                        if (currentContext.mounted) {
-                          Navigator.pop(currentContext);
-                          ScaffoldMessenger.of(currentContext).showSnackBar(
-                            const SnackBar(
-                              content: Text(
-                                  'Accounts linked successfully! You can now sign in with Google. 🎉'),
-                              backgroundColor: Colors.green,
-                              duration: Duration(seconds: 3),
-                            ),
-                          );
-                        }
-                      } catch (e) {
-                        setDialogState(() {
-                          isLinking = false;
-                        });
-
-                        final currentContext = context;
-                        if (currentContext.mounted) {
-                          ScaffoldMessenger.of(currentContext).showSnackBar(
-                            SnackBar(
-                              content: Text(
-                                  e.toString().replaceFirst('Exception: ', '')),
-                              backgroundColor: Colors.red,
-                            ),
-                          );
-                        }
-                      }
-                    },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFFFF0055),
-                foregroundColor: Colors.white,
-              ),
-              child: isLinking
-                  ? const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-                      ),
-                    )
-                  : const Text('Link Accounts'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  void _showForgotPasswordDialog() {
-    final emailController = TextEditingController();
-
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: const Color(0xFF2A2A2A),
-        title: const Text(
-          'Reset Password',
-          style: TextStyle(color: Colors.white),
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Text(
-              'Enter your email address to receive a password reset link.',
-              style: TextStyle(color: Colors.white70),
-            ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: emailController,
-              keyboardType: TextInputType.emailAddress,
-              style: const TextStyle(color: Colors.white),
-              decoration: InputDecoration(
-                labelText: 'Email',
-                labelStyle:
-                    TextStyle(color: Colors.white.withValues(alpha: 0.7)),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(8),
-                  borderSide:
-                      BorderSide(color: Colors.white.withValues(alpha: 0.3)),
-                ),
-                enabledBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(8),
-                  borderSide:
-                      BorderSide(color: Colors.white.withValues(alpha: 0.3)),
-                ),
-                focusedBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(8),
-                  borderSide: const BorderSide(color: Color(0xFFFF0055)),
-                ),
-                filled: true,
-                fillColor: Colors.white.withValues(alpha: 0.05),
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text(
-              'Cancel',
-              style: TextStyle(color: Colors.white70),
-            ),
-          ),
-          TextButton(
-            onPressed: () async {
-              try {
-                final authService = context.read<AccountAuthService>();
-                final currentContext = context;
-                await authService
-                    .sendPasswordResetEmail(emailController.text.trim());
-
-                if (currentContext.mounted) {
-                  Navigator.pop(currentContext);
-                  ScaffoldMessenger.of(currentContext).showSnackBar(
-                    const SnackBar(
-                      content:
-                          Text('Password reset email sent! Check your inbox.'),
-                      backgroundColor: Colors.green,
-                    ),
-                  );
-                }
-              } catch (e) {
-                final currentContext = context;
-                if (currentContext.mounted) {
-                  ScaffoldMessenger.of(currentContext).showSnackBar(
-                    SnackBar(
-                      content:
-                          Text(e.toString().replaceFirst('Exception: ', '')),
-                      backgroundColor: Colors.red,
-                    ),
-                  );
-                }
-              }
+              Navigator.pop(context); // Go back to login screen
             },
             child: const Text(
-              'Send Reset Email',
+              'Go to Sign In',
               style: TextStyle(color: Color(0xFFFF0055)),
             ),
           ),

@@ -26,26 +26,26 @@ dependencies:
 
   # Social Auth / OAuth - Organized by Login Paradigm
   # ================================================
-  
+
   # 1. EchoPost App Login (Firebase + Google) - OAuth 2.0
   # firebase_auth: ^5.5.4  # Already listed above
   google_sign_in: ^6.1.6
-  
+
   # 2. Facebook Business Pages - OAuth 2.0 (Facebook Graph API)
   flutter_facebook_auth: 6.0.4
-  
+
   # 3. Instagram Creator Account - OAuth 2.0 (Instagram via Facebook)
   # flutter_facebook_auth: 6.0.4  # Reuses Facebook auth with different scopes
-  
+
   # 4. YouTube Channel Uploads - OAuth 2.0 (YouTube Data API)
   # google_sign_in: ^6.1.6  # Reuses Google auth with YouTube scope
-  oauth2_client: 4.2.0       # Optional for manual browser flows
-  webview_flutter: ^4.4.2     # Optional for manual OAuth
-  
+  oauth2_client: 4.2.0 # Optional for manual browser flows
+  webview_flutter: ^4.4.2 # Optional for manual OAuth
+
   # 5. Twitter Posting - OAuth 2.0 with PKCE (required for mobile apps)
-  flutter_web_auth_2: ^5.0.0-alpha.3  # Used for Twitter and TikTok OAuth flows
-  crypto: ^3.0.3  # Used for PKCE code challenge generation
-  
+  flutter_web_auth_2: ^5.0.0-alpha.3 # Used for Twitter and TikTok OAuth flows
+  crypto: ^3.0.3 # Used for PKCE code challenge generation
+
   # 6. TikTok Video Uploads - OAuth 2.0 with PKCE
   tiktok_sdk_v2: ^0.0.2
   # flutter_web_auth: ^0.6.0  # Already listed above
@@ -94,6 +94,11 @@ dev_dependencies:
 flutter_icons:
   android: true
   ios: true
+  web:
+    generate: true
+    image_path: "assets/icons/logo.png"
+    background_color: "#2196F3"
+    theme_color: "#2196F3"
   image_path: "assets/icons/logo.png"
   min_sdk_android: 21
   # Android adaptive icon configuration

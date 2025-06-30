@@ -1,4 +1,4 @@
-<<<<<<< HEAD
+
 # Miscellaneous
 *.class
 *.log
@@ -58,7 +58,6 @@ GoogleService-Info.plist
 *.keystore
 *.jks
 key.properties
-=======
 node_modules/
 .env
->>>>>>> 22620e12d6df606efc4c0f9e4caf10e2d2db5e09
+

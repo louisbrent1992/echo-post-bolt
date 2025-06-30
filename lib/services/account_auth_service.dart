@@ -102,7 +102,7 @@ class AccountAuthService extends ChangeNotifier {
   }
 
   // Create user document if it doesn't exist
-  Future<void> _createUserDocIfNotExists(User user, String provider) async {
+  Future<bool> _createUserDocIfNotExists(User user, String provider) async {
     final docRef = _firestore.collection('users').doc(user.uid);
     final docSnapshot = await docRef.get();
 
@@ -134,6 +134,8 @@ class AccountAuthService extends ChangeNotifier {
       if (kDebugMode) {
         print('✅ User document and platform documents created successfully');
       }
+
+      return true; // New user
     } else {
       // Update last sign-in time
       await docRef.update({
@@ -146,6 +148,8 @@ class AccountAuthService extends ChangeNotifier {
       if (kDebugMode) {
         print('✅ User document updated and platform documents verified');
       }
+
+      return false; // Existing user
     }
   }
 
@@ -189,23 +193,22 @@ class AccountAuthService extends ChangeNotifier {
   // These provide the interface expected by the login screen
 
   /// Sign in with Google (delegates to GoogleAuthService)
-  Future<UserCredential?> signInWithGoogle() async {
+  Future<bool> signInWithGoogle() async {
     try {
-      await _googleAuth.signInWithGoogle();
+      final isNewUser = await _googleAuth.signInWithGoogle();
       notifyListeners();
-      return null; // GoogleAuthService doesn't return UserCredential
+      return isNewUser;
     } catch (e) {
       rethrow;
     }
   }
 
   /// Sign in with email and password (delegates to EmailAuthService)
-  Future<UserCredential?> signInWithEmailPassword(
-      String email, String password) async {
+  Future<bool> signInWithEmailPassword(String email, String password) async {
     try {
-      await _emailAuth.signInWithEmail(email, password);
+      final isNewUser = await _emailAuth.signInWithEmail(email, password);
       notifyListeners();
-      return null; // EmailAuthService doesn't return UserCredential
+      return isNewUser;
     } catch (e) {
       rethrow;
     }
@@ -241,7 +244,7 @@ class EmailAuthService {
 
   /// Sign in with email and password
   /// Automatically creates account if email doesn't exist
-  Future<void> signInWithEmail(String email, String password) async {
+  Future<bool> signInWithEmail(String email, String password) async {
     try {
       email = email.trim();
 
@@ -258,27 +261,31 @@ class EmailAuthService {
 
       if (methods.contains('password')) {
         // Existing email / password user → authenticate
-          try {
+        try {
           final cred = await _auth.signInWithEmailAndPassword(
               email: email, password: password);
           if (cred.user != null) {
-            await _createUserDocIfNotExists(cred.user!, 'password');
-            }
-          } on FirebaseAuthException catch (e) {
-            if (e.code == 'wrong-password') {
-              throw Exception('Incorrect password. Please try again.');
-            }
-            rethrow;
+            final isNewUser =
+                await _createUserDocIfNotExists(cred.user!, 'password');
+            return isNewUser;
           }
+        } on FirebaseAuthException catch (e) {
+          if (e.code == 'wrong-password') {
+            throw Exception('Incorrect password. Please try again.');
+          }
+          rethrow;
+        }
       } else if (methods.isEmpty) {
         // Brand-new user → create account
-          try {
+        try {
           final cred = await _auth.createUserWithEmailAndPassword(
               email: email, password: password);
           if (cred.user != null) {
-            await _createUserDocIfNotExists(cred.user!, 'password');
-            }
-          } on FirebaseAuthException catch (e) {
+            final isNewUser =
+                await _createUserDocIfNotExists(cred.user!, 'password');
+            return isNewUser;
+          }
+        } on FirebaseAuthException catch (e) {
           switch (e.code) {
             case 'weak-password':
               throw Exception('Password is too weak.');
@@ -287,8 +294,8 @@ class EmailAuthService {
               throw Exception('This email is already registered.');
             default:
               throw Exception('Account creation failed: ${e.message}');
-            }
           }
+        }
       } else if (methods.length == 1 && methods.first == 'google.com') {
         // Google-only account – alert UI and stop
         throw GoogleAccountExistsException(
@@ -300,6 +307,7 @@ class EmailAuthService {
         throw Exception(
             'This email is linked to a different sign-in method. Please use your original sign-in.');
       }
+      return false; // Existing user
     } catch (e) {
       if (kDebugMode) {
         print('Email/password authentication error: $e');
@@ -363,7 +371,7 @@ class EmailAuthService {
   }
 
   /// Create user document if it doesn't exist
-  Future<void> _createUserDocIfNotExists(User user, String provider) async {
+  Future<bool> _createUserDocIfNotExists(User user, String provider) async {
     final docRef = _firestore.collection('users').doc(user.uid);
     final docSnapshot = await docRef.get();
 
@@ -384,11 +392,15 @@ class EmailAuthService {
         'auto_location': true,
         'signature': '',
       });
+
+      return true; // New user
     } else {
       // Update last sign-in time
       await docRef.update({
         'last_sign_in': FieldValue.serverTimestamp(),
       });
+
+      return false; // Existing user
     }
   }
 }
@@ -400,12 +412,17 @@ class GoogleAuthService {
 
   // Configure Google Sign-In with proper serverClientId for Firebase authentication
   final GoogleSignIn _googleSignIn = GoogleSignIn(
-    serverClientId: dotenv.env['GOOGLE_WEB_CLIENT_ID'] ??
-        '794380832661-62e0bds0d8rq1ne4fuq10jlht0brr7g8.apps.googleusercontent.com',
+    clientId: kIsWeb
+        ? '794380832661-d5vvl71c2to7764ab9bt839s65uircuv.apps.googleusercontent.com'
+        : null,
+    serverClientId: kIsWeb
+        ? null
+        : (dotenv.env['GOOGLE_WEB_CLIENT_ID'] ??
+            '794380832661-62e0bds0d8rq1ne4fuq10jlht0brr7g8.apps.googleusercontent.com'),
   );
 
   /// Sign in with Google
-  Future<void> signInWithGoogle() async {
+  Future<bool> signInWithGoogle() async {
     try {
       // First, try to sign in silently to check for existing auth
       // This handles cases where user completed verification elsewhere
@@ -416,7 +433,7 @@ class GoogleAuthService {
 
       // If the user cancels the sign-in flow
       if (googleUser == null) {
-        return;
+        return false;
       }
 
       // Obtain the auth details from the request
@@ -457,7 +474,9 @@ class GoogleAuthService {
       final userCredential = await _auth.signInWithCredential(credential);
 
       if (userCredential.user != null) {
-        await _createUserDocIfNotExists(userCredential.user!, 'google.com');
+        final isNewUser =
+            await _createUserDocIfNotExists(userCredential.user!, 'google.com');
+        return isNewUser;
       } else {
         throw Exception('Firebase authentication failed - no user returned');
       }
@@ -487,7 +506,7 @@ class GoogleAuthService {
               'Network error. Please check your internet connection and try again.');
         case 'web-context-canceled':
           // User closed the sign-in popup, treat as cancellation
-          return;
+          return false;
         default:
           throw Exception('Google Sign-In failed: ${e.message}');
       }
@@ -715,7 +734,7 @@ class GoogleAuthService {
   }
 
   /// Create user document if it doesn't exist
-  Future<void> _createUserDocIfNotExists(User user, String provider) async {
+  Future<bool> _createUserDocIfNotExists(User user, String provider) async {
     final docRef = _firestore.collection('users').doc(user.uid);
     final docSnapshot = await docRef.get();
 
@@ -736,11 +755,15 @@ class GoogleAuthService {
         'auto_location': true,
         'signature': '',
       });
+
+      return true; // New user
     } else {
       // Update last sign-in time
       await docRef.update({
         'last_sign_in': FieldValue.serverTimestamp(),
       });
+
+      return false; // Existing user
     }
   }
 }

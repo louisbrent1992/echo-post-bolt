@@ -30,7 +30,20 @@ class PermissionManager extends ChangeNotifier {
         print('🎤 Requesting microphone permission...');
       }
 
-      // First check current status
+      // Web: Microphone permissions are handled by browser
+      if (kIsWeb) {
+        // On web, we'll assume permission is granted unless explicitly denied
+        // The actual permission check happens when we try to use the microphone
+        _hasMicrophonePermission = true;
+        if (kDebugMode) {
+          print(
+              '🎤 Web: Microphone permission assumed - browser will prompt when needed');
+        }
+        notifyListeners();
+        return true;
+      }
+
+      // Mobile: Use permission_handler
       final currentStatus = await Permission.microphone.status;
 
       if (currentStatus.isGranted) {
@@ -104,7 +117,19 @@ class PermissionManager extends ChangeNotifier {
         print('📱 Requesting media permission...');
       }
 
-      // First check current status
+      // Web: File access is handled through file picker dialogs
+      if (kIsWeb) {
+        // On web, file access is granted through file picker interactions
+        _hasMediaPermission = true;
+        if (kDebugMode) {
+          print(
+              '🌐 Web: Media access granted - files accessed via file picker');
+        }
+        notifyListeners();
+        return true;
+      }
+
+      // Mobile: Use photo_manager
       final currentState = await PhotoManager.getPermissionState(
         requestOption: const PermissionRequestOption(),
       );
@@ -169,6 +194,9 @@ class PermissionManager extends ChangeNotifier {
   /// Check if microphone permission is permanently denied
   Future<bool> isMicrophonePermissionPermanentlyDenied() async {
     try {
+      // Web: No permanent denial concept
+      if (kIsWeb) return false;
+
       final status = await Permission.microphone.status;
       return status.isPermanentlyDenied;
     } catch (e) {
@@ -179,6 +207,9 @@ class PermissionManager extends ChangeNotifier {
   /// Check if media permission is permanently denied
   Future<bool> isMediaPermissionPermanentlyDenied() async {
     try {
+      // Web: No permanent denial concept
+      if (kIsWeb) return false;
+
       final permissionState = await PhotoManager.getPermissionState(
         requestOption: const PermissionRequestOption(),
       );
@@ -193,6 +224,16 @@ class PermissionManager extends ChangeNotifier {
     try {
       if (kDebugMode) {
         print('🔧 Opening app settings for manual permission configuration...');
+      }
+
+      // Web: Direct to browser settings
+      if (kIsWeb) {
+        if (kDebugMode) {
+          print(
+              '🌐 Web: Please check browser settings for microphone and file access permissions');
+        }
+        // Cannot open browser settings programmatically for security reasons
+        return false;
       }
 
       final opened = await openAppSettings();

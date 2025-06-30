@@ -8,6 +8,8 @@ import 'dart:convert';
 import 'dart:math';
 import 'package:http/http.dart' as http;
 import '../platform_document_service.dart';
+import 'web_oauth_config.dart';
+import 'web_oauth_handler.dart';
 
 /// Twitter (OAuth 2.0) - required for tweet posting
 class TwitterAuthService {
@@ -19,6 +21,7 @@ class TwitterAuthService {
     try {
       if (kDebugMode) {
         print('🐦 Starting Twitter OAuth 2.0 authentication...');
+        print('🐦 Platform: ${kIsWeb ? 'Web' : 'Mobile'}');
       }
 
       if (_auth.currentUser == null) {
@@ -27,191 +30,196 @@ class TwitterAuthService {
 
       final clientId = dotenv.env['TWITTER_CLIENT_ID'] ?? '';
       final clientSecret = dotenv.env['TWITTER_CLIENT_SECRET'] ?? '';
-      final redirectUri = dotenv.env['TWITTER_REDIRECT_URI'] ?? '';
 
-      if (clientId.isEmpty || clientSecret.isEmpty || redirectUri.isEmpty) {
+      if (clientId.isEmpty || clientSecret.isEmpty) {
         throw Exception(
             'Twitter OAuth 2.0 credentials not found in .env.local file. Please check ENVIRONMENT_SETUP.md for configuration instructions.');
       }
 
-      // Step 1: Generate PKCE code verifier and challenge
-      final codeVerifier = _generateCodeVerifier();
-      final codeChallenge = _generateCodeChallenge(codeVerifier);
-
-      if (kDebugMode) {
-        print('🐦 Generated PKCE code challenge');
-      }
-
-      // Step 2: Build authorization URL
-      final authUrl = Uri.https('twitter.com', '/i/oauth2/authorize', {
-        'response_type': 'code',
-        'client_id': clientId,
-        'redirect_uri': redirectUri,
-        'scope': 'tweet.read tweet.write users.read offline.access',
-        'state': _generateState(),
-        'code_challenge': codeChallenge,
-        'code_challenge_method': 'S256',
-      });
-
-      if (kDebugMode) {
-        print('🐦 Authorization URL: ${authUrl.toString()}');
-      }
-
-      // Step 3: Launch web authentication with improved error handling
-      String? callbackUrl;
-      try {
-        callbackUrl = await FlutterWebAuth2.authenticate(
-          url: authUrl.toString(),
-          callbackUrlScheme: Uri.parse(redirectUri).scheme,
-          options: const FlutterWebAuth2Options(
-            timeout: 120, // 2 minutes timeout
-            preferEphemeral: true, // Use ephemeral session for better security
-          ),
-        );
-      } catch (e) {
-        if (kDebugMode) {
-          print('❌ Twitter OAuth 2.0 authentication failed: $e');
-        }
-
-        // Handle specific error cases
-        if (e.toString().contains('User cancelled') ||
-            e.toString().contains('CANCELLED')) {
-          throw Exception('Twitter authentication was cancelled by user');
-        } else if (e.toString().contains('timeout') ||
-            e.toString().contains('TIMEOUT')) {
-          throw Exception(
-              'Twitter authentication timed out. Please try again.');
-        } else if (e.toString().contains('redirect') ||
-            e.toString().contains('callback')) {
-          throw Exception(
-              'Twitter authentication redirect failed. Please check your app configuration in Twitter Developer Console and ensure the redirect URI "echopost://twitter-callback" is properly registered.');
-        } else {
-          throw Exception('Twitter authentication failed: $e');
-        }
-      }
-
-      if (callbackUrl.isEmpty) {
-        throw Exception(
-            'Twitter authentication failed: No callback URL received');
-      }
-
-      if (kDebugMode) {
-        print('🐦 Callback URL received: $callbackUrl');
-      }
-
-      // Step 4: Extract authorization code from callback
-      final callbackUri = Uri.parse(callbackUrl);
-
-      if (kDebugMode) {
-        print('🐦 Parsing callback URI: ${callbackUri.toString()}');
-        print('🐦 Callback URI scheme: ${callbackUri.scheme}');
-        print('🐦 Callback URI host: ${callbackUri.host}');
-        print('🐦 Callback URI path: ${callbackUri.path}');
-        print(
-            '🐦 Callback URI query parameters: ${callbackUri.queryParameters}');
-      }
-
-      final authCode = callbackUri.queryParameters['code'];
-      final error = callbackUri.queryParameters['error'];
-      final errorDescription = callbackUri.queryParameters['error_description'];
-
-      // Check for OAuth errors first
-      if (error != null) {
-        final errorMsg = errorDescription ?? error;
-        if (kDebugMode) {
-          print('❌ Twitter OAuth error: $error - $errorDescription');
-        }
-        throw Exception('Twitter authentication failed: $errorMsg');
-      }
-
-      if (authCode == null) {
-        if (kDebugMode) {
-          print('❌ No authorization code found in callback URL');
-          print(
-              '🐦 Available parameters: ${callbackUri.queryParameters.keys.join(', ')}');
-        }
-        throw Exception(
-            'Twitter authorization failed: No authorization code received. This may indicate a redirect URI mismatch in your Twitter Developer Console configuration.');
-      }
-
-      if (kDebugMode) {
-        print(
-            '🐦 Authorization code received: ${authCode.substring(0, 10)}...');
-      }
-
-      // Step 5: Exchange authorization code for access token
-      final tokenResponse = await http.post(
-        Uri.parse('https://api.twitter.com/2/oauth2/token'),
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-          'Authorization':
-              'Basic ${base64Encode(utf8.encode('$clientId:$clientSecret'))}',
-        },
-        body: {
-          'grant_type': 'authorization_code',
-          'code': authCode,
-          'redirect_uri': redirectUri,
-          'code_verifier': codeVerifier,
-        },
-      );
-
-      if (tokenResponse.statusCode != 200) {
-        throw Exception(
-            'Failed to exchange authorization code for token: ${tokenResponse.body}');
-      }
-
-      final tokenData = jsonDecode(tokenResponse.body);
-      final accessToken = tokenData['access_token'];
-      final refreshToken = tokenData['refresh_token'];
-      final tokenType = tokenData['token_type'];
-      final scope = tokenData['scope'];
-      final expiresIn = tokenData['expires_in'];
-
-      if (kDebugMode) {
-        print('🐦 Access token received: ${accessToken.substring(0, 10)}...');
-      }
-
-      // Step 6: Get user information
-      final userInfo = await _getTwitterUserInfo(accessToken);
-
-      // Step 7: Save Twitter credentials to Firestore
-      await _firestore
-          .collection('users')
-          .doc(_auth.currentUser!.uid)
-          .collection('tokens')
-          .doc('twitter')
-          .set({
-        'access_token': accessToken,
-        'refresh_token': refreshToken,
-        'token_type': tokenType,
-        'scope': scope,
-        'expires_in': expiresIn,
-        'expires_at':
-            DateTime.now().add(Duration(seconds: expiresIn)).toIso8601String(),
-        'user_id': userInfo['id'],
-        'username': userInfo['username'],
-        'name': userInfo['name'],
-        'profile_image_url': userInfo['profile_image_url'],
-        'followers_count': userInfo['public_metrics']['followers_count'],
-        'following_count': userInfo['public_metrics']['following_count'],
-        'tweet_count': userInfo['public_metrics']['tweet_count'],
-        'verified': userInfo['verified'],
-        'created_at': FieldValue.serverTimestamp(),
-        'last_updated': FieldValue.serverTimestamp(),
-      });
-
-      if (kDebugMode) {
-        print('✅ Twitter OAuth 2.0 authentication completed successfully');
-        print('🐦 User ID: ${userInfo['id']}');
-        print('🐦 Username: @${userInfo['username']}');
-        print('🐦 Name: ${userInfo['name']}');
-        print('🐦 Followers: ${userInfo['public_metrics']['followers_count']}');
+      // Use web OAuth handler for web platform
+      if (kIsWeb) {
+        await _signInWithTwitterWeb(clientId, clientSecret);
+      } else {
+        await _signInWithTwitterMobile(clientId, clientSecret);
       }
     } catch (e) {
       if (kDebugMode) {
-        print('❌ Twitter OAuth 2.0 authentication error: $e');
+        print('❌ Twitter OAuth 2.0 authentication failed: $e');
       }
-      throw Exception('Twitter authentication failed: $e');
+      rethrow;
+    }
+  }
+
+  /// Web-specific Twitter OAuth flow
+  Future<void> _signInWithTwitterWeb(
+      String clientId, String clientSecret) async {
+    if (!WebOAuthHandler.isWebOAuthConfigured()) {
+      throw Exception(WebOAuthConfig.getWebOAuthSetupInstructions());
+    }
+
+    try {
+      final tokens = await WebOAuthHandler.handleOAuthFlow(
+        platform: 'twitter',
+        clientId: clientId,
+        clientSecret: clientSecret,
+        redirectUri: WebOAuthConfig.getRedirectUri('twitter'),
+        scopes: WebOAuthConfig.getOAuthScopes('twitter'),
+      );
+
+      // Store tokens in Firestore
+      await _storeTwitterTokens(tokens);
+
+      if (kDebugMode) {
+        print('🐦 Twitter web OAuth successful');
+      }
+    } catch (e) {
+      throw Exception('Twitter web OAuth failed: $e');
+    }
+  }
+
+  /// Mobile-specific Twitter OAuth flow
+  Future<void> _signInWithTwitterMobile(
+      String clientId, String clientSecret) async {
+    // Use platform-appropriate redirect URI
+    final redirectUri =
+        dotenv.env['TWITTER_REDIRECT_URI'] ?? 'echopost://twitter-callback';
+
+    if (kDebugMode) {
+      print('🐦 Using redirect URI: $redirectUri');
+    }
+
+    // Step 1: Generate PKCE code verifier and challenge
+    final codeVerifier = _generateCodeVerifier();
+    final codeChallenge = _generateCodeChallenge(codeVerifier);
+
+    if (kDebugMode) {
+      print('🐦 Generated PKCE code challenge');
+    }
+
+    // Step 2: Build authorization URL with platform-specific scopes
+    final scopes = WebOAuthConfig.getOAuthScopes('twitter').join(' ');
+    final authUrl = Uri.https('twitter.com', '/i/oauth2/authorize', {
+      'response_type': 'code',
+      'client_id': clientId,
+      'redirect_uri': redirectUri,
+      'scope': scopes,
+      'state': WebOAuthConfig.generateState(),
+      'code_challenge': codeChallenge,
+      'code_challenge_method': 'S256',
+    });
+
+    if (kDebugMode) {
+      print('🐦 Authorization URL: ${authUrl.toString()}');
+    }
+
+    // Step 3: Launch web authentication with platform-specific options
+    String? callbackUrl;
+    try {
+      // Mobile: Use in-app browser
+      callbackUrl = await FlutterWebAuth2.authenticate(
+        url: authUrl.toString(),
+        callbackUrlScheme: Uri.parse(redirectUri).scheme,
+        options: const FlutterWebAuth2Options(
+          timeout: 120,
+          preferEphemeral: true, // Use ephemeral session for better security
+        ),
+      );
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ Twitter OAuth 2.0 authentication failed: $e');
+      }
+      throw Exception('Twitter authentication was cancelled or failed');
+    }
+
+    if (kDebugMode) {
+      print('🐦 Callback URL received: $callbackUrl');
+    }
+
+    // Step 4: Parse callback URL and extract authorization code
+    final callbackUri = Uri.parse(callbackUrl);
+    final queryParams = callbackUri.queryParameters;
+
+    // Check for OAuth errors
+    if (queryParams.containsKey('error')) {
+      final error = queryParams['error'];
+      final errorDescription = queryParams['error_description'];
+      throw Exception('Twitter OAuth error: $error - $errorDescription');
+    }
+
+    // Extract authorization code
+    final authCode = queryParams['code'];
+    if (authCode == null) {
+      throw Exception('No authorization code received from Twitter');
+    }
+
+    // Step 5: Exchange authorization code for access token
+    final tokenResponse = await http.post(
+      Uri.parse('https://api.twitter.com/2/oauth2/token'),
+      headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+      body: {
+        'grant_type': 'authorization_code',
+        'client_id': clientId,
+        'client_secret': clientSecret,
+        'code': authCode,
+        'redirect_uri': redirectUri,
+        'code_verifier': codeVerifier,
+      },
+    );
+
+    if (tokenResponse.statusCode != 200) {
+      if (kDebugMode) {
+        print('❌ Token exchange failed: ${tokenResponse.statusCode}');
+        print('❌ Response body: ${tokenResponse.body}');
+      }
+      throw Exception('Failed to exchange authorization code for access token');
+    }
+
+    final tokenData = json.decode(tokenResponse.body);
+    await _storeTwitterTokens(tokenData);
+
+    if (kDebugMode) {
+      print('🐦 Twitter OAuth 2.0 authentication successful');
+    }
+  }
+
+  /// Store Twitter tokens in Firestore
+  Future<void> _storeTwitterTokens(Map<String, dynamic> tokenData) async {
+    final user = _auth.currentUser;
+    if (user == null) {
+      throw Exception('No authenticated user found');
+    }
+
+    final accessToken = tokenData['access_token'] as String?;
+    final refreshToken = tokenData['refresh_token'] as String?;
+    final expiresIn = tokenData['expires_in'] as int?;
+
+    if (accessToken == null) {
+      throw Exception('No access token received from Twitter');
+    }
+
+    // Calculate expiration time
+    final expiresAt = expiresIn != null
+        ? DateTime.now().add(Duration(seconds: expiresIn))
+        : DateTime.now().add(const Duration(hours: 2));
+
+    // Store tokens in Firestore
+    await _firestore
+        .collection('users')
+        .doc(user.uid)
+        .collection('tokens')
+        .doc('twitter')
+        .set({
+      'access_token': accessToken,
+      'refresh_token': refreshToken,
+      'expires_at': expiresAt.millisecondsSinceEpoch,
+      'token_type': tokenData['token_type'] ?? 'bearer',
+      'scope': tokenData['scope'] ?? '',
+      'created_at': FieldValue.serverTimestamp(),
+      'platform': 'twitter',
+    });
+
+    if (kDebugMode) {
+      print('🐦 Twitter tokens stored successfully');
     }
   }
 
@@ -576,12 +584,5 @@ class TwitterAuthService {
     final bytes = utf8.encode(verifier);
     final digest = sha256.convert(bytes);
     return base64UrlEncode(digest.bytes).replaceAll('=', '');
-  }
-
-  /// Generate random state parameter
-  String _generateState() {
-    final random = Random.secure();
-    final bytes = List<int>.generate(16, (i) => random.nextInt(256));
-    return base64UrlEncode(bytes).replaceAll('=', '');
   }
 }
